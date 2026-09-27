@@ -1466,7 +1466,31 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
   function PEsort(rows) { return rows.map((t, i) => ({ t, i })).sort((a, b) => (a.t.d < b.t.d ? -1 : a.t.d > b.t.d ? 1 : a.i - b.i)).map((x) => x.t); }
   function addDays(d, k) { const t = new Date(Date.parse(d) + k * 864e5); return t.toISOString().slice(0, 10); }
 
-  const api = { attachments, pdfLines, parseDoc, parseStatement, reconcile, classify, accountRows };
+  // ---------- account lock ----------
+  // A Thndr document is used only when its header names THIS portfolio's account: statements and position snapshots carry
+  // "Unified Code <customer number>" and the holder's name; invoices carry the holder's name on their first line.
+  // settings.account = { unifiedCode, holder }. The code is definitive when both sides have one; otherwise every word of the
+  // holder's name must appear in the header. A portfolio with neither set imports nothing.
+  function accountOf(docs) {
+    const heads = (docs || []).map((d) => ((d && d.lines) || d || []).slice(0, 10).join(' ').replace(/\s+/g, ' '));
+    const codes = [...new Set(heads.map((h) => (h.match(/Unified Code\s*(\d{4,})/i) || [])[1]).filter(Boolean))];
+    return { codes, code: codes[0] || null, head: heads.join(' | ') };
+  }
+  function ownerCheck(docs, settings) {
+    const acc = (settings && settings.account) || {};
+    const code = String(acc.unifiedCode || '').trim(), holder = String(acc.holder || '').trim();
+    const a = accountOf(docs);
+    const r = { code: a.code, error: null };
+    const nameOk = () => { const h = a.head.toLowerCase(); return !holder.toLowerCase().split(/\s+/).filter((w) => w && !h.includes(w)).length; };
+    if (!code && !holder) r.error = 'cannot be used: this portfolio has no Thndr account holder set (Inputs → Settings → Thndr account)';
+    else if (a.codes.length > 1) r.error = `mixes Thndr accounts ${a.codes.join(' and ')}`;
+    else if (code && a.code) { if (a.code !== code) r.error = `belongs to Thndr account ${a.code}, not this portfolio's account ${code}`; }
+    else if (holder) { if (!nameOk()) r.error = `is not in the name of ${holder} (its header reads "${a.head.slice(0, 100)}")`; }
+    else r.error = 'has no Unified Code in its header, so the account could not be confirmed';
+    return r;
+  }
+
+  const api = { attachments, pdfLines, parseDoc, parseStatement, reconcile, classify, accountRows, accountOf, ownerCheck };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.TS = api;
 })(this);
 
@@ -1946,6 +1970,8 @@ function vInputs(){
       <label>Price staleness limit (days)<input type="number" step="1" id="st-stale" class="inp" value="${st.staleDays}"></label>
       <label>Manual price default date<input type="date" id="st-pd" value="${esc(st.priceDate||'')}"></label>
       <label>Factsheet email<input type="text" id="st-email" class="inp" value="${esc(st.factsheetEmail||'')}" placeholder="you@gmail.com"></label>
+      <label>Thndr account holder (name as printed on statements)<input type="text" id="st-holder" class="inp" value="${esc((st.account||{}).holder||'')}" placeholder="Full name on the statement" data-testid="settings-holder"></label>
+      <label>Thndr Unified Code (top of every statement)<input type="text" id="st-ucode" class="inp" value="${esc((st.account||{}).unifiedCode||'')}" placeholder="learned from the first statement" data-testid="settings-unified-code"></label>
       <label>EGX30 Capped close before inception<input type="number" step="any" id="st-bcs" class="inp" value="${st.benchCloseStart??''}"></label>
       <button class="btn primary" type="submit" ${S.readOnly?'disabled':''} data-testid="save-settings">Save settings</button>
     </form></div>`;
@@ -2252,9 +2278,10 @@ async function reviewStatement(item){
     const p = payloadOf(res); if(!p || !p.raw) throw new Error('the email came back without its attachments');
     const att = TS.attachments(p.raw); if(!att.length) throw new Error('no PDF attachments found');
     const docs=[]; for(const a of att) docs.push({filename:a.filename, lines: await TS.pdfLines(pdfjs, a.bytes)});
+    const own = TS.ownerCheck(docs, S.settings); if(own.error) throw new Error(`refused — this statement ${own.error}. Only this portfolio's own Thndr documents are ever imported.`);
     const st = TS.parseStatement(docs); if(!st.cash) throw new Error('could not find the account statement among the PDFs');
     const rc = TS.reconcile(st, allTx(), S.assets, S.marks);
-    rc.item=item; rc.files=att.map(a=>a.filename);
+    rc.item=item; rc.files=att.map(a=>a.filename); rc.accountCode=own.code;
     rc.pick = rc.fresh.map(()=>true); rc.use = rc.conflicts.map(()=>false);
     rc.applyMarks = !!(rc.markProposal && rc.markProposal.securities!=null);
     S.stmt.review = rc; S.stmt.error=null;
@@ -2327,6 +2354,7 @@ async function postStatement(){
   if(ok && Object.keys(na).length) ok = await save(()=>S.db.doc('portfolio/assets').set({items:{...S.assets,...na}}));
   const applyMarks = rv.markProposal && rv.markProposal.securities!=null && $('#apply-marks') && $('#apply-marks').checked;
   if(ok && applyMarks){ const cur=S.marks[rv.month]||{}; ok = await save(()=>S.db.doc('portfolio/marks').set({months:{...S.marks,[rv.month]:{...cur, cash:rv.markProposal.cash, securities:rv.markProposal.securities, provisional:false, source:'statement'}}})); }
+  if(ok && rv.accountCode && S.settings.account && !S.settings.account.unifiedCode) ok = await save(()=>S.db.doc('portfolio/settings').set({...S.settings, account:{...S.settings.account, unifiedCode:rv.accountCode}}), `Thndr account ${rv.accountCode} recorded for this portfolio`);
   if(ok) ok = await save(()=>S.db.doc('imports/'+rv.month).set({month:rv.month, messageId:rv.item.id, subject:rv.item.subject, postedAt:new Date().toISOString(), added:add.length, replaced:repl.length, marks:!!applyMarks, fullMonth:rv.fullMonth}));
   if(ok){ toast(`${M(rv.month)} posted: ${add.length} added, ${repl.length} replaced${applyMarks?', marks updated':''}`); const wantEmail=$('#post-email')&&$('#post-email').checked; const m=rv.month; S.stmt.review=null; renderTab(true); if(wantEmail) setTimeout(()=>emailFactsheet(m), 1500); }
   else if(btn){ btn.disabled=false; btn.textContent='Post to portfolio'; }
@@ -2390,7 +2418,8 @@ document.addEventListener('submit', async e=>{
     const a={name}; const sym=$('#na-sym').value.trim().toUpperCase(); const sec=$('#na-sec').value.trim(); if(sym) a.symbol=sym; if(sec) a.sector=sec;
     await save(()=>S.db.doc('portfolio/assets').set({items:{...S.assets,[name]:a}}),`${name} added; it will be priced at the next run`); }
   if(e.target.id==='settings-form'){ const g=id=>$(id).value; const n=id=>parseFloat($(id).value);
-    const s={...S.settings, name:g('#st-name').trim()||'Portfolio', inception:g('#st-inc')||S.settings.inception, openingValue:n('#st-open'), cash:n('#st-cash'), cashDate:g('#st-cashd')||null, riskFree:n('#st-rf')/100, fxStart:n('#st-fx'), volLow:n('#st-vl')/100, volHigh:n('#st-vh')/100, openThreshold:n('#st-thr'), staleDays:n('#st-stale'), priceDate:g('#st-pd')||null, factsheetEmail:g('#st-email').trim()||null, benchCloseStart:isFinite(n('#st-bcs'))?n('#st-bcs'):null};
+    const s={...S.settings, name:g('#st-name').trim()||'Portfolio', inception:g('#st-inc')||S.settings.inception, openingValue:n('#st-open'), cash:n('#st-cash'), cashDate:g('#st-cashd')||null, riskFree:n('#st-rf')/100, fxStart:n('#st-fx'), volLow:n('#st-vl')/100, volHigh:n('#st-vh')/100, openThreshold:n('#st-thr'), staleDays:n('#st-stale'), priceDate:g('#st-pd')||null, factsheetEmail:g('#st-email').trim()||null, benchCloseStart:isFinite(n('#st-bcs'))?n('#st-bcs'):null, account:{holder:g('#st-holder').trim(), unifiedCode:g('#st-ucode').trim()}};
+    if(!s.account.holder && !s.account.unifiedCode){ toast('Set the Thndr account holder: statements and invoices are only accepted for that account','error'); return; }
     if(['openingValue','cash','riskFree','fxStart','volLow','volHigh','openThreshold','staleDays'].some(k=>!isFinite(s[k]))){ toast('Every number field needs a value','error'); return; }
     await save(()=>S.db.doc('portfolio/settings').set(s),'Settings saved'); }
 });
