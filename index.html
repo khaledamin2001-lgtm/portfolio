@@ -276,6 +276,7 @@ body.pd-locked{overflow:hidden}
   async function refresh() { try { const b = await fetchData(); if (b.exportedAt !== DATA_AT) publish(b); } catch (e) { console.warn('refresh failed', e); } }
   window.pdLock = () => { if (CUR && getDev()) unlockScreen(false); };
   window.pdSwitch = () => chooseScreen();
+  window.pdSelect = (id) => { const p = PORTFOLIOS.find((x) => x.id === id); if (p && !(CUR && CUR.id === p.id)) select(p); };
 
   /* ---------- boot ---------- */
   let hiddenAt = 0;
@@ -346,6 +347,15 @@ button,input,select,textarea{font:inherit;color:inherit}
 .brand{display:flex;align-items:baseline;gap:10px;min-width:0}
 .brand b{font:600 19px/1.1 var(--f-display);letter-spacing:-.01em;white-space:nowrap}
 .brand span{font-size:12px;color:var(--ink-3);white-space:nowrap}
+.pf-switch{position:relative;min-width:0}
+.pf-title{font:600 19px/1.1 var(--f-display);letter-spacing:-.01em;white-space:nowrap;background:none;border:0;color:inherit;padding:0;cursor:pointer;display:inline-flex;align-items:center;gap:6px;max-width:100%}
+.pf-title svg{width:14px;height:14px;opacity:.65;flex:none}
+.pf-title:hover svg{opacity:1}
+.pf-menu{position:absolute;top:calc(100% + 8px);left:0;z-index:60;min-width:270px;background:var(--surface);border:1px solid var(--rule);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.2);padding:6px;display:flex;flex-direction:column;gap:2px}
+.pf-menu a,.pf-menu button{display:flex;flex-direction:column;gap:2px;align-items:flex-start;text-align:left;padding:10px 12px;border-radius:8px;border:0;background:none;color:var(--ink);font:500 14px/1.2 var(--f-ui);text-decoration:none;cursor:pointer;width:100%;box-sizing:border-box}
+.pf-menu a:hover,.pf-menu button:hover{background:var(--bg)}
+.pf-menu .cur{color:var(--accent)}
+.pf-menu small{font:400 11px/1.2 var(--f-ui);color:var(--ink-3)}
 nav.tabs{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none;margin-left:auto}
 nav.tabs::-webkit-scrollbar{display:none}
 nav.tabs button{border:0;background:none;padding:8px 12px;border-radius:8px;color:var(--ink-2);font-weight:500;cursor:pointer;white-space:nowrap}
@@ -478,7 +488,7 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
 
 <header class="mast">
   <div class="mast-in">
-    <div class="brand"><b id="pf-name">Portfolio</b><span>EGX · Thndr · EGP</span></div>
+    <div class="brand"><div class="pf-switch"><button type="button" id="pf-name" class="pf-title" data-testid="portfolio-switch" aria-haspopup="menu" aria-expanded="false" title="Switch portfolio"><span id="pf-name-text">Portfolio</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="pf-menu" id="pf-menu" role="menu" hidden></div></div><span>EGX · Thndr · EGP</span></div>
     <nav class="tabs" role="tablist" id="tabs">
       <button role="tab" data-tab="overview" id="tab-overview">Overview</button>
       <button role="tab" data-tab="holdings" id="tab-holdings">Holdings</button>
@@ -1547,7 +1557,7 @@ function recompute(){
     S.fallback = (name) => { const p = pricer(name, today); return p ? { p: p.p, d: pb.last } : null; };
     S.R = PE.run(dataset(), S.sel, { fallback: S.fallback });
   }catch(e){ console.error(e); $('#main').innerHTML = `<div class="empty"><h2>The model hit an error</h2><p>${esc(e.message)}</p></div>`; return; }
-  $('#pf-name').textContent = S.settings.name || 'Portfolio';
+  $('#pf-name-text').textContent = S.settings.name || 'Portfolio';
   renderTape(); renderPeriod(); renderTab(false);
 }
 function renderEmpty(){ $('#main').innerHTML = `<div class="empty"><h2>No portfolio data yet</h2><p>The database for this page is empty. Ask Claude to load your workbook into it.</p></div>`; $('#period').innerHTML=''; }
@@ -2018,6 +2028,25 @@ function vChecks(){
 // Analytics pages: daily valuation, attribution, income, factsheet, statements
 // =====================================================================
 const GMAIL = 'Gmail', REMOTE = 'Claude Code Remote';
+// ---------- portfolio switcher (the page title): both pages belong to the same Claude account ----------
+const PORTFOLIOS = [
+  { id: 'khaled', name: 'Khaled Investment Portfolio', url: 'https://claude.ai/artifact/PNjUN5wQkvgtZDcTML1HFe' },
+  { id: 'yassin', name: 'Yassin Investment Portfolio', url: 'https://claude.ai/artifact/6VL6yHnoUHkNqP1PdzRazc' },
+];
+function currentPortfolioId(){ return S.settings.portfolioId || (PORTFOLIOS.find(p=>p.name===S.settings.name)||{}).id || null; }
+function renderSwitch(){
+  const cur = currentPortfolioId(), m = $('#pf-menu'); if(!m) return;
+  m.innerHTML = PORTFOLIOS.map(p=>{ const isCur = p.id===cur;
+    if(window.pdSelect) return `<button type="button" data-pid="${p.id}" class="${isCur?'cur':''}" data-testid="switch-${p.id}">${esc(p.name)}<small>${isCur?'open now':'switch on this site'}</small></button>`;
+    return isCur ? `<button type="button" class="cur" data-testid="switch-${p.id}">${esc(p.name)}<small>this page</small></button>`
+                 : `<a href="${p.url}" data-testid="switch-${p.id}">${esc(p.name)}<small>opens its Claude page</small></a>`; }).join('');
+}
+document.addEventListener('click', e=>{
+  const menu = $('#pf-menu'); if(!menu) return;
+  if(e.target.closest('#pf-name')){ renderSwitch(); menu.hidden = !menu.hidden; $('#pf-name').setAttribute('aria-expanded', String(!menu.hidden)); return; }
+  const b = e.target.closest('#pf-menu [data-pid]'); if(b){ menu.hidden = true; if(window.pdSelect) window.pdSelect(b.dataset.pid); return; }
+  if(!e.target.closest('#pf-menu')) menu.hidden = true;
+});
 let pbMemo = { h: null, pb: null };
 function pbook(){ if(pbMemo.h !== S.history){ pbMemo = { h: S.history, pb: PA.priceBook(S.history) }; } return pbMemo.pb; }
 const AN = { key: null, v: {} };
