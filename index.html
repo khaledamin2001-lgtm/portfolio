@@ -74,21 +74,32 @@ body.pd-locked{overflow:hidden}
   }
 
   /* ---------- data ---------- */
-  async function fetchData() {
-    const r = await fetch('data.enc.json?t=' + Date.now(), { cache: 'no-store' });
-    if (!r.ok) throw new Error('Could not download the portfolio data (' + r.status + ')');
-    const e = await r.json();
+  async function unseal(e, label) {
     const priv = await crypto.subtle.importKey('pkcs8', PK8, { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']);
     const epk = ub64(e.epk);
     const pub = await crypto.subtle.importKey('raw', epk, { name: 'ECDH', namedCurve: 'P-256' }, false, []);
     const shared = await crypto.subtle.deriveBits({ name: 'ECDH', public: pub }, priv, 256);
     const hk = await crypto.subtle.importKey('raw', shared, 'HKDF', false, ['deriveKey']);
-    const key = await crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: epk, info: enc.encode('portfolio-data-v1') }, hk, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
-    const gz = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ub64(e.iv), additionalData: enc.encode('portfolio-data-v1') }, key, ub64(e.ct));
+    const key = await crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: epk, info: enc.encode(label) }, hk, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+    return crypto.subtle.decrypt({ name: 'AES-GCM', iv: ub64(e.iv), additionalData: enc.encode(label) }, key, ub64(e.ct));
+  }
+  async function fetchData() {
+    const r = await fetch('data.enc.json?t=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) throw new Error('Could not download the portfolio data (' + r.status + ')');
+    const gz = await unseal(await r.json(), 'portfolio-data-v1');
     const plain = await new Response(new Blob([gz]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
     lastFetch = Date.now();
     return JSON.parse(plain);
   }
+  // month-end Excel workbooks, published encrypted under exports/ (exports/index.json lists them)
+  let EXPORTS = null;
+  window.pdExports = async () => { if (EXPORTS) return EXPORTS; try { const r = await fetch('exports/index.json?t=' + Date.now(), { cache: 'no-store' }); EXPORTS = r.ok ? await r.json() : []; } catch (e) { EXPORTS = []; } return EXPORTS; };
+  window.pdDownloadExport = async (month) => {
+    const list = await window.pdExports(); const x = list.find((e) => e.month === month); if (!x) throw new Error('No workbook published for ' + month);
+    const r = await fetch(x.file + '?t=' + Date.now(), { cache: 'no-store' }); if (!r.ok) throw new Error('Could not download the workbook (' + r.status + ')');
+    const e = await r.json(); const bytes = await unseal(e, 'portfolio-file-v1');
+    await downloads.save({ filename: e.name || x.name, data: new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }) });
+  };
 
   /* ---------- read-only database for the page ---------- */
   let DOCS = {}, dbResolve; const listeners = new Set();
@@ -2152,6 +2163,7 @@ function vFactsheet(){
   return `<div class="panel"><div class="phead"><div><h2>Monthly factsheet</h2><div class="sub">A one-page report in the format fund managers publish each month</div></div>
     <div class="row"><label class="ink2" style="font-size:12px">Month <select id="fs-month" data-testid="factsheet-month">${months.map(m=>`<option value="${m}" ${m===S.fsMonth?'selected':''}>${M(m)}${S.R.months.find(r=>r.month===m).live?' (live)':''}</option>`).join('')}</select></label>
     <button class="btn" id="fs-dl" data-testid="factsheet-download">Download HTML</button>
+    ${window.pdDownloadExport?`<button class="btn" id="fs-xlsx" data-testid="factsheet-excel" data-month="${S.fsMonth}">Download Excel</button>`:''}
     <button class="btn primary" id="fs-email" data-testid="factsheet-email" ${email?'':'disabled'} title="${email?'Send to '+esc(email):'Set an email address under Inputs → Settings'}">Email to me</button></div></div>
     <p class="note" style="margin:0 0 14px">${S.readOnly?`Emailed to <span class="mono">${esc(email)}</span> automatically after each monthly statement is posted. Download it here any time.`:email?`Sends from your Gmail to <span class="mono">${esc(email)}</span>. Posting a monthly statement offers to send it automatically.`:'Add an email address under Inputs → Settings to send factsheets.'}</p>
     <div style="overflow-x:auto;background:var(--surface-2);border-radius:10px;padding:14px 8px" data-testid="factsheet-preview">${factsheetHTML(F)}</div></div>`;
@@ -2317,6 +2329,7 @@ document.addEventListener('click', async e=>{
   const rvb=e.target.closest('[data-review]'); if(rvb){ const it=S.stmt.list.find(x=>x.month===rvb.dataset.review); if(it) reviewStatement(it); return; }
   if(e.target.id==='review-close'){ S.stmt.review=null; renderTab(true); return; }
   if(e.target.id==='post-statement'){ postStatement(); return; }
+  if(e.target.id==='fs-xlsx'){ const b=e.target, m=b.dataset.month; b.disabled=true; b.textContent='Preparing…'; try{ const list=await window.pdExports(); if(!list.some(x=>x.month===m)){ const have=list.map(x=>M(x.month)).join(', '); toast(`No Excel workbook for ${M(m)} yet. Workbooks are published with each monthly statement${have?` (available: ${have})`:''}.`,'error'); } else { await window.pdDownloadExport(m); toast(`Excel workbook for ${M(m)} saved`); } }catch(err){ toast('Could not download the workbook: '+(err.message||err),'error'); } b.disabled=false; b.textContent='Download Excel'; return; }
   if(e.target.id==='fs-email'){ e.target.disabled=true; await emailFactsheet(S.fsMonth); e.target.disabled=false; return; }
   if(e.target.id==='fs-dl'){ const F=factsheetData(S.fsMonth); download(`factsheet-${S.fsMonth}.html`, `<!doctype html><html><head><meta charset="utf-8"><title>${esc(S.settings.name)} factsheet ${M(S.fsMonth)}</title></head><body style="margin:0;padding:16px;background:#EDF2EF">${factsheetHTML(F)}</body></html>`); return; }
 });
