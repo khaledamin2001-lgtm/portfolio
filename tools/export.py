@@ -10,7 +10,7 @@ from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-COLLECTIONS = ["portfolio", "ledger", "market", "history", "bench", "imports"]
+COLLECTIONS = ["portfolio", "ledger", "market", "history", "bench", "imports", "sync"]
 REQUIRED = ["portfolio/settings", "portfolio/marks", "portfolio/assets", "market/latest"]
 
 def main(src, keys, out):
