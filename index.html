@@ -506,6 +506,7 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
       <button role="tab" data-tab="overview" id="tab-overview">Overview</button>
       <button role="tab" data-tab="holdings" id="tab-holdings">Holdings</button>
       <button role="tab" data-tab="performance" id="tab-performance">Performance</button>
+      <button role="tab" data-tab="analysis" id="tab-analysis">Analysis</button>
       <button role="tab" data-tab="activity" id="tab-activity">Activity</button>
       <button role="tab" data-tab="reports" id="tab-reports">Reports</button>
       <button role="tab" data-tab="settings" id="tab-settings">Settings</button>
@@ -1572,11 +1573,12 @@ function renderEmpty(){ $('#main').innerHTML = `<div class="empty"><h2>No portfo
 
 // ---------- tabs ----------
 // Six tabs; the older, finer-grained names still work as links and jump to their section inside the merged tab.
-const TAB_ALIAS = {attribution:'performance', risk:'performance', income:'holdings', trades:'activity', ledger:'activity', statements:'settings', factsheet:'reports', inputs:'settings', checks:'settings'};
+const TAB_ALIAS = {attribution:'analysis', risk:'analysis', income:'holdings', trades:'activity', ledger:'activity', statements:'settings', factsheet:'reports', inputs:'settings', checks:'settings'};
 const TAB_VIEWS = {
   overview: [['overview','Overview',()=>vOverview()]],
   holdings: [['holdings','Holdings',()=>vHoldings()],['income','Income & dividends',()=>vIncome()]],
-  performance: [['performance','Performance',()=>vPerformance()],['risk','Risk explained',()=>vRisk()],['attribution','Attribution vs EGX30 Capped',()=>vAttribution()]],
+  performance: [['performance','Performance',()=>vPerformance()]],
+  analysis: [['analysis','What the numbers say',()=>vAnalysis()],['attribution','Attribution vs EGX30 Capped',()=>vAttribution()]],
   activity: [['trades','Closed trades',()=>vTrades()],['ledger','Ledger',()=>vLedger()]],
   reports: [['factsheet','Monthly factsheet & Excel',()=>vFactsheet()]],
   settings: [['inputs','Inputs & settings',()=>vInputs()],['statements','Statements & imports',()=>vStatements()],['checks','Checks',()=>vChecks()]],
@@ -1592,7 +1594,7 @@ function renderTab(force){
   S.pending=false;
   S.tab = tabOf(S.tab);
   document.querySelectorAll('#tabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab===S.tab)));
-  const showPeriod = ['overview','performance','activity'].includes(S.tab);
+  const showPeriod = ['overview','performance','analysis','activity'].includes(S.tab);
   $('#period').hidden = !showPeriod;
   const views = TAB_VIEWS[S.tab];
   const nav = views.length>1 ? `<nav class="subnav" aria-label="On this page"><span class="muted">On this page</span>${views.map(([id,label])=>`<a href="#${id}" data-sec="${id}" data-testid="sec-${id}">${esc(label)}</a>`).join('')}</nav>` : '';
@@ -1762,7 +1764,7 @@ function briefPanel(){
   s.push(`Today the portfolio is worth <b>${egp(total)} EGP</b>, of which ${egp(cash)} EGP is cash, across ${R.pos.open.length} positions; the largest is ${esc(R.conc.largest)} at ${pct(R.conc.largestWeight,1,false)}.`);
   if(c.length) s.push(`Since inception the biggest contributors are ${c.slice(0,3).map(x=>`${esc(x.sym)} +${egp(x.total)}`).join(', ')}${c.some(x=>x.total<0)?`; the biggest detractor is ${esc(c[c.length-1].sym)} −${egp(Math.abs(c[c.length-1].total))}`:''} (EGP, realized + unrealized + dividends).`);
   if(st.xirr!=null) s.push(`Money-weighted, your own capital has compounded at ${pct(st.xirr)} a year${st.realTwr!=null||st.realTwrPartial!=null?`, or ${pct(st.realTwr??st.realTwrPartial)} after Egyptian inflation`:''}.`);
-  return `<div class="panel brief" data-testid="brief"><div class="eyebrow">In brief</div><p>${s.join(' ')}</p></div>`;
+  return `<div class="panel brief" data-testid="brief"><div class="eyebrow">In brief</div><p>${s.join(' ')} <a href="#analysis" data-go="analysis">Read the full review on the Analysis tab →</a></p></div>`;
 }
 function contributors(){ return S.R.pos.rows.filter(r=>r.bought>0).map(r=>({sym:r.symbol||r.name,name:r.name,total:r.total,status:r.status,realized:r.realized,unreal:r.unreal||0,divs:r.divs})).sort((a,b)=>b.total-a.total); }
 function contributorsList(){ const c=contributors(); if(!c.length) return '<p class="note" style="margin-top:8px">No trades yet.</p>';
@@ -2466,12 +2468,13 @@ function whyText(d){ const bad=d.rows.filter(x=>x.contrib<0).slice(0,2); if(!bad
   const w=bad.reduce((s,x)=>s+x.w,0);
   if(d.diff>=0){ const good=d.rows.filter(x=>x.contrib>0).sort((a,b)=>b.contrib-a.contrib)[0]; return `Held up${good?`: ${good.sym} ${pct(good.ret,0)} offset ${bad.map(x=>`${x.sym} ${pct(x.ret,0)}`).join(' and ')}`:''}.`; }
   return `${bad.map(x=>`${x.sym} ${pct(x.ret,0)}`).join(' and ')} ${bad.length>1?'were':'was'} ${pct(w,0,false)} of the portfolio${d.cashPct<0.02?', with no cash to cushion it':''}${d.buys>=8?`; ${d.buys} buys were made as it fell`:''}.`; }
-function vRisk(){
+function vAnalysis(){
   const R=S.R, st=R.stats, dm=downMonths(), H=holdingRisk(), cash=R.liveCash??R.settings.cash, tot=R.pos.mvTotal+Math.max(0,cash);
   const up=R.months.filter(r=>r.has&&r.bench>0), dn=R.months.filter(r=>r.has&&r.bench<0);
   const chain=(rows,k)=>rows.reduce((a,r)=>a*(1+r[k]),1)-1; const upC=up.length?chain(up,'ret')/chain(up,'bench'):null, dnC=dn.length?chain(dn,'ret')/chain(dn,'bench'):null;
   const top3=H.slice(0,3).reduce((s,h)=>s+h.w,0);
   return `
+  ${analysisPanel({R,st,dm,H,cash,tot,up,dn,upC,dnC,top3})}
   <div class="panel" data-testid="risk-capture"><div class="phead"><div><h2>How you behave when the index moves</h2><div class="sub">Since inception · EGX30 Capped had ${up.length} up months and ${dn.length} down months</div></div></div>
     <div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr))">
       ${kpi('In up months you captured', upC!=null?pct(upC,0,false):'—', 'of the index gain · above 100% is good')}
@@ -2491,6 +2494,45 @@ function vRisk(){
     ${H.map(h=>`<tr><td><span class="sym">${esc(h.sym)}</span></td><td class="n">${pct(h.w,1,false)}</td><td class="n">${h.beta!=null?num(h.beta):'—'}</td><td class="n">${h.vol!=null?pct(h.vol,0,false):'—'}</td><td class="n ${sgn(h.unreal)}">${egp(h.unreal)} <span class="muted">${pct(h.unrealPct)}</span></td><td class="n ${h.fromHigh<-0.1?'neg':''}">${pct(h.fromHigh)}</td></tr>`).join('')}
     </tbody></table></div>
     <p class="note" style="margin-top:10px">Beta: how much the stock moves for a 1% move in EGX30 Capped. Volatility: how wide its swings are over a year.</p>
+  </div>`;
+}
+
+// The written review: what the numbers say, why, and what you could do about it. Suggestions only; nothing is tracked or enforced.
+function analysisPanel(c){
+  const {R,st,dm,H,cash,tot,up,dn,upC,dnC,top3}=c; const cashPct=tot?Math.max(0,cash)/tot:0; const G={cash:0.10,max:0.10,top3:0.30,high:0.15,beta:1.2};
+  const over=H.filter(h=>h.w>G.max), excess=over.reduce((s,h)=>s+(h.w-G.max)*tot,0), cashAfter=tot?(Math.max(0,cash)+excess)/tot:0;
+  const below=H.filter(h=>h.fromHigh!=null&&h.fromHigh<-G.high), hiB=H.filter(h=>h.beta!=null&&h.beta>G.beta), hiBw=hiB.reduce((s,h)=>s+h.w,0);
+  const lost=dm.filter(d=>d.diff<0), n=st.n, turnover=st.n?st.sells/Math.max(1,(st.opening+st.closing)/2)*12/st.n:null;
+  const winners=H.filter(h=>h.unreal>0).sort((a,b)=>b.unreal-a.unreal), losers=H.filter(h=>h.unreal<0).sort((a,b)=>a.unreal-b.unreal);
+  const list=(arr,f)=>arr.map(f).join(', ');
+  // 1. where you stand
+  const stand=[`Since ${M(st.rows[0].month)} the portfolio has returned <b class="${sgn(st.twr)}">${pct(st.twr)}</b> against <b>${pct(st.benchTwr)}</b> for EGX30 Capped, so it is ${st.alpha>=0?'ahead of':'behind'} the index by <b>${pct(Math.abs(st.alpha),1,false)}</b>.`,
+    upC!=null&&dnC!=null?`In the index's ${up.length} up months you captured ${pct(upC,0,false)} of its gains; in its ${dn.length} down months you took ${pct(dnC,0,false)} of its losses. ${dnC>1&&upC<1?'You are paid less on the way up and charged more on the way down, and that gap is most of the shortfall.':dnC<=1&&upC>=1?'You gain more than the index when it rises and lose less when it falls: that is what beating it looks like.':dnC<=1?'You hold up better than the index when it falls; the shortfall comes from lagging it in up months.':'You keep up in rising months but lose more than the index when it falls.'}`:'',
+    `Money-weighted, your own capital has compounded at ${pct(st.xirr)} a year${st.realTwr!=null||st.realTwrPartial!=null?`, ${pct(st.realTwr??st.realTwrPartial)} after Egyptian inflation`:''}.`].filter(Boolean);
+  // 2. why
+  const why=[];
+  if(lost.length) why.push(`The months that hurt were ${list(lost,d=>`${M(d.month)} (${pct(d.ret)} against ${pct(d.bench)})`)}. ${lost.map(d=>`${M(d.month)}: ${whyText(d)}`).join(' ')}`);
+  why.push(`Today the three largest positions (${list(H.slice(0,3),h=>h.sym)}) are ${pct(top3,0,false)} of the portfolio and cash is ${pct(cashPct,1,false)}. ${top3>G.top3?'When one of those three has a bad month, the whole portfolio has a bad month; that is the mechanism behind the down-month numbers above.':'Concentration is moderate.'}${cashPct<0.02?' With no cash, nothing cushions a fall and there is nothing to buy a dip with except by selling something else.':''}`);
+  if(hiB.length) why.push(`${list(hiB,h=>`${h.sym} (beta ${num(h.beta)})`)} move more than the index and are ${pct(hiBw,0,false)} of the book, so on a bad index day the portfolio falls more than the index does.`);
+  if(turnover!=null) why.push(`Turnover runs at about ${num(turnover,1)}× the portfolio's value a year (${st.trades} trades in the period). Every round trip costs fees and spread, and the Attribution section below shows whether trading during the month has added or cost you.`);
+  // 3. what you could do
+  const could=[];
+  if(over.length) could.push(`<b>Bring each position to ${pct(G.max,0,false)} or less.</b> ${list(over,h=>`${h.sym} is ${pct(h.w,1,false)} (about ${egp((h.w-G.max)*tot)} EGP over)`)}. Trimming them all raises about ${egp(excess)} EGP and would put cash at ${pct(cashAfter,0,false)}. Sell winners and losers alike; selling only winners to keep funding losers is how losers become the largest positions.`);
+  else could.push(`<b>Position sizes are already under ${pct(G.max,0,false)} each.</b> Keep new buys there.`);
+  could.push(cashPct<G.cash?`<b>Hold about ${pct(G.cash,0,false)} cash</b> (${egp(G.cash*tot)} EGP at today's size). It softens a fall by roughly a tenth and, more importantly, it is what you buy a dip with instead of selling something at the bottom.`:`<b>Cash is at ${pct(cashPct,0,false)}</b>, which already gives you a cushion and dry powder.`);
+  if(below.length) could.push(`<b>Make one decision on each stock well below its high.</b> ${list(below,h=>`${h.sym} is ${pct(h.fromHigh,0)} from its high (${h.unreal<0?'−':'+'}${egp(Math.abs(h.unreal))} EGP unrealized)`)}. For each, ask: would I buy it today at this price with fresh money? If yes, keep it at ${pct(G.max,0,false)} or less and write the reason in its note under Settings. If no, sell. Not deciding is what turns a −10% stock into a −20% one.`);
+  if(hiB.length) could.push(`<b>Size the high-beta names smaller.</b> ${list(hiB,h=>h.sym)} can stay, but as the smaller positions rather than the largest.`);
+  could.push(`<b>Three habits for every future buy:</b> buy only with cash, never by selling something else the same day; no buy takes a stock above ${pct(G.max,0,false)}; write the price at which you would be wrong (the stop field on each asset) before you buy, and act the week it is hit.`);
+  if(turnover!=null&&turnover>2) could.push(`<b>Trade less.</b> One decision day a week and a calendar rebalance (monthly or quarterly, back to your target sizes) removes most reactive trades.`);
+  could.push(`<b>Add ballast.</b> One or two low-beta dividend payers (telecom, food, utilities) or a slice in the Thndr savings fund so the whole book is not cyclicals and financials.`);
+  could.push(`<b>Monthly, ten minutes, after the statement posts:</b> open this tab, read the first paragraph, check cash and the top three, and trim anything that drifted over ${pct(G.max,0,false)}.`);
+  const expect = dnC!=null&&dnC>1 ? `Done this way, the down-month capture should drift toward 90–100% within a couple of down months, mostly from sizing. You give up a little in strong up months because ${pct(G.cash,0,false)} sits in cash and the winners are smaller; on your numbers the worst down month alone cost more against the index than a cash buffer costs in a year of average months.` : `The main thing to protect is the down-month record; keep sizes even and cash on hand and it should hold.`;
+  return `<div class="panel brief" data-testid="analysis"><div class="phead"><div><h2>What the numbers say</h2><div class="sub">A written review of the portfolio as it stands today · guideline figures used here: ${pct(G.cash,0,false)} cash, ${pct(G.max,0,false)} per stock, ${pct(G.top3,0,false)} for the top three, a decision at ${pct(G.high,0,false)} below a stock's high · these are suggestions, nothing is tracked or enforced</div></div></div>
+    <h3 class="eyebrow" style="margin-top:14px">Where you stand</h3><p>${stand.join(' ')}</p>
+    <h3 class="eyebrow" style="margin-top:14px">Why</h3><p>${why.join(' ')}</p>
+    <h3 class="eyebrow" style="margin-top:14px">What you could do</h3><ol style="margin:8px 0 0 20px;padding:0;display:grid;gap:8px;max-width:80ch;line-height:1.55">${could.map(x=>`<li>${x}</li>`).join('')}</ol>
+    <h3 class="eyebrow" style="margin-top:14px">What to expect</h3><p>${expect}</p>
+    ${winners.length||losers.length?`<p class="note" style="margin-top:10px">Unrealized today: ${winners.length?`winners ${list(winners.slice(0,3),h=>`${h.sym} +${egp(h.unreal)}`)}`:''}${winners.length&&losers.length?' · ':''}${losers.length?`losers ${list(losers.slice(0,3),h=>`${h.sym} −${egp(Math.abs(h.unreal))}`)}`:''} (EGP).</p>`:''}
   </div>`;
 }
 
