@@ -2,9 +2,9 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#0B6E5F"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-title" content="Portfolio"><meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Portfolio Tracker"><meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="icon-180.png"><link rel="icon" href="icon-192.png">
-<title>Portfolio</title>
+<title>Stock Market Portfolio Tracker</title>
 <style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:#F3F6F4}img{max-width:100%}[hidden]{display:none!important}
 #lock{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:24px 16px;padding-top:calc(24px + env(safe-area-inset-top,0px));padding-bottom:calc(24px + env(safe-area-inset-bottom,0px));background:var(--bg,#F3F6F4);color:var(--ink,#0F1A17);overflow-y:auto}
 #lock .lk{width:100%;max-width:360px;display:flex;flex-direction:column;gap:18px;text-align:center}
@@ -182,7 +182,7 @@ body.pd-locked{overflow:hidden}
     DOCS = bundle.docs || {}; DATA_AT = bundle.exportedAt; OPENED = CUR.id;
     if (LIVE && Date.parse(LIVE.asOf) > Date.parse((DOCS['market/latest'] || {}).asOf || 0)) DOCS['market/latest'] = LIVE;
     listeners.forEach(fire);
-    document.title = CUR.name;
+    document.title = CUR.name + ' · Stock Market Portfolio Tracker';
     whenReady(() => {   // the bottom bar is the last thing in the document; the data can be ready before it is parsed
       const t = document.getElementById('pd-updated');
       if (t && DATA_AT) t.textContent = 'Ledger data as of ' + new Date(DATA_AT).toLocaleString('en-US', { timeZone: 'Africa/Cairo', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }) + ' Cairo';
@@ -195,7 +195,7 @@ body.pd-locked{overflow:hidden}
   const canBio = async () => { try { return !!(window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()); } catch (e) { return false; } };
   async function enrollBio() {
     const c = await navigator.credentials.create({ publicKey: {
-      rp: { name: 'Portfolio' }, user: { id: rnd(16), name: 'portfolio', displayName: 'Portfolio' }, challenge: rnd(32),
+      rp: { name: 'Stock Market Portfolio Tracker' }, user: { id: rnd(16), name: 'portfolio', displayName: 'Portfolio' }, challenge: rnd(32),
       pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
       authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'preferred' }, timeout: 60000, attestation: 'none' } });
     ls.set(BIO_LS, { cred: b64(c.rawId) });
@@ -219,7 +219,7 @@ body.pd-locked{overflow:hidden}
   const wireSwitch = () => { const b = $l('#lk-switch'); if (b) b.onclick = () => chooseScreen(); };
 
   function chooseScreen() {
-    screen(`<h1>Portfolio</h1><p>Choose whose portfolio to open.</p><div class="lk-list">${PORTFOLIOS.map((p) => { const set = !!ls.get('pd.dev.' + p.id);
+    screen(`<h1>Stock Market Portfolio Tracker</h1><p>Choose whose portfolio to open.</p><div class="lk-list">${PORTFOLIOS.map((p) => { const set = !!ls.get('pd.dev.' + p.id);
       return `<button class="lk-btn ${set ? '' : 'ghost'}" data-pick="${esc(p.id)}" data-testid="live-pick-${esc(p.id)}">${esc(p.name)}<small>${set ? 'ready on this device' : 'needs its setup key'}</small></button>`; }).join('')}</div>
       <p class="lk-foot">Each portfolio has its own setup key and password. Ask the owner for theirs to add it here.</p>`);
     document.querySelectorAll('#lock [data-pick]').forEach((b) => { b.onclick = () => select(PORTFOLIOS.find((p) => p.id === b.dataset.pick)); });

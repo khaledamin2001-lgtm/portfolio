@@ -1,6 +1,6 @@
 {
- "name": "Portfolio",
- "short_name": "Portfolio",
+ "name": "Stock Market Portfolio Tracker",
+ "short_name": "Portfolio Tracker",
  "start_url": "./",
  "scope": "./",
  "display": "standalone",

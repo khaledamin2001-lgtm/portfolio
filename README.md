@@ -1,4 +1,4 @@
-# Portfolio
+# Stock Market Portfolio Tracker
 
 Private portfolio site for two people, served by GitHub Pages from one page (`index.html`). `portfolios.json` lists the
 portfolios; each one lives under `p/<id>/`:
