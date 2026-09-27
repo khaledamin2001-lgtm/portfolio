@@ -364,7 +364,7 @@ nav.tabs button[aria-selected="true"]{background:var(--ink);color:var(--bg)}
 @media (max-width:860px){nav.tabs{margin-left:0;width:100%;padding-bottom:8px}}
 
 /* tape */
-.tape{display:flex;gap:22px;overflow-x:auto;padding-block:10px;border-bottom:1px solid var(--rule);scrollbar-width:none;font-size:12.5px}
+.tape{display:flex;gap:22px;overflow-x:auto;min-width:0;max-width:100%;padding-block:10px;border-bottom:1px solid var(--rule);scrollbar-width:none;font-size:12.5px}
 .tape::-webkit-scrollbar{display:none}
 .tape .t{display:flex;gap:8px;align-items:baseline;white-space:nowrap}
 .tape .t b{font:500 11px var(--f-mono);letter-spacing:.06em;color:var(--ink-3)}
@@ -482,6 +482,15 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
 .empty{padding:48px 20px;text-align:center;color:var(--ink-2)}
 .empty h2{font:600 22px var(--f-display);color:var(--ink);margin-bottom:6px}
 .note{font-size:12.5px;color:var(--ink-3)}
+.subnav{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+.subnav .muted{font-size:12px;margin-right:4px}
+.subnav a{font-size:12.5px;padding:6px 11px;border-radius:999px;border:1px solid var(--rule);color:var(--ink-2);text-decoration:none;background:var(--surface)}
+.subnav a:hover{color:var(--ink);background:var(--surface-2)}
+.tsec{scroll-margin-top:110px;min-width:0;max-width:100%}
+.tsec>*+*{margin-top:18px}
+.tsec+.tsec{margin-top:30px;padding-top:24px;border-top:1px solid var(--rule)}
+.secttl{font:600 20px/1.2 var(--f-display);margin:0 0 14px;letter-spacing:-.01em}
+.brief p{font-size:14.5px;line-height:1.65;margin:8px 0 0;max-width:80ch}
 .banner{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 14px;border-radius:10px;background:var(--warn-bg);color:var(--warn);font-size:13px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
@@ -493,14 +502,9 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
       <button role="tab" data-tab="overview" id="tab-overview">Overview</button>
       <button role="tab" data-tab="holdings" id="tab-holdings">Holdings</button>
       <button role="tab" data-tab="performance" id="tab-performance">Performance</button>
-      <button role="tab" data-tab="attribution" id="tab-attribution">Attribution</button>
-      <button role="tab" data-tab="income" id="tab-income">Income</button>
-      <button role="tab" data-tab="trades" id="tab-trades">Closed trades</button>
-      <button role="tab" data-tab="ledger" id="tab-ledger">Ledger</button>
-      <button role="tab" data-tab="statements" id="tab-statements">Statements</button>
-      <button role="tab" data-tab="factsheet" id="tab-factsheet">Factsheet</button>
-      <button role="tab" data-tab="inputs" id="tab-inputs">Inputs</button>
-      <button role="tab" data-tab="checks" id="tab-checks">Checks</button>
+      <button role="tab" data-tab="activity" id="tab-activity">Activity</button>
+      <button role="tab" data-tab="reports" id="tab-reports">Reports</button>
+      <button role="tab" data-tab="settings" id="tab-settings">Settings</button>
     </nav>
   </div>
 </header>
@@ -1563,18 +1567,32 @@ function recompute(){
 function renderEmpty(){ $('#main').innerHTML = `<div class="empty"><h2>No portfolio data yet</h2><p>The database for this page is empty. Ask Claude to load your workbook into it.</p></div>`; $('#period').innerHTML=''; }
 
 // ---------- tabs ----------
-function setTab(t){ S.tab=t; ls.set('pd.tab',t); try{ history.replaceState(null,'','#'+t); }catch(e){} renderTab(true); window.scrollTo({top:0}); }
+// Six tabs; the older, finer-grained names still work as links and jump to their section inside the merged tab.
+const TAB_ALIAS = {attribution:'performance', income:'holdings', trades:'activity', ledger:'activity', statements:'settings', factsheet:'reports', inputs:'settings', checks:'settings'};
+const TAB_VIEWS = {
+  overview: [['overview','Overview',()=>vOverview()]],
+  holdings: [['holdings','Holdings',()=>vHoldings()],['income','Income & dividends',()=>vIncome()]],
+  performance: [['performance','Performance',()=>vPerformance()],['attribution','Attribution vs EGX30 Capped',()=>vAttribution()]],
+  activity: [['trades','Closed trades',()=>vTrades()],['ledger','Ledger',()=>vLedger()]],
+  reports: [['factsheet','Monthly factsheet & Excel',()=>vFactsheet()]],
+  settings: [['inputs','Inputs & settings',()=>vInputs()],['statements','Statements & imports',()=>vStatements()],['checks','Checks',()=>vChecks()]],
+};
+const tabOf = (t) => (TAB_VIEWS[t] ? t : TAB_ALIAS[t] || 'overview');
+function setTab(t, sec){ const top=tabOf(t); if(!sec && TAB_ALIAS[t]) sec=t; S.tab=top; ls.set('pd.tab',top); try{ history.replaceState(null,'','#'+(sec||top)); }catch(e){} renderTab(true);
+  const el = sec && document.getElementById('sec-'+sec); if(el) el.scrollIntoView({block:'start'}); else window.scrollTo({top:0}); }
 function editing(){ const a=document.activeElement; return inputsDirty() || !!(a && a.closest && a.closest('#main') && a.matches('input,select,textarea')); }
 document.addEventListener('focusout', ()=>{ setTimeout(()=>{ if(S.pending && !editing()){ S.pending=false; renderTab(false); } }, 0); });
 $('#tabs').addEventListener('click', e => { const b=e.target.closest('button[data-tab]'); if(b) setTab(b.dataset.tab); });
 function renderTab(force){
   if(!force && editing()){ S.pending=true; return; }  // a snapshot arrived mid-edit: re-render once the user leaves the field
   S.pending=false;
+  S.tab = tabOf(S.tab);
   document.querySelectorAll('#tabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab===S.tab)));
-  const showPeriod = ['overview','performance','trades','attribution'].includes(S.tab);
+  const showPeriod = ['overview','performance','activity'].includes(S.tab);
   $('#period').hidden = !showPeriod;
-  const fn = {overview:vOverview, holdings:vHoldings, performance:vPerformance, attribution:vAttribution, income:vIncome, trades:vTrades, ledger:vLedger, statements:vStatements, factsheet:vFactsheet, inputs:vInputs, checks:vChecks}[S.tab] || vOverview;
-  $('#main').innerHTML = `<section class="view">${fn()}</section>`;
+  const views = TAB_VIEWS[S.tab];
+  const nav = views.length>1 ? `<nav class="subnav" aria-label="On this page"><span class="muted">On this page</span>${views.map(([id,label])=>`<a href="#${id}" data-sec="${id}" data-testid="sec-${id}">${esc(label)}</a>`).join('')}</nav>` : '';
+  $('#main').innerHTML = `<section class="view">${nav}${views.map(([id,label,fn],i)=>`<div class="tsec" id="sec-${id}">${views.length>1&&i>0?`<h2 class="secttl">${esc(label)}</h2>`:''}${fn()}</div>`).join('')}</section>`;
   mountCharts();
 }
 
@@ -1693,6 +1711,7 @@ function vOverview(){
     ${kpi('Real return', st.realTwr!=null?`<span class="${sgn(st.realTwr)}">${pct(st.realTwr)}</span>`:st.realTwrPartial!=null?`<span class="${sgn(st.realTwrPartial)}">${pct(st.realTwrPartial)}</span>`:'—', st.inflation!=null?`after ${pct(st.inflation,1,false)} Egypt CPI`:st.realTwrPartial!=null?`through ${M(st.realThrough)} · CPI for ${noCpi.join(', ')} pending`:`Needs CPI for ${noCpi.join(', ')}`)}
     ${kpi('Max drawdown', `<span class="${sgn(st.maxDD)}">${pct(st.maxDD)}</span>`, `Sharpe ${num(st.sharpe)} · vol ${pct(st.vol,1,false)}/mo`)}
   </div>
+  ${briefPanel()}
   <div class="grid g2">
     <div class="panel">
       <div class="phead"><div><h2>Growth of 1 EGP</h2><div class="sub">Cumulative time-weighted return, chain-linked monthly</div></div>
@@ -1728,8 +1747,25 @@ function vOverview(){
       <dt>Trades closed</dt><dd>${st.closedCount}</dd><dt>Win rate</dt><dd>${pct(st.winRate,1,false)}</dd><dt>Profit factor</dt><dd>${st.profitFactor!=null?num(st.profitFactor,1)+'×':'n/a'}</dd>
       <dt>Total P/L on closed</dt><dd class="${sgn(st.closedPL)}">${egp(st.closedPL)}</dd><dt>Average hold</dt><dd>${num(st.avgHold,0)} days</dd><dt>Realized trading P/L</dt><dd class="${sgn(st.realized)}">${egp(st.realized)}</dd></dl></div>
     <div class="panel" data-testid="session-movers"><div class="eyebrow">Session movers</div>${moversList()}</div>
+    <div class="panel" data-testid="contributors"><div class="eyebrow">What made the money · all time</div>${contributorsList()}</div>
   </div>`;
 }
+// Plain-language summary of the selected period, for readers who don't want to decode the tiles.
+function briefPanel(){
+  const R=S.R, st=R.stats, rows=st.rows, last=rows[rows.length-1]; const cash=R.liveCash??R.settings.cash; const total=cash+R.pos.mvTotal;
+  const c=contributors(); const s=[];
+  s.push(`<b>${esc(st.label)}</b>: the portfolio returned <b class="${sgn(st.twr)}">${pct(st.twr)}</b> against <b>${pct(st.benchTwr)}</b> for EGX30 Capped, ${st.alpha>=0?'ahead of the index by':'behind the index by'} <b class="${sgn(st.alpha)}">${pct(Math.abs(st.alpha),1,false)}</b>${st.n>1?`, with ${st.posMonths} of ${st.n} months positive and a worst month of ${pct(st.worst.ret)} (${M(st.worst.month)})`:''}.`);
+  s.push(`${M(last.month)}${last.live?' so far':''}: <b class="${sgn(last.ret)}">${pct(last.ret)}</b> vs ${pct(last.bench)} for the index.`);
+  s.push(`Today the portfolio is worth <b>${egp(total)} EGP</b>, of which ${egp(cash)} EGP is cash, across ${R.pos.open.length} positions; the largest is ${esc(R.conc.largest)} at ${pct(R.conc.largestWeight,1,false)}.`);
+  if(c.length) s.push(`Since inception the biggest contributors are ${c.slice(0,3).map(x=>`${esc(x.sym)} +${egp(x.total)}`).join(', ')}${c.some(x=>x.total<0)?`; the biggest detractor is ${esc(c[c.length-1].sym)} −${egp(Math.abs(c[c.length-1].total))}`:''} (EGP, realized + unrealized + dividends).`);
+  if(st.xirr!=null) s.push(`Money-weighted, your own capital has compounded at ${pct(st.xirr)} a year${st.realTwr!=null||st.realTwrPartial!=null?`, or ${pct(st.realTwr??st.realTwrPartial)} after Egyptian inflation`:''}.`);
+  return `<div class="panel brief" data-testid="brief"><div class="eyebrow">In brief</div><p>${s.join(' ')}</p></div>`;
+}
+function contributors(){ return S.R.pos.rows.filter(r=>r.bought>0).map(r=>({sym:r.symbol||r.name,name:r.name,total:r.total,status:r.status,realized:r.realized,unreal:r.unreal||0,divs:r.divs})).sort((a,b)=>b.total-a.total); }
+function contributorsList(){ const c=contributors(); if(!c.length) return '<p class="note" style="margin-top:8px">No trades yet.</p>';
+  const top=c.slice(0,4), bot=c.filter(x=>x.total<0).slice(-3).reverse();
+  const li=(r)=>`<dt><span class="sym">${esc(r.sym)}</span> <span class="muted">${r.status==='Open'?'held':'closed'}</span></dt><dd class="${sgn(r.total)}">${egp(r.total)}</dd>`;
+  return `<dl class="kv"><dt class="sec">Top contributors</dt><dd class="sec"></dd>${top.map(li).join('')}<dt class="sec">Detractors</dt><dd class="sec"></dd>${bot.map(li).join('')||'<dt class="muted">None</dt><dd></dd>'}</dl><p class="note" style="margin:8px 0 0">Realized + unrealized + dividends per stock, EGP.</p>`; }
 function moversList(){ const rows=S.R.pos.open.filter(r=>r.chg!=null&&r.mv&&r.priceSource==='auto').map(r=>({sym:r.symbol||r.name,name:r.name,chg:r.chg/100,pl:r.mv-r.mv/(1+r.chg/100)})).sort((a,b)=>b.pl-a.pl);
   if(!rows.length) return '<p class="note" style="margin-top:8px">No session change data yet.</p>';
   const up=rows.filter(r=>r.pl>0).slice(0,3), dn=rows.filter(r=>r.pl<0).slice(-3).reverse(); const dp=dayPL();
@@ -2287,7 +2323,7 @@ function loadPdfjs(){ if(!pdfjsP) pdfjsP = new Promise((res,rej)=>{ const add=(s
 const MONNUM={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
 async function scanGmail(auto){
   const mcp = await window.claude?.use?.('mcp'); if(!mcp){ if(!auto) toast('Gmail is not available in this view.','error'); return; }
-  S.stmt.busy='Searching Gmail…'; if(S.tab==='statements') renderTab(true);
+  S.stmt.busy='Searching Gmail…'; if(S.tab==='settings') renderTab(true);
   try{
     const res = await mcp.callTool(GMAIL,'search_threads',{query:'from:no-reply@system.thndr.app subject:E-statement -subject:"US Market"', pageSize:50},{cache:false});
     const p = payloadOf(res); const best={};
@@ -2297,7 +2333,7 @@ async function scanGmail(auto){
       if(!b || (monthly && !b.monthly) || (monthly===b.monthly && c.date>b.date)) best[month]=c; }));
     S.stmt.list = Object.values(best).sort((a,b)=>b.month.localeCompare(a.month)); S.stmt.scanned=new Date().toISOString(); S.stmt.error=null;
   }catch(e){ S.stmt.error = 'Gmail search failed: '+(e.message||e.code); }
-  S.stmt.busy=false; if(S.tab==='statements'||S.tab==='overview') renderTab(true);
+  S.stmt.busy=false; if(S.tab==='settings'||S.tab==='overview') renderTab(true);
 }
 async function reviewStatement(item){
   const mcp = await window.claude?.use?.('mcp'); if(!mcp) return;
@@ -2399,6 +2435,7 @@ async function autoScan(){
 
 // ---------- events (delegated) ----------
 document.addEventListener('click', async e=>{
+  const sc=e.target.closest('[data-sec]'); if(sc){ e.preventDefault(); const el=document.getElementById('sec-'+sc.dataset.sec); if(el){ el.scrollIntoView({behavior:'smooth',block:'start'}); try{ history.replaceState(null,'','#'+sc.dataset.sec); }catch(x){} } return; }
   const go=e.target.closest('[data-go]'); if(go){ setTab(go.dataset.go); return; }
   const del=e.target.closest('[data-del]');
   if(del){ if(del.dataset.arm!=='1'){ del.dataset.arm='1'; del.textContent='Confirm delete'; setTimeout(()=>{ if(del.isConnected){ del.dataset.arm=''; del.textContent='Delete'; } },4000); return; }
