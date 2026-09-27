@@ -790,7 +790,7 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     const missing = pos.open.filter((r) => r.price == null);
     add(`Prices updated within ${settings.staleDays} days`, missing.length ? 'error' : stale.length ? 'warn' : 'ok', missing.length ? `No price: ${missing.map((r) => r.name).join(', ')}` : stale.length ? `Stale: ${stale.map((r) => r.symbol || r.name).join(', ')}` : `${pos.open.length} held positions priced`);
     const diff = settings.cash - ledgerCash;
-    add('Broker cash reconciles to ledger', Math.abs(diff) < 1 ? 'ok' : 'warn', `Broker ${fmtNum(settings.cash)} vs ledger ${fmtNum(ledgerCash)} (diff ${fmtNum(diff)} EGP)`);
+    add('Broker cash reconciles to ledger', Math.abs(diff) < 1 ? 'ok' : 'warn', `Broker ${fmtNum(settings.cash)} vs ledger ${fmtNum(ledgerCash)}${settings.cashDate ? ` on ${settings.cashDate}` : ''} (diff ${fmtNum(diff)} EGP)${settings.cashSource ? ` · broker figure from ${settings.cashSource}` : ''}`);
     return out;
   }
   const fmtNum = (x) => (x == null ? '—' : x.toLocaleString('en-US', { maximumFractionDigits: 2, minimumFractionDigits: 2 }));
@@ -805,6 +805,11 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     const assets = Object.values(data.assets || {});
     const market = data.market || null;
     const ledgerCash = sum(tx.map((t) => t.amt || 0));
+    // broker cash is a dated reading (from the latest statement): compare it with the ledger on that date,
+    // and roll it forward with whatever the ledger books afterwards to get today's cash
+    const cashDate = settings.cashDate || null;
+    const ledgerCashAt = cashDate ? sum(tx.filter((t) => t.d <= cashDate).map((t) => t.amt || 0)) : ledgerCash;
+    const liveCash = settings.cash == null ? ledgerCash : settings.cash + (cashDate ? sum(tx.filter((t) => t.d > cashDate).map((t) => t.amt || 0)) : 0);
     // provisional live month
     let live = null;
     const curMonth = monthOf(today);
@@ -814,7 +819,7 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
       const mk = (data.marks || {})[curMonth];
       if (!mk || mk.provisional) {
         live = {
-          month: curMonth, cash: settings.cash, securities: pre.mvTotal,
+          month: curMonth, cash: liveCash, securities: pre.mvTotal,
           benchClose: ix && ix.date && monthOf(ix.date) === curMonth ? ix.close : null,
           prevBenchClose: ix && ix.date && monthOf(ix.date) === curMonth ? ix.prevMonthClose : null,
           usdegp: market && market.fx && market.fx.USDEGP ? market.fx.USDEGP.price : null,
@@ -826,9 +831,9 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     const pos = positions(ledger, assets, market, settings, today, range, opts.fallback);
     const stats = periodStats(months, range, ledger, settings, pos);
     return {
-      today, settings, ledger, months, range, pos, stats, ledgerCash, live,
+      today, settings, ledger, months, range, pos, stats, ledgerCash, ledgerCashAt, liveCash, live,
       sectors: sectors(pos), conc: concentration(pos, settings),
-      checks: checks({ tx, months, range, pos, settings, today, ledgerCash }),
+      checks: checks({ tx, months, range, pos, settings, today, ledgerCash: ledgerCashAt }),
     };
   }
 
@@ -1563,7 +1568,7 @@ function checkSummary(){ const c=S.R.checks; const e=c.filter(x=>x.status==='err
 // ---------- Overview ----------
 function vOverview(){
   const R=S.R, st=R.stats; if(!st.n) return `<div class="panel empty"><h2>No data for this selection</h2></div>`;
-  const total = R.settings.cash + R.pos.mvTotal; const dp=dayPL(); const cs=checkSummary();
+  const cashNow = R.liveCash ?? R.settings.cash; const total = cashNow + R.pos.mvTotal; const dp=dayPL(); const cs=checkSummary();
   const unreal = R.pos.open.reduce((s,r)=>s+(r.unreal||0),0);
   const rows=st.rows; const labels=rows.map(r=>M(r.month));
   let invested=[]; let cap=st.opening; rows.forEach(r=>{ cap+=r.netFlow; invested.push(cap); });
@@ -1597,7 +1602,7 @@ function vOverview(){
       <div class="tbl"><table><thead><tr><th>Symbol</th><th class="n">Value</th><th class="n">Unrealized</th><th class="n">Return</th><th>Weight</th></tr></thead><tbody>
       ${R.pos.open.slice().sort((a,b)=>(b.mv||0)-(a.mv||0)).slice(0,6).map(r=>`<tr><td><span class="sym">${esc(r.symbol||r.name)}</span></td><td class="n">${egp(r.mv)}</td><td class="n ${sgn(r.unreal)}">${egp(r.unreal)}</td><td class="n ${sgn(r.unreal)}">${pct(r.openCost?r.unreal/r.openCost:null)}</td><td><div class="bar" title="${pct(r.weight,1,false)}"><i style="width:${(r.weight/maxW*100).toFixed(1)}%"></i></div></td></tr>`).join('')}
       </tbody></table></div>
-      <div class="row" style="margin-top:12px;justify-content:space-between"><span class="note">Cash ${egp(R.settings.cash)} EGP · Unrealized P/L <span class="${sgn(unreal)}">${egp(unreal)}</span> EGP</span><span class="chip ${cs.cls}" data-go="checks" style="cursor:pointer">${esc(cs.text)}</span></div>
+      <div class="row" style="margin-top:12px;justify-content:space-between"><span class="note">Cash ${egp(cashNow)} EGP · Unrealized P/L <span class="${sgn(unreal)}">${egp(unreal)}</span> EGP</span><span class="chip ${cs.cls}" data-go="checks" style="cursor:pointer">${esc(cs.text)}</span></div>
     </div>
     <div class="panel">
       <div class="phead"><div><h2>Sector allocation</h2><div class="sub">Share of holdings value · ${R.sectors.length} sectors</div></div></div>
@@ -1626,13 +1631,13 @@ function sectorBars(){ const secs=S.R.sectors; if(!secs.length) return '<p class
 
 // ---------- Holdings ----------
 function vHoldings(){
-  const R=S.R, c=R.conc; const total=R.settings.cash+R.pos.mvTotal; const unreal=R.pos.open.reduce((s,r)=>s+(r.unreal||0),0); const cost=R.pos.open.reduce((s,r)=>s+r.openCost,0); const dp=dayPL();
+  const R=S.R, c=R.conc; const cashNow=R.liveCash ?? R.settings.cash; const total=cashNow+R.pos.mvTotal; const unreal=R.pos.open.reduce((s,r)=>s+(r.unreal||0),0); const cost=R.pos.open.reduce((s,r)=>s+r.openCost,0); const dp=dayPL();
   const rows=R.pos.open.slice().sort((a,b)=>(b.mv||0)-(a.mv||0));
   const today=R.today;
   return `
   <div class="kpis">
     ${kpi('Holdings value', egp(R.pos.mvTotal), `${R.pos.open.length} positions`, '', 'EGP')}
-    ${kpi('Cash', egp(R.settings.cash), `as of ${dfmt(R.settings.cashDate)}`, '', 'EGP')}
+    ${kpi('Cash', egp(cashNow), R.settings.cashDate ? `broker ${egp(R.settings.cash)} on ${dfmt(R.settings.cashDate)}${Math.abs(cashNow-R.settings.cash)>=0.5?', plus ledger activity since':''}` : 'broker balance', '', 'EGP')}
     ${kpi('Total value', egp(total), `<span class="${sgn(dp.pl)}">${dp.pct!=null?pct(dp.pct,2)+' last session':''}</span>`, 'hero', 'EGP')}
     ${kpi('Unrealized P/L', `<span class="${sgn(unreal)}">${egp(unreal)}</span>`, `${pct(cost?unreal/cost:null)} on cost of ${short(cost)}`)}
     ${kpi('Largest position', esc(c.largest), `${pct(c.largestWeight,1,false)} · top 3 ${pct(c.top3,1,false)}`)}
@@ -1889,7 +1894,7 @@ function vChecks(){
     <h3>Cost basis and P/L</h3><p>Weighted-average cost, in ledger order. A sale's cost basis is <code>average cost × shares sold</code>; realized P/L is proceeds minus that basis. Amounts are net of Thndr commissions, as on the statement. Dividends are credited to the stock that paid them.</p>
     <h3>Risk</h3><p>Volatility is the sample standard deviation of monthly returns. Sharpe uses the monthly equivalent of the 3-month T-bill yield and is annualized by √12. Beta is the slope of portfolio on benchmark monthly returns; tracking error is the annualized standard deviation of monthly alpha; information ratio is annualized mean alpha over tracking error. Drawdown is measured on the cumulative return within the selected period. HHI is the sum of squared position weights; 1 ÷ HHI gives the effective number of equal-sized positions.</p>
     <h3>USD and real returns</h3><p>USD return converts each month at consecutive month-end USD/EGP rates: the CBE mid rate where you entered it, otherwise the market close filled automatically. Real return deflates by Egypt urban CPI (CAPMAS), month on month, filled automatically once published around the 10th.</p>
-    <h3>Current month</h3><p>Until you confirm a month-end from the statement, the current month uses live prices and the broker cash balance and is labelled Live. Past months that are still provisional are flagged in the checks.</p>
+    <h3>Current month</h3><p>Until the monthly statement arrives, the current month uses live prices and cash = the latest statement's closing balance plus every ledger movement booked after it (trades from Thndr invoices, for example). It is labelled Live. Past months that are still provisional are flagged in the checks.</p>
     <h3>Conventions</h3><p>All money in EGP. Negative money values are shown in parentheses; returns carry a sign. Inputs you type appear in blue, following the spreadsheet colour convention for hard-coded values.</p>
   </div></div>`;
 }
@@ -1905,7 +1910,7 @@ function an(name, fn){ if(AN.key !== S.R){ AN.key = S.R; AN.v = {}; } if(!(name 
 const dailyA = () => an('daily', () => PA.daily(S.settings, S.R.ledger, S.assets, pbook(), S.marks, S.R.today));
 const dailyS = () => an('dstats', () => PA.dailyStats(dailyA(), S.R.range));
 const attrA = () => an('attr', () => PA.attribution(S.R.months, S.R.range, S.R.ledger, S.assets, pbook(), S.bench, S.R.today));
-const activeA = () => an('active', () => PA.activeWeights(S.R.pos, S.bench, pbook(), S.settings.cash));
+const activeA = () => an('active', () => PA.activeWeights(S.R.pos, S.bench, pbook(), S.R.liveCash ?? S.settings.cash));
 const incomeA = () => an('income', () => PA.income(S.R.ledger, S.assets, S.R.pos, S.market, S.R.today));
 const S3 = () => cssVar('--s3');
 const dshort = (d) => { const [y,m,dd]=d.split('-'); return `${+dd} ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+m-1]}`; };
@@ -2024,8 +2029,8 @@ function factsheetData(m){
   const live = R.live && R.live.month === m;
   const pb = pbook();
   const tr = PA.trailing(R.months, m), cal = PA.calendar(R.months, m);
-  const H = live ? { rows: R.pos.open.map(r=>({name:r.name,symbol:r.symbol,sector:r.sector,mv:r.mv})), mv:R.pos.mvTotal, cash:S.settings.cash } : PA.holdingsAt(R.ledger, S.assets, pb, PE.eom(m));
-  const cash = live ? S.settings.cash : (S.marks[m] && S.marks[m].cash != null ? S.marks[m].cash : H.cash);
+  const H = live ? { rows: R.pos.open.map(r=>({name:r.name,symbol:r.symbol,sector:r.sector,mv:r.mv})), mv:R.pos.mvTotal, cash:R.liveCash ?? S.settings.cash } : PA.holdingsAt(R.ledger, S.assets, pb, PE.eom(m));
+  const cash = live ? (R.liveCash ?? S.settings.cash) : (S.marks[m] && S.marks[m].cash != null ? S.marks[m].cash : H.cash);
   const tot = H.mv + Math.max(0,cash);
   const top = H.rows.filter(r=>r.mv).sort((a,b)=>b.mv-a.mv).slice(0,10).map(r=>({...r, w:r.mv/tot}));
   const secW = {}; H.rows.forEach(r=>{ if(r.mv) secW[r.sector]=(secW[r.sector]||0)+r.mv/tot; }); if(cash>0) secW['Cash & Savings']=(secW['Cash & Savings']||0)+cash/tot;
@@ -2163,7 +2168,7 @@ function vStatements(){
   const rv=T.review;
   const row=(x)=>{ const done=imp[x.month]; return `<tr><td><b>${M(x.month)}</b></td><td class="ink2">${x.monthly?'Monthly statement':'Requested statement'} · ${dfmt((x.date||'').slice(0,10))}</td><td>${done?`<span class="pill win">Posted ${dfmt((done.postedAt||'').slice(0,10))}</span>`:x.monthly?'<span class="pill prov">Not posted</span>':'<span class="pill man">Not posted</span>'}</td><td><button class="btn sm" data-review="${x.month}" data-testid="review-statement">${done?'Review again':'Review'}</button></td></tr>`; };
   return `
-  <div class="panel"><div class="phead"><div><h2>Thndr statements</h2><div class="sub">Each month an automatic job reads the Thndr statement from Gmail between the 2nd and the 10th, reconciles it with the ledger and posts it only if every check passes, then emails you the factsheet. Anything that does not reconcile is held and emailed to you for review here.</div></div>
+  <div class="panel"><div class="phead"><div><h2>Thndr statements</h2><div class="sub">An automatic job reads every new Thndr email twice a day. Trade invoices are booked straight away; any statement you request replaces the ledger for the dates it covers and updates your cash; the monthly statement with its positions snapshot rewrites the whole month and sets the month-end, then the factsheet is emailed to you. Nothing is saved unless the corrected month reconciles exactly (cash to the piaster, every share count); otherwise the email is held and sent to you for review here.</div></div>
     <button class="btn primary" id="scan-gmail" data-testid="scan-gmail" ${T.busy?'disabled':''}>${T.list?'Check Gmail again':'Check Gmail'}</button></div>
     ${T.busy?`<p class="note">${esc(T.busy)}</p>`:''}${T.error?`<div class="banner" style="background:var(--neg-bg);color:var(--neg)">${esc(T.error)}</div>`:''}
     ${T.list? (T.list.length? `<div class="tbl"><table data-testid="statements-table"><thead><tr><th>Month</th><th>Email</th><th>Status</th><th></th></tr></thead><tbody>${T.list.map(row).join('')}</tbody></table></div>` : '<p class="muted">No Thndr statement emails found.</p>') : `<p class="muted">Thndr emails the monthly statement around the 3rd of each month with three PDFs: the account statement, the fund account, and a month-end positions snapshot. The first check asks your permission to read Gmail.</p>`}
