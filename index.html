@@ -174,7 +174,8 @@ body.pd-locked{overflow:hidden}
   }
   window.pdRefreshPrices = async (btn, toast) => {
     if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
-    try { await refresh(); const n = await livePrices(); toast && toast(`Refreshed: ${n} stocks, EGX30 Capped, USD/EGP and gold as of ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Africa/Cairo' })} Cairo (15-minute delayed).`); }
+    try { await refresh(); const n = await livePrices(); const miss = (LIVE && LIVE.missing) || []; const items = Object.values((DOCS['portfolio/assets'] || {}).items || {}); const funds = items.filter((a) => !a.symbol || a.symbol === 'SAVINGS' || a.symbol === 'THNDRGOLD').length;
+      toast && toast(`Refreshed ${n} listed stocks, EGX30 Capped, USD/EGP and gold as of ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Africa/Cairo' })} Cairo (15-minute delayed).${funds ? ` ${funds} fund${funds > 1 ? 's' : ''} priced from your last trade.` : ''}${miss.length ? ` No TradingView quote for ${miss.join(', ')}.` : ''}`); }
     catch (e) { console.error(e); toast && toast('Could not reach TradingView: ' + (e.message || e) + '. Showing the last saved prices.', 'error'); }
     finally { const b = document.getElementById('refresh-prices'); if (b) { b.disabled = false; b.textContent = 'Refresh now'; } }
   };
@@ -1568,11 +1569,11 @@ function renderEmpty(){ $('#main').innerHTML = `<div class="empty"><h2>No portfo
 
 // ---------- tabs ----------
 // Six tabs; the older, finer-grained names still work as links and jump to their section inside the merged tab.
-const TAB_ALIAS = {attribution:'performance', income:'holdings', trades:'activity', ledger:'activity', statements:'settings', factsheet:'reports', inputs:'settings', checks:'settings'};
+const TAB_ALIAS = {attribution:'performance', risk:'performance', income:'holdings', trades:'activity', ledger:'activity', statements:'settings', factsheet:'reports', inputs:'settings', checks:'settings'};
 const TAB_VIEWS = {
   overview: [['overview','Overview',()=>vOverview()]],
   holdings: [['holdings','Holdings',()=>vHoldings()],['income','Income & dividends',()=>vIncome()]],
-  performance: [['performance','Performance',()=>vPerformance()],['attribution','Attribution vs EGX30 Capped',()=>vAttribution()]],
+  performance: [['performance','Performance',()=>vPerformance()],['risk','Risk explained',()=>vRisk()],['attribution','Attribution vs EGX30 Capped',()=>vAttribution()]],
   activity: [['trades','Closed trades',()=>vTrades()],['ledger','Ledger',()=>vLedger()]],
   reports: [['factsheet','Monthly factsheet & Excel',()=>vFactsheet()]],
   settings: [['inputs','Inputs & settings',()=>vInputs()],['statements','Statements & imports',()=>vStatements()],['checks','Checks',()=>vChecks()]],
@@ -1748,6 +1749,7 @@ function vOverview(){
       <dt>Total P/L on closed</dt><dd class="${sgn(st.closedPL)}">${egp(st.closedPL)}</dd><dt>Average hold</dt><dd>${num(st.avgHold,0)} days</dd><dt>Realized trading P/L</dt><dd class="${sgn(st.realized)}">${egp(st.realized)}</dd></dl></div>
     <div class="panel" data-testid="session-movers"><div class="eyebrow">Session movers</div>${moversList()}</div>
     <div class="panel" data-testid="contributors"><div class="eyebrow">What made the money · all time</div>${contributorsList()}</div>
+    <div class="panel" data-testid="risk-glance"><div class="eyebrow">Risk rules today</div>${riskGlance()}</div>
   </div>`;
 }
 // Plain-language summary of the selected period, for readers who don't want to decode the tiles.
@@ -1759,6 +1761,7 @@ function briefPanel(){
   s.push(`Today the portfolio is worth <b>${egp(total)} EGP</b>, of which ${egp(cash)} EGP is cash, across ${R.pos.open.length} positions; the largest is ${esc(R.conc.largest)} at ${pct(R.conc.largestWeight,1,false)}.`);
   if(c.length) s.push(`Since inception the biggest contributors are ${c.slice(0,3).map(x=>`${esc(x.sym)} +${egp(x.total)}`).join(', ')}${c.some(x=>x.total<0)?`; the biggest detractor is ${esc(c[c.length-1].sym)} −${egp(Math.abs(c[c.length-1].total))}`:''} (EGP, realized + unrealized + dividends).`);
   if(st.xirr!=null) s.push(`Money-weighted, your own capital has compounded at ${pct(st.xirr)} a year${st.realTwr!=null||st.realTwrPartial!=null?`, or ${pct(st.realTwr??st.realTwrPartial)} after Egyptian inflation`:''}.`);
+  s.push(riskSentence());
   return `<div class="panel brief" data-testid="brief"><div class="eyebrow">In brief</div><p>${s.join(' ')}</p></div>`;
 }
 function contributors(){ return S.R.pos.rows.filter(r=>r.bought>0).map(r=>({sym:r.symbol||r.name,name:r.name,total:r.total,status:r.status,realized:r.realized,unreal:r.unreal||0,divs:r.divs})).sort((a,b)=>b.total-a.total); }
@@ -2018,6 +2021,10 @@ function vInputs(){
       <label>Factsheet email<input type="text" id="st-email" class="inp" value="${esc(st.factsheetEmail||'')}" placeholder="you@gmail.com"></label>
       <label>Thndr account holder (name as printed on statements)<input type="text" id="st-holder" class="inp" value="${esc((st.account||{}).holder||'')}" placeholder="Full name on the statement" data-testid="settings-holder"></label>
       <label>Thndr Unified Code (top of every statement)<input type="text" id="st-ucode" class="inp" value="${esc((st.account||{}).unifiedCode||'')}" placeholder="learned from the first statement" data-testid="settings-unified-code"></label>
+      <label>Risk rule: cash buffer, at least %<input type="number" step="any" id="st-r-cash" class="inp" value="${+(riskRules().cashFloor*100).toFixed(2)}" data-testid="settings-rule-cash"></label>
+      <label>Risk rule: max weight per stock %<input type="number" step="any" id="st-r-max" class="inp" value="${+(riskRules().maxWeight*100).toFixed(2)}" data-testid="settings-rule-max"></label>
+      <label>Risk rule: top three together, max %<input type="number" step="any" id="st-r-top3" class="inp" value="${+(riskRules().top3*100).toFixed(2)}" data-testid="settings-rule-top3"></label>
+      <label>Risk rule: trailing stop below the high %<input type="number" step="any" id="st-r-stop" class="inp" value="${+(riskRules().stopPct*100).toFixed(2)}" data-testid="settings-rule-stop"></label>
       <label>EGX30 Capped close before inception<input type="number" step="any" id="st-bcs" class="inp" value="${st.benchCloseStart??''}"></label>
       <button class="btn primary" type="submit" ${S.readOnly?'disabled':''} data-testid="save-settings">Save settings</button>
     </form></div>`;
@@ -2433,6 +2440,88 @@ async function autoScan(){
   try{ const perm = await window.claude?.use?.('permissions'); if(!perm) return; const st = await perm.state('mcp'); if(st==='granted') scanGmail(true); }catch(e){}
 }
 
+// ---------- Risk explained: the down-month analysis and position rules, done for you ----------
+const RISK_DEFAULTS = {cashFloor:0.10, maxWeight:0.10, top3:0.30, stopPct:0.15};
+function riskRules(){ return {...RISK_DEFAULTS, ...((S.settings&&S.settings.riskRules)||{})}; }
+function betaOf(pb, sym){
+  const from = PE.addMonths(PE.cairoToday().slice(0,7), -12) + '-01'; const days = pb.days.filter(d=>d>=from);
+  const xs=[], ys=[]; let pp=null, pi=null;
+  for(const d of days){ const p=pb.at(sym,d), i=pb.at('EGX30CAPPED',d); if(p==null||i==null) continue; if(pp!=null){ xs.push(i/pi-1); ys.push(p/pp-1); } pp=p; pi=i; }
+  if(xs.length<40) return null;
+  const mx=xs.reduce((a,b)=>a+b,0)/xs.length, my=ys.reduce((a,b)=>a+b,0)/ys.length; let c=0,v=0; xs.forEach((x,k)=>{ c+=(x-mx)*(ys[k]-my); v+=(x-mx)**2; });
+  return {beta:v?c/v:null, vol:Math.sqrt(ys.reduce((a,y)=>a+(y-my)**2,0)/(ys.length-1)*250), n:xs.length};
+}
+function holdingRisk(){
+  const R=S.R, pb=pbook(), rules=riskRules(), cash=R.liveCash??R.settings.cash, tot=R.pos.mvTotal+Math.max(0,cash);
+  return R.pos.open.filter(r=>r.mv).map(r=>{
+    const sym=r.symbol; const b=sym&&pb.has(sym)?betaOf(pb,sym):null;
+    let high=null; if(sym&&pb.has(sym)) for(const d of pb.days){ if(d<r.firstBuy) continue; const p=pb.at(sym,d); if(p!=null&&(high==null||p>high)) high=p; }
+    if(r.price!=null&&(high==null||r.price>high)) high=r.price;
+    const stop = high!=null? high*(1-rules.stopPct) : null, fromHigh = high&&r.price!=null? r.price/high-1 : null, w=r.mv/tot;
+    return {sym:sym||r.name, name:r.name, w, mv:r.mv, beta:b?b.beta:null, vol:b?b.vol:null, unreal:r.unreal, unrealPct:r.openCost?r.unreal/r.openCost:null, price:r.price, high, stop, fromHigh, hit:stop!=null&&r.price!=null&&r.price<stop, overCap:w>rules.maxWeight+1e-9, excess:Math.max(0,(w-rules.maxWeight)*tot)};
+  }).sort((a,b)=>b.w-a.w);
+}
+function riskNow(){
+  const R=S.R, rules=riskRules(), H=holdingRisk(), cash=R.liveCash??R.settings.cash, tot=R.pos.mvTotal+Math.max(0,cash), cashPct=tot?Math.max(0,cash)/tot:0;
+  const top3=H.slice(0,3).reduce((s,h)=>s+h.w,0), over=H.filter(h=>h.overCap), hit=H.filter(h=>h.hit), hiBeta=H.filter(h=>h.beta!=null&&h.beta>1.2);
+  const items=[
+    {label:'Cash buffer', ok:cashPct>=rules.cashFloor-1e-9, value:pct(cashPct,1,false), rule:`rule: at least ${pct(rules.cashFloor,0,false)}`, fix: cashPct<rules.cashFloor?`raise cash by about ${egp((rules.cashFloor-cashPct)*tot)} EGP`:''},
+    {label:'Largest position', ok:!over.length, value:H[0]?`${H[0].sym} ${pct(H[0].w,1,false)}`:'—', rule:`cap: ${pct(rules.maxWeight,0,false)} per stock`, fix: over.length?`over the cap: ${over.map(h=>`${h.sym} (trim ~${egp(h.excess)} EGP)`).join(', ')}`:''},
+    {label:'Top three together', ok:top3<=rules.top3+1e-9, value:pct(top3,1,false), rule:`cap: ${pct(rules.top3,0,false)}`, fix: top3>rules.top3?`${H.slice(0,3).map(h=>h.sym).join(', ')} are ${pct(top3-rules.top3,1,false)} over`:''},
+    {label:'Trailing stops', ok:!hit.length, value:hit.length?`${hit.length} of ${H.length} hit`:`none of ${H.length} hit`, rule:`${pct(rules.stopPct,0,false)} below the high since you bought`, fix: hit.length?`decide on ${hit.map(h=>`${h.sym} (${pct(h.fromHigh,0)} from its high)`).join(', ')}`:''},
+    {label:'High-beta share', ok:hiBeta.reduce((s,h)=>s+h.w,0)<=0.35, value:pct(hiBeta.reduce((s,h)=>s+h.w,0),0,false), rule:'stocks with beta above 1.2 · keep under 35%', fix: hiBeta.reduce((s,h)=>s+h.w,0)>0.35?`${hiBeta.map(h=>h.sym).join(', ')} move more than the index; size them smaller`:''},
+  ];
+  return {items, breaches:items.filter(i=>!i.ok), H, cashPct, top3, tot};
+}
+function downMonths(){
+  const R=S.R, pb=pbook(), ledger=R.ledger, today=PE.cairoToday(), tx=allTx(), price=PA.makePricer(S.assets,ledger,pb);
+  return R.months.filter(r=>r.has&&r.bench!=null&&r.bench<0).map(r=>{
+    const start=PE.eom(PE.addMonths(r.month,-1)), end=r.live?today:PE.eom(r.month); const H=PA.holdingsAt(ledger,S.assets,pb,start); const tot=H.mv+Math.max(0,H.cash);
+    const rows=H.rows.filter(h=>h.shares>0.5).map(h=>{ const p0=price(h.name,start), p1=price(h.name,end); if(!p0||!p1||!p0.p) return null; return {sym:h.symbol||h.name, w:tot?h.mv/tot:0, ret:p1.p/p0.p-1, contrib:tot?h.shares*(p1.p-p0.p)/tot:0}; }).filter(Boolean).sort((a,b)=>a.contrib-b.contrib);
+    const buys=tx.filter(t=>t.t==='Buy'&&t.d>start&&t.d<=end).length, sells=tx.filter(t=>t.t==='Sell'&&t.d>start&&t.d<=end).length;
+    return {month:r.month, live:r.live, ret:r.ret, bench:r.bench, diff:r.ret-r.bench, cashPct:tot?Math.max(0,H.cash)/tot:0, rows, buys, sells};
+  });
+}
+function whyText(d){ const bad=d.rows.filter(x=>x.contrib<0).slice(0,2); if(!bad.length) return d.diff>=0?'Nothing fell much; the portfolio held up.':'Losses were spread across many stocks.';
+  const w=bad.reduce((s,x)=>s+x.w,0);
+  if(d.diff>=0){ const good=d.rows.filter(x=>x.contrib>0).sort((a,b)=>b.contrib-a.contrib)[0]; return `Held up${good?`: ${good.sym} ${pct(good.ret,0)} offset ${bad.map(x=>`${x.sym} ${pct(x.ret,0)}`).join(' and ')}`:''}.`; }
+  return `${bad.map(x=>`${x.sym} ${pct(x.ret,0)}`).join(' and ')} ${bad.length>1?'were':'was'} ${pct(w,0,false)} of the portfolio${d.cashPct<0.02?', with no cash to cushion it':''}${d.buys>=8?`; ${d.buys} buys were made as it fell`:''}.`; }
+function vRisk(){
+  const R=S.R, st=R.stats, rules=riskRules(), now=riskNow(), dm=downMonths(), H=now.H;
+  const up=R.months.filter(r=>r.has&&r.bench>0), dn=R.months.filter(r=>r.has&&r.bench<0);
+  const chain=(rows,k)=>rows.reduce((a,r)=>a*(1+r[k]),1)-1; const upC=up.length?chain(up,'ret')/chain(up,'bench'):null, dnC=dn.length?chain(dn,'ret')/chain(dn,'bench'):null;
+  const pill=(ok)=>`<span class="pill ${ok?'win':'loss'}">${ok?'OK':'Breach'}</span>`;
+  const todo=now.breaches.map(b=>`<li><b>${esc(b.label)}:</b> ${esc(b.fix)}.</li>`).join('');
+  return `
+  <div class="panel" data-testid="risk-rules"><div class="phead"><div><h2>Your rules</h2><div class="sub">Cash of at least ${pct(rules.cashFloor,0,false)} · no stock above ${pct(rules.maxWeight,0,false)} · top three under ${pct(rules.top3,0,false)} · a trailing stop ${pct(rules.stopPct,0,false)} below each stock's high since you bought it. Change them under Settings.</div></div></div>
+    <div class="tbl"><table><thead><tr><th>Rule</th><th class="n">Now</th><th>Limit</th><th>Status</th></tr></thead><tbody>
+    ${now.items.map(i=>`<tr><td><b>${esc(i.label)}</b></td><td class="n">${esc(i.value)}</td><td class="muted">${esc(i.rule)}</td><td>${pill(i.ok)}${i.fix?` <span class="muted">${esc(i.fix)}</span>`:''}</td></tr>`).join('')}
+    </tbody></table></div>
+    ${todo?`<div class="banner" style="margin-top:12px"><div><b>To get back inside the rules</b><ul style="margin:6px 0 0 18px;padding:0">${todo}</ul></div></div>`:`<p class="note" style="margin-top:10px">Every rule is met today.</p>`}
+  </div>
+  <div class="panel" data-testid="risk-capture"><div class="phead"><div><h2>How you behave when the index moves</h2><div class="sub">Since inception · EGX30 Capped had ${up.length} up months and ${dn.length} down months</div></div></div>
+    <div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr))">
+      ${kpi('In up months you captured', upC!=null?pct(upC,0,false):'—', 'of the index gain · above 100% is good')}
+      ${kpi('In down months you took', dnC!=null?`<span class="${dnC>1?'neg':'pos'}">${pct(dnC,0,false)}</span>`:'—', 'of the index loss · under 100% is the goal')}
+      ${kpi('Your portfolio beta', num(st.beta), 'monthly, vs EGX30 Capped · 1.0 = moves with the index')}
+    </div>
+    <p class="note" style="margin-top:10px">${dnC!=null&&dnC>1?`You lose more than the index when it falls. The table below shows exactly which months and which stocks did it; it is nearly always one or two oversized positions plus no cash.`:`You lose less than the index when it falls. Keep the rules that got you there.`}</p>
+  </div>
+  <div class="panel" data-testid="risk-downmonths"><div class="phead"><div><h2>When the index fell</h2><div class="sub">Each down month: how you did, what you held going in, and what did the damage</div></div></div>
+    ${dm.length?`<div class="tbl"><table><thead><tr><th>Month</th><th class="n">Index</th><th class="n">You</th><th class="n">Difference</th><th class="n">Cash going in</th><th class="n">Trades</th><th>What did it</th></tr></thead><tbody>
+    ${dm.map(d=>`<tr><td>${M(d.month)}${d.live?' <span class="pill prov">so far</span>':''}</td><td class="n neg">${pct(d.bench)}</td><td class="n ${sgn(d.ret)}">${pct(d.ret)}</td><td class="n ${sgn(d.diff)}">${pct(d.diff)}</td><td class="n ${d.cashPct<rules.cashFloor?'neg':''}">${pct(d.cashPct,1,false)}</td><td class="n">${d.buys} buys · ${d.sells} sells</td><td>${esc(whyText(d))}</td></tr>`).join('')}
+    </tbody></table></div>`:'<p class="note">The index has not had a down month yet.</p>'}
+  </div>
+  <div class="panel" data-testid="risk-holdings"><div class="phead"><div><h2>Each holding against the rules</h2><div class="sub">Weight vs the ${pct(rules.maxWeight,0,false)} cap · beta and volatility from the last 12 months of daily closes · trailing stop ${pct(rules.stopPct,0,false)} below the high since you bought</div></div></div>
+    <div class="tbl"><table><thead><tr><th>Stock</th><th class="n">Weight</th><th class="n">Beta</th><th class="n">Volatility</th><th class="n">Unrealized</th><th class="n">From its high</th><th class="n">Trailing stop</th><th>Status</th></tr></thead><tbody>
+    ${H.map(h=>`<tr><td><span class="sym">${esc(h.sym)}</span></td><td class="n ${h.overCap?'neg':''}">${pct(h.w,1,false)}</td><td class="n">${h.beta!=null?num(h.beta):'—'}</td><td class="n">${h.vol!=null?pct(h.vol,0,false):'—'}</td><td class="n ${sgn(h.unreal)}">${egp(h.unreal)} <span class="muted">${pct(h.unrealPct)}</span></td><td class="n ${h.fromHigh<-0.1?'neg':''}">${pct(h.fromHigh)}</td><td class="n">${h.stop!=null?num(h.stop,2):'—'}</td><td>${h.hit?'<span class="pill loss">Stop hit</span> ':''}${h.overCap?'<span class="pill loss">Over cap</span> ':''}${h.beta!=null&&h.beta>1.2?'<span class="pill stale">High beta</span> ':''}${!h.hit&&!h.overCap?'<span class="pill win">OK</span>':''}</td></tr>`).join('')}
+    </tbody></table></div>
+    <p class="note" style="margin-top:10px">Beta: how much the stock moves for a 1% move in EGX30 Capped. Volatility: how wide its swings are in a year. A stop is "hit" when today's price is more than ${pct(rules.stopPct,0,false)} below the highest close since you first bought; it is a prompt to decide, not an automatic sale.</p>
+  </div>`;
+}
+function riskGlance(){ const now=riskNow(); return `<dl class="kv">${now.items.map(i=>`<dt>${esc(i.label)}</dt><dd><span class="pill ${i.ok?'win':'loss'}">${i.ok?'OK':'Breach'}</span> <span class="muted">${esc(i.value)}</span></dd>`).join('')}</dl><p class="note" style="margin:8px 0 0"><a href="#risk" data-go="risk">See why and what to do →</a></p>`; }
+function riskSentence(){ const now=riskNow(); return now.breaches.length? `Risk rules: ${now.breaches.length} of ${now.items.length} breached (${now.breaches.map(b=>b.label.toLowerCase()).join(', ')}); the Performance tab's Risk explained section says what to do.` : 'All your risk rules are met today.'; }
+
 // ---------- events (delegated) ----------
 document.addEventListener('click', async e=>{
   const sc=e.target.closest('[data-sec]'); if(sc){ e.preventDefault(); const el=document.getElementById('sec-'+sc.dataset.sec); if(el){ el.scrollIntoView({behavior:'smooth',block:'start'}); try{ history.replaceState(null,'','#'+sc.dataset.sec); }catch(x){} } return; }
@@ -2484,7 +2573,8 @@ document.addEventListener('submit', async e=>{
     const a={name}; const sym=$('#na-sym').value.trim().toUpperCase(); const sec=$('#na-sec').value.trim(); if(sym) a.symbol=sym; if(sec) a.sector=sec;
     await save(()=>S.db.doc('portfolio/assets').set({items:{...S.assets,[name]:a}}),`${name} added; it will be priced at the next run`); }
   if(e.target.id==='settings-form'){ const g=id=>$(id).value; const n=id=>parseFloat($(id).value);
-    const s={...S.settings, name:g('#st-name').trim()||'Portfolio', inception:g('#st-inc')||S.settings.inception, openingValue:n('#st-open'), cash:n('#st-cash'), cashDate:g('#st-cashd')||null, riskFree:n('#st-rf')/100, fxStart:n('#st-fx'), volLow:n('#st-vl')/100, volHigh:n('#st-vh')/100, openThreshold:n('#st-thr'), staleDays:n('#st-stale'), priceDate:g('#st-pd')||null, factsheetEmail:g('#st-email').trim()||null, benchCloseStart:isFinite(n('#st-bcs'))?n('#st-bcs'):null, account:{holder:g('#st-holder').trim(), unifiedCode:g('#st-ucode').trim()}};
+    const s={...S.settings, name:g('#st-name').trim()||'Portfolio', inception:g('#st-inc')||S.settings.inception, openingValue:n('#st-open'), cash:n('#st-cash'), cashDate:g('#st-cashd')||null, riskFree:n('#st-rf')/100, fxStart:n('#st-fx'), volLow:n('#st-vl')/100, volHigh:n('#st-vh')/100, openThreshold:n('#st-thr'), staleDays:n('#st-stale'), priceDate:g('#st-pd')||null, factsheetEmail:g('#st-email').trim()||null, benchCloseStart:isFinite(n('#st-bcs'))?n('#st-bcs'):null, account:{holder:g('#st-holder').trim(), unifiedCode:g('#st-ucode').trim()}, riskRules:{cashFloor:n('#st-r-cash')/100, maxWeight:n('#st-r-max')/100, top3:n('#st-r-top3')/100, stopPct:n('#st-r-stop')/100}};
+    if(Object.values(s.riskRules).some(v=>!isFinite(v)||v<0||v>1)){ toast('Risk rules must be percentages between 0 and 100','error'); return; }
     if(!s.account.holder && !s.account.unifiedCode){ toast('Set the Thndr account holder: statements and invoices are only accepted for that account','error'); return; }
     if(['openingValue','cash','riskFree','fxStart','volLow','volHigh','openThreshold','staleDays'].some(k=>!isFinite(s[k]))){ toast('Every number field needs a value','error'); return; }
     await save(()=>S.db.doc('portfolio/settings').set(s),'Settings saved'); }
