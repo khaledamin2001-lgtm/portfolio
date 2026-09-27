@@ -4,7 +4,7 @@
 <meta name="theme-color" content="#0B6E5F"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Portfolio"><meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="icon-180.png"><link rel="icon" href="icon-192.png">
-<title>Khaled Portfolio</title>
+<title>Portfolio</title>
 <style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:#F3F6F4}img{max-width:100%}[hidden]{display:none!important}
 #lock{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:24px 16px;padding-top:calc(24px + env(safe-area-inset-top,0px));padding-bottom:calc(24px + env(safe-area-inset-bottom,0px));background:var(--bg,#F3F6F4);color:var(--ink,#0F1A17);overflow-y:auto}
 #lock .lk{width:100%;max-width:360px;display:flex;flex-direction:column;gap:18px;text-align:center}
@@ -23,6 +23,11 @@
 #lock .lk-sep{display:flex;align-items:center;gap:10px;color:var(--ink-3,#6F7D78);font-size:12px;text-transform:uppercase;letter-spacing:.08em}
 #lock .lk-sep::before,#lock .lk-sep::after{content:"";flex:1;height:1px;background:var(--rule,#DAE2DE)}
 #lock .lk-foot{font-size:12px;color:var(--ink-3,#6F7D78)}
+#lock .lk-list{display:flex;flex-direction:column;gap:10px}
+#lock .lk-list .lk-btn{flex-direction:column;gap:3px;padding:16px 14px}
+#lock .lk-list .lk-btn small{font:400 12px/1.2 var(--f-ui,system-ui,sans-serif);opacity:.8}
+#lock .lk-links{display:flex;flex-wrap:wrap;justify-content:center;gap:4px 16px}
+#pd-bar .pd-actions{display:flex;gap:8px}
 body.pd-locked{overflow:hidden}
 #pd-bar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;max-width:1240px;margin:28px auto 0;padding:14px 16px calc(14px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--rule,#DAE2DE);color:var(--ink-3,#6F7D78);font-size:12px}
 #pd-bar button{font:500 12px/1 var(--f-ui,system-ui,sans-serif);padding:8px 12px;border-radius:8px;border:1px solid var(--rule,#DAE2DE);background:var(--surface,#fff);color:var(--ink-2,#46534E);cursor:pointer}
@@ -30,13 +35,13 @@ body.pd-locked{overflow:hidden}
 [data-testid=scan-gmail],[data-testid=factsheet-email],[data-testid=post-statement],[data-testid=csv-import],[data-testid=csv-import-input],[data-testid=save-marks],[data-testid=save-assets],[data-testid=save-settings]{display:none!important}
 </style></head><body class="pd-locked">
 <div id="lock" role="dialog" aria-modal="true" aria-label="Unlock portfolio"></div>
-<script>/* Live-site lock. The portfolio data is published encrypted (data.enc.json) to the site's public key; the matching private
-   key is itself published only wrapped by the one-time setup key (keys.json). A device that has been set up once keeps the
-   private key wrapped by a non-extractable browser key, and opens it with the password or Face ID / fingerprint. */
+<script>/* Live-site lock, one page for several portfolios. Each portfolio lives under p/<id>/: its figures are published encrypted
+   (data.enc.json) to that portfolio's public key; the matching private key is published only wrapped by that portfolio's
+   one-time setup key (keys.json, which also carries the password hash). A device that has been set up for a portfolio keeps
+   its private key wrapped by a non-extractable browser key, and opens it with the password or Face ID / fingerprint. */
 (function(){
   'use strict';
-  const PASS_HASH = '1593fca767732516ec1e1552e3ba3f2d03d8037191f436662ad514b967ddb32f'; // sha256('pd-v1:' + password, lower-cased)
-  const MAX_TRIES = 10, RELOCK_MS = 5 * 60e3, REFRESH_MS = 30 * 60e3, LS = 'pd.device.v1';
+  const MAX_TRIES = 10, RELOCK_MS = 5 * 60e3, REFRESH_MS = 30 * 60e3, CUR_LS = 'pd.current', BIO_LS = 'pd.bio.v1', LEGACY_LS = 'pd.device.v1';
   const enc = new TextEncoder(), dec = new TextDecoder();
   const b64 = (u) => btoa(String.fromCharCode(...new Uint8Array(u)));
   const ub64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
@@ -45,30 +50,45 @@ body.pd-locked{overflow:hidden}
   const $l = (s) => document.querySelector('#lock ' + s);
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
   const bio = (() => { const u = navigator.userAgent; if (/iPhone|iPad/.test(u)) return 'Face ID'; if (/Macintosh/.test(u)) return 'Touch ID'; if (/Android/.test(u)) return 'fingerprint'; if (/Windows/.test(u)) return 'Windows Hello'; return 'Face ID / fingerprint'; })();
+  const ls = { get: (k) => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } }, set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }, del: (k) => { try { localStorage.removeItem(k); } catch (e) {} } };
 
-  /* ---------- device storage ---------- */
+  /* ---------- portfolios ---------- */
+  let PORTFOLIOS = [], CUR = null, OPENED = null;   // CUR: {id, name}; OPENED: id whose data is on the page
+  const base = () => 'p/' + CUR.id + '/';
+  const devLS = () => 'pd.dev.' + CUR.id;
+
+  /* ---------- device storage (per portfolio; the Face ID credential is shared by the device) ---------- */
   const idb = (mode, fn) => new Promise((res, rej) => { const o = indexedDB.open('pd-lock', 1); o.onupgradeneeded = () => o.result.createObjectStore('k'); o.onerror = () => rej(o.error);
     o.onsuccess = () => { const t = o.result.transaction('k', mode); const r = fn(t.objectStore('k')); t.oncomplete = () => res(r && r.result); t.onerror = () => rej(t.error); }; });
-  const getDev = () => { try { return JSON.parse(localStorage.getItem(LS) || 'null'); } catch (e) { return null; } };
-  const putDev = (d) => { try { localStorage.setItem(LS, JSON.stringify(d)); } catch (e) {} };
-  async function forget() { try { localStorage.removeItem(LS); } catch (e) {} try { await idb('readwrite', (s) => s.clear()); } catch (e) {} }
+  const getDev = () => ls.get(devLS());
+  const putDev = (d) => ls.set(devLS(), d);
+  const getBio = () => ls.get(BIO_LS) || {};
+  async function forget() { ls.del(devLS()); try { await idb('readwrite', (s) => s.delete('dev:' + CUR.id)); } catch (e) {} }
+  async function migrateLegacy() {   // devices set up before the site held more than one portfolio
+    const d = ls.get(LEGACY_LS); if (!d) return;
+    try { const dk = await idb('readonly', (s) => s.get('device')); if (dk) await idb('readwrite', (s) => s.put(dk, 'dev:khaled')); } catch (e) {}
+    ls.set('pd.dev.khaled', { iv: d.iv, ct: d.ct, tries: d.tries || 0, at: d.at });
+    if (d.cred) ls.set(BIO_LS, { cred: d.cred });
+    if (!ls.get(CUR_LS)) ls.set(CUR_LS, 'khaled');
+    ls.del(LEGACY_LS);
+  }
 
   /* ---------- keys ---------- */
   let KEYS = null, PK8 = null, DATA_AT = null, lastFetch = 0;
   async function unwrapWithSetupKey(code) {
     const w = KEYS.wrap, clean = code.toUpperCase().replace(/[^A-Z0-9]/g, '');
-    const base = await crypto.subtle.importKey('raw', enc.encode(clean), 'PBKDF2', false, ['deriveKey']);
-    const k = await crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt: ub64(w.salt), iterations: w.iter }, base, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+    const k0 = await crypto.subtle.importKey('raw', enc.encode(clean), 'PBKDF2', false, ['deriveKey']);
+    const k = await crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt: ub64(w.salt), iterations: w.iter }, k0, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
     return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ub64(w.iv), additionalData: enc.encode('portfolio-key-v1') }, k, ub64(w.ct)));
   }
   async function storeOnDevice(pk8) {
     const dk = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
     const iv = rnd(12), ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, dk, pk8);
-    await idb('readwrite', (s) => s.put(dk, 'device'));
-    putDev({ iv: b64(iv), ct: b64(ct), tries: 0, cred: null, at: new Date().toISOString() });
+    await idb('readwrite', (s) => s.put(dk, 'dev:' + CUR.id));
+    putDev({ iv: b64(iv), ct: b64(ct), tries: 0, at: new Date().toISOString() });
   }
   async function loadFromDevice() {
-    const d = getDev(), dk = await idb('readonly', (s) => s.get('device'));
+    const d = getDev(), dk = await idb('readonly', (s) => s.get('dev:' + CUR.id));
     if (!d || !dk) throw new Error('This device is not set up');
     return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ub64(d.iv) }, dk, ub64(d.ct)));
   }
@@ -84,19 +104,19 @@ body.pd-locked{overflow:hidden}
     return crypto.subtle.decrypt({ name: 'AES-GCM', iv: ub64(e.iv), additionalData: enc.encode(label) }, key, ub64(e.ct));
   }
   async function fetchData() {
-    const r = await fetch('data.enc.json?t=' + Date.now(), { cache: 'no-store' });
+    const r = await fetch(base() + 'data.enc.json?t=' + Date.now(), { cache: 'no-store' });
     if (!r.ok) throw new Error('Could not download the portfolio data (' + r.status + ')');
     const gz = await unseal(await r.json(), 'portfolio-data-v1');
     const plain = await new Response(new Blob([gz]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
     lastFetch = Date.now();
     return JSON.parse(plain);
   }
-  // month-end Excel workbooks, published encrypted under exports/ (exports/index.json lists them)
+  // month-end Excel workbooks, published encrypted under p/<id>/exports/ (exports/index.json lists them)
   let EXPORTS = null;
-  window.pdExports = async () => { if (EXPORTS) return EXPORTS; try { const r = await fetch('exports/index.json?t=' + Date.now(), { cache: 'no-store' }); EXPORTS = r.ok ? await r.json() : []; } catch (e) { EXPORTS = []; } return EXPORTS; };
+  window.pdExports = async () => { if (EXPORTS) return EXPORTS; try { const r = await fetch(base() + 'exports/index.json?t=' + Date.now(), { cache: 'no-store' }); EXPORTS = r.ok ? await r.json() : []; } catch (e) { EXPORTS = []; } return EXPORTS; };
   window.pdDownloadExport = async (month) => {
     const list = await window.pdExports(); const x = list.find((e) => e.month === month); if (!x) throw new Error('No workbook published for ' + month);
-    const r = await fetch(x.file + '?t=' + Date.now(), { cache: 'no-store' }); if (!r.ok) throw new Error('Could not download the workbook (' + r.status + ')');
+    const r = await fetch(base() + x.file + '?t=' + Date.now(), { cache: 'no-store' }); if (!r.ok) throw new Error('Could not download the workbook (' + r.status + ')');
     const e = await r.json(); const bytes = await unseal(e, 'portfolio-file-v1');
     await downloads.save({ filename: e.name || x.name, data: new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }) });
   };
@@ -159,12 +179,17 @@ body.pd-locked{overflow:hidden}
     finally { const b = document.getElementById('refresh-prices'); if (b) { b.disabled = false; b.textContent = 'Refresh now'; } }
   };
   function publish(bundle) {
-    DOCS = bundle.docs || {}; DATA_AT = bundle.exportedAt;
+    DOCS = bundle.docs || {}; DATA_AT = bundle.exportedAt; OPENED = CUR.id;
     if (LIVE && Date.parse(LIVE.asOf) > Date.parse((DOCS['market/latest'] || {}).asOf || 0)) DOCS['market/latest'] = LIVE;
     listeners.forEach(fire);
-    const t = document.getElementById('pd-updated');
-    if (t && DATA_AT) t.textContent = 'Ledger data as of ' + new Date(DATA_AT).toLocaleString('en-US', { timeZone: 'Africa/Cairo', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }) + ' Cairo';
+    document.title = CUR.name;
+    whenReady(() => {   // the bottom bar is the last thing in the document; the data can be ready before it is parsed
+      const t = document.getElementById('pd-updated');
+      if (t && DATA_AT) t.textContent = 'Ledger data as of ' + new Date(DATA_AT).toLocaleString('en-US', { timeZone: 'Africa/Cairo', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }) + ' Cairo';
+      const w = document.getElementById('pd-who'); if (w) w.textContent = CUR.name;
+    });
   }
+  const whenReady = (fn) => { if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn, { once: true }); else fn(); };
 
   /* ---------- WebAuthn (Face ID / Touch ID / fingerprint) ---------- */
   const canBio = async () => { try { return !!(window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()); } catch (e) { return false; } };
@@ -173,11 +198,11 @@ body.pd-locked{overflow:hidden}
       rp: { name: 'Portfolio' }, user: { id: rnd(16), name: 'portfolio', displayName: 'Portfolio' }, challenge: rnd(32),
       pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
       authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'preferred' }, timeout: 60000, attestation: 'none' } });
-    const d = getDev(); d.cred = b64(c.rawId); putDev(d);
+    ls.set(BIO_LS, { cred: b64(c.rawId) });
   }
   async function verifyBio() {
-    const d = getDev(), challenge = rnd(32);
-    const a = await navigator.credentials.get({ publicKey: { challenge, allowCredentials: [{ type: 'public-key', id: ub64(d.cred), transports: ['internal', 'hybrid'] }], userVerification: 'required', timeout: 60000 } });
+    const b = getBio(), challenge = rnd(32);
+    const a = await navigator.credentials.get({ publicKey: { challenge, allowCredentials: [{ type: 'public-key', id: ub64(b.cred), transports: ['internal', 'hybrid'] }], userVerification: 'required', timeout: 60000 } });
     const cd = JSON.parse(dec.decode(a.response.clientDataJSON));
     const want = b64(challenge).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
     const flags = new Uint8Array(a.response.authenticatorData)[32];
@@ -190,51 +215,67 @@ body.pd-locked{overflow:hidden}
   function screen(html) { const l = lockEl(); l.hidden = false; document.body.classList.add('pd-locked'); l.innerHTML = '<div class="lk">' + MARK + html + '</div>'; }
   function open() { const l = lockEl(); l.hidden = true; l.innerHTML = ''; document.body.classList.remove('pd-locked'); }
   const err = (m) => { const e = $l('.lk-err'); if (e) e.textContent = m || ''; };
+  const switchLink = () => (PORTFOLIOS.length > 1 ? '<button class="lk-link" id="lk-switch" data-testid="live-switch">Switch portfolio</button>' : '');
+  const wireSwitch = () => { const b = $l('#lk-switch'); if (b) b.onclick = () => chooseScreen(); };
 
+  function chooseScreen() {
+    screen(`<h1>Portfolio</h1><p>Choose whose portfolio to open.</p><div class="lk-list">${PORTFOLIOS.map((p) => { const set = !!ls.get('pd.dev.' + p.id);
+      return `<button class="lk-btn ${set ? '' : 'ghost'}" data-pick="${esc(p.id)}" data-testid="live-pick-${esc(p.id)}">${esc(p.name)}<small>${set ? 'ready on this device' : 'needs its setup key'}</small></button>`; }).join('')}</div>
+      <p class="lk-foot">Each portfolio has its own setup key and password. Ask the owner for theirs to add it here.</p>`);
+    document.querySelectorAll('#lock [data-pick]').forEach((b) => { b.onclick = () => select(PORTFOLIOS.find((p) => p.id === b.dataset.pick)); });
+  }
+  async function select(p) {
+    if (OPENED && OPENED !== p.id) { ls.set(CUR_LS, p.id); location.reload(); return; }   // the page already shows another portfolio: start clean
+    CUR = p; ls.set(CUR_LS, p.id); KEYS = null; PK8 = null; EXPORTS = null;
+    try { KEYS = await (await fetch(base() + 'keys.json', { cache: 'no-store' })).json(); } catch (e) { return screen('<h1>Offline</h1><p>The portfolio could not load. Check your connection and reload.</p>'); }
+    if (getDev()) unlockScreen(true); else setupScreen();
+  }
   function setupScreen(note) {
-    screen(`<h1>Set up this device</h1><p>Enter your setup key once on each new phone or computer. After that you unlock with your password or ${esc(bio)}.</p>
+    screen(`<h1>Set up ${esc(CUR.name)}</h1><p>Enter this portfolio's setup key once on each new phone or computer. After that you unlock with its password or ${esc(bio)}.</p>
       <form id="lk-setup" autocomplete="off"><input id="lk-code" data-testid="live-setup-key" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX" autocapitalize="characters" spellcheck="false" aria-label="Setup key">
       <button class="lk-btn" data-testid="live-setup-submit">Continue</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>
-      <p class="lk-foot">Your figures are encrypted. Without the setup key this page shows nothing.</p>`);
-    $l('#lk-code').focus();
+      ${switchLink()}<p class="lk-foot">The figures are encrypted. Without the setup key this page shows nothing.</p>`);
+    $l('#lk-code').focus(); wireSwitch();
     $l('#lk-setup').onsubmit = async (ev) => { ev.preventDefault(); const b = $l('.lk-btn'); b.disabled = true; err('Checking…');
       try { const pk8 = await unwrapWithSetupKey($l('#lk-code').value); await storeOnDevice(pk8); PK8 = pk8; await start(); await offerBio(); }
       catch (e) { console.error(e); b.disabled = false; err(e && e.name === 'OperationError' ? 'That setup key is not right. Check it and try again.' : 'Could not set up: ' + (e.message || e)); } };
   }
   async function offerBio() {
-    if (!(await canBio())) return open();
-    screen(`<h1>Use ${esc(bio)}?</h1><p>Unlock with ${esc(bio)} on this device. Your password still works as a backup.</p>
+    if (getBio().cred || !(await canBio())) return open();
+    screen(`<h1>Use ${esc(bio)}?</h1><p>Unlock with ${esc(bio)} on this device. The password still works as a backup.</p>
       <button class="lk-btn" id="lk-bio-on" data-testid="live-bio-enable">Turn on ${esc(bio)}</button><button class="lk-btn ghost" id="lk-bio-no" data-testid="live-bio-skip">Not now</button><div class="lk-err" role="alert"></div>`);
     $l('#lk-bio-no').onclick = open;
     $l('#lk-bio-on').onclick = async () => { try { await enrollBio(); open(); } catch (e) { console.error(e); err(bio + ' was not turned on. You can use the password instead.'); } };
   }
   function unlockScreen(auto) {
-    const d = getDev();
-    screen(`<h1>Portfolio</h1><p>Unlock to see your portfolio.</p>
-      ${d.cred ? `<button class="lk-btn" id="lk-bio" data-testid="live-bio-unlock">Unlock with ${esc(bio)}</button><div class="lk-sep">or</div>` : ''}
+    const cred = getBio().cred;
+    screen(`<h1>${esc(CUR.name)}</h1><p>Unlock to see the portfolio.</p>
+      ${cred ? `<button class="lk-btn" id="lk-bio" data-testid="live-bio-unlock">Unlock with ${esc(bio)}</button><div class="lk-sep">or</div>` : ''}
       <form id="lk-pass" autocomplete="off"><input id="lk-pw" type="password" data-testid="live-password" placeholder="Password" aria-label="Password" autocomplete="current-password">
-      <button class="lk-btn ${d.cred ? 'ghost' : ''}" data-testid="live-password-submit">Unlock</button><div class="lk-err" role="alert"></div></form>
-      <button class="lk-link" id="lk-forget" data-testid="live-forget-device">Forget this device</button>`);
-    if (d.cred) { $l('#lk-bio').onclick = () => bioUnlock(); if (auto) bioUnlock(true); } else $l('#lk-pw').focus();
+      <button class="lk-btn ${cred ? 'ghost' : ''}" data-testid="live-password-submit">Unlock</button><div class="lk-err" role="alert"></div></form>
+      <div class="lk-links">${switchLink()}<button class="lk-link" id="lk-forget" data-testid="live-forget-device">Forget this portfolio on this device</button></div>`);
+    wireSwitch();
+    if (cred) { $l('#lk-bio').onclick = () => bioUnlock(); if (auto) bioUnlock(true); } else $l('#lk-pw').focus();
     $l('#lk-pass').onsubmit = async (ev) => { ev.preventDefault();
       const h = hex(await crypto.subtle.digest('SHA-256', enc.encode('pd-v1:' + $l('#lk-pw').value.trim().toLowerCase())));
       const dv = getDev();
-      if (h !== PASS_HASH) { dv.tries = (dv.tries || 0) + 1; putDev(dv); $l('#lk-pw').value = '';
-        if (dv.tries >= MAX_TRIES) { await forget(); return setupScreen('Too many wrong passwords. This device was reset; enter your setup key.'); }
-        return err(`Wrong password. ${MAX_TRIES - dv.tries} tries left before this device is reset.`); }
+      if (h !== KEYS.pw) { dv.tries = (dv.tries || 0) + 1; putDev(dv); $l('#lk-pw').value = '';
+        if (dv.tries >= MAX_TRIES) { await forget(); return setupScreen('Too many wrong passwords. This portfolio was removed from the device; enter its setup key.'); }
+        return err(`Wrong password. ${MAX_TRIES - dv.tries} tries left before this portfolio is removed from the device.`); }
       dv.tries = 0; putDev(dv); await unlocked(); };
-    $l('#lk-forget').onclick = () => { screen(`<h1>Forget this device?</h1><p>You will need your setup key to open the portfolio here again.</p>
-      <button class="lk-btn" id="lk-f-yes" data-testid="live-forget-confirm">Forget this device</button><button class="lk-btn ghost" id="lk-f-no">Cancel</button>`);
-      $l('#lk-f-yes').onclick = async () => { await forget(); location.reload(); }; $l('#lk-f-no').onclick = () => unlockScreen(false); };
+    $l('#lk-forget').onclick = () => { screen(`<h1>Forget ${esc(CUR.name)}?</h1><p>You will need its setup key to open it here again.</p>
+      <button class="lk-btn" id="lk-f-yes" data-testid="live-forget-confirm">Forget it on this device</button><button class="lk-btn ghost" id="lk-f-no">Cancel</button>`);
+      $l('#lk-f-yes').onclick = async () => { await forget(); ls.del(CUR_LS); location.reload(); }; $l('#lk-f-no').onclick = () => unlockScreen(false); };
   }
   async function bioUnlock(quiet) { try { await verifyBio(); await unlocked(); } catch (e) { if (!quiet) err(bio + ' did not unlock. Try again or use the password.'); } }
   async function unlocked() {
     try { if (!PK8) { PK8 = await loadFromDevice(); await start(); } else if (Date.now() - lastFetch > REFRESH_MS) refresh(); open(); }
-    catch (e) { console.error(e); if (/not set up/.test(e.message) || e.name === 'OperationError') { await forget(); setupScreen('This device needs to be set up again.'); } else err(e.message); }
+    catch (e) { console.error(e); if (/not set up/.test(e.message) || e.name === 'OperationError') { await forget(); setupScreen('This portfolio needs to be set up again on this device.'); } else err(e.message); }
   }
   async function start() { publish(await fetchData()); dbResolve(db); livePrices().catch((e) => console.warn('live prices unavailable', e)); }
   async function refresh() { try { const b = await fetchData(); if (b.exportedAt !== DATA_AT) publish(b); } catch (e) { console.warn('refresh failed', e); } }
-  window.pdLock = () => { if (getDev()) unlockScreen(false); };
+  window.pdLock = () => { if (CUR && getDev()) unlockScreen(false); };
+  window.pdSwitch = () => chooseScreen();
 
   /* ---------- boot ---------- */
   let hiddenAt = 0;
@@ -246,8 +287,11 @@ body.pd-locked{overflow:hidden}
   });
   (async () => {
     if (!window.crypto || !crypto.subtle || !window.DecompressionStream) return screen('<h1>Browser too old</h1><p>Update your browser (Safari 16.4+, Chrome 80+) to open the portfolio.</p>');
-    try { KEYS = await (await fetch('keys.json', { cache: 'no-store' })).json(); } catch (e) { return screen('<h1>Offline</h1><p>The portfolio could not load. Check your connection and reload.</p>'); }
-    if (getDev()) unlockScreen(true); else setupScreen();
+    try { PORTFOLIOS = await (await fetch('portfolios.json', { cache: 'no-store' })).json(); } catch (e) { return screen('<h1>Offline</h1><p>The portfolio could not load. Check your connection and reload.</p>'); }
+    await migrateLegacy();
+    whenReady(() => { const sw = document.getElementById('pd-switch'); if (sw && PORTFOLIOS.length > 1) sw.hidden = false; });
+    const last = PORTFOLIOS.find((p) => p.id === ls.get(CUR_LS));
+    if (last) select(last); else if (PORTFOLIOS.length === 1) select(PORTFOLIOS[0]); else chooseScreen();
   })();
 })();
 </script>
@@ -2377,5 +2421,5 @@ async function refreshNow(btn){ if(window.pdRefreshPrices) return window.pdRefre
 })();
 })();
 </script>
-<div id="pd-bar" data-testid="live-bar"><span id="pd-updated">Loading…</span><span>Prices live from TradingView · edits and statement imports happen on the Claude page</span><button type="button" onclick="pdLock()" data-testid="live-lock">Lock</button></div>
+<div id="pd-bar" data-testid="live-bar"><span><strong id="pd-who"></strong> · <span id="pd-updated">Loading…</span></span><span>Prices live from TradingView · edits and statement imports happen on the Claude page</span><span class="pd-actions"><button type="button" id="pd-switch" hidden onclick="pdSwitch()" data-testid="live-switch-bar">Switch portfolio</button><button type="button" onclick="pdLock()" data-testid="live-lock">Lock</button></span></div>
 </body></html>
