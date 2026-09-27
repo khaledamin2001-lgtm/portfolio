@@ -26,6 +26,8 @@
 body.pd-locked{overflow:hidden}
 #pd-bar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;max-width:1240px;margin:28px auto 0;padding:14px 16px calc(14px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--rule,#DAE2DE);color:var(--ink-3,#6F7D78);font-size:12px}
 #pd-bar button{font:500 12px/1 var(--f-ui,system-ui,sans-serif);padding:8px 12px;border-radius:8px;border:1px solid var(--rule,#DAE2DE);background:var(--surface,#fff);color:var(--ink-2,#46534E);cursor:pointer}
+
+[data-testid=scan-gmail],[data-testid=factsheet-email],[data-testid=post-statement],[data-testid=csv-import],[data-testid=csv-import-input],[data-testid=save-marks],[data-testid=save-assets],[data-testid=save-settings]{display:none!important}
 </style></head><body class="pd-locked">
 <div id="lock" role="dialog" aria-modal="true" aria-label="Unlock portfolio"></div>
 <script>/* Live-site lock. The portfolio data is published encrypted (data.enc.json) to the site's public key; the matching private
@@ -102,9 +104,51 @@ body.pd-locked{overflow:hidden}
     doc: (p) => ({ ...sub('doc', p), get: async () => snap(p.split('/').pop(), DOCS[p]), set: readOnly, update: readOnly, delete: readOnly }),
     collection: (p) => ({ ...sub('col', p), get: async () => { const docs = Object.keys(DOCS).filter((k) => k.startsWith(p + '/')).map((k) => snap(k.split('/').pop(), DOCS[k])); return { docs, size: docs.length, empty: !docs.length }; } }),
   });
-  window.claude = Object.freeze({ use: async (n) => (n === 'db' ? dbReady : null) });
+  // Downloads work normally on a real website, so the page's export buttons save straight to the device.
+  const downloads = Object.freeze({ save: async ({ filename, data }) => {
+    const blob = data instanceof Blob ? data : new Blob([data], { type: /\.json$/.test(filename) ? 'application/json' : /\.html$/.test(filename) ? 'text/html' : 'text/csv' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  } });
+  window.claude = Object.freeze({ use: async (n) => (n === 'db' ? dbReady : n === 'downloads' ? downloads : null) });
+
+  /* ---------- live prices straight from TradingView (15-min delayed; the scanner allows this site's origin) ---------- */
+  let LIVE = null, liveAt = 0;
+  const cairoDay = (ts) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date(ts * 1000));
+  async function scan(market, body) {
+    const r = await fetch('https://scanner.tradingview.com/' + market + '/scan', { method: 'POST', body: JSON.stringify(body) });
+    if (!r.ok) throw new Error('TradingView answered ' + r.status);
+    return Object.fromEntries((await r.json()).data.map((x) => [x.s, x.d]));
+  }
+  async function livePrices() {
+    const items = (DOCS['portfolio/assets'] || {}).items || {};
+    const syms = [...new Set(Object.values(items).map((a) => (a.symbol || '').toUpperCase()).filter((s) => s && s !== 'SAVINGS' && s !== 'THNDRGOLD'))].sort();
+    const idx = ['EGX30CAPPED', 'EGX30', 'EGX70EWI', 'EGX100EWI'], today = cairoDay(Date.now() / 1000);
+    const [eg, gl] = await Promise.all([
+      scan('egypt', { symbols: { tickers: syms.concat(idx).map((s) => 'EGX:' + s) }, columns: ['close', 'change', 'time', 'close[1]|1M', 'description', 'dividends_yield_current'] }),
+      scan('global', { symbols: { tickers: ['FX_IDC:USDEGP', 'OANDA:XAUUSD'] }, columns: ['close', 'change', 'close[1]|1M'] })]);
+    const prev = DOCS['market/latest'] || {}, quotes = {}, index = {}, missing = [];
+    for (const s of syms) { const d = eg['EGX:' + s];
+      if (!d || d[0] == null) { if (prev.quotes && prev.quotes[s]) quotes[s] = prev.quotes[s]; else missing.push(s); continue; }
+      quotes[s] = { price: d[0], chg: +(d[1] || 0).toFixed(4), date: d[2] ? cairoDay(d[2]) : today, prevMonthClose: d[3], name: d[4], dy: d[5] == null ? null : +d[5].toFixed(4) }; }
+    for (const s of idx) { const d = eg['EGX:' + s]; if (d && d[0] != null) index[s] = { close: d[0], chg: +(d[1] || 0).toFixed(4), date: d[2] ? cairoDay(d[2]) : today, prevMonthClose: d[3] }; }
+    if (!Object.keys(quotes).length || !index.EGX30CAPPED) throw new Error('TradingView returned no EGX prices');
+    const fx = gl['FX_IDC:USDEGP'], xau = gl['OANDA:XAUUSD'];
+    LIVE = { asOf: new Date().toISOString(), source: 'TradingView scanner (15-min delayed), fetched by this browser', quotes, index,
+      fx: fx ? { USDEGP: { price: fx[0], chg: +(fx[1] || 0).toFixed(4), prevMonthClose: fx[2], date: today } } : prev.fx || {},
+      gold: fx && xau ? { XAUUSD: xau[0], gram24kEgp: +(xau[0] * fx[0] / 31.1035).toFixed(2), date: today } : prev.gold || {}, missing };
+    liveAt = Date.now(); DOCS['market/latest'] = LIVE; listeners.forEach(fire);
+    return Object.keys(quotes).length;
+  }
+  window.pdRefreshPrices = async (btn, toast) => {
+    if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
+    try { const n = await livePrices(); toast && toast(`Prices refreshed: ${n} stocks, 15-minute delayed.`); }
+    catch (e) { console.error(e); toast && toast('Could not reach TradingView: ' + (e.message || e) + '. Showing the last saved prices.', 'error'); }
+    finally { const b = document.getElementById('refresh-prices'); if (b) { b.disabled = false; b.textContent = 'Refresh now'; } }
+  };
   function publish(bundle) {
     DOCS = bundle.docs || {}; DATA_AT = bundle.exportedAt;
+    if (LIVE && Date.parse(LIVE.asOf) > Date.parse((DOCS['market/latest'] || {}).asOf || 0)) DOCS['market/latest'] = LIVE;
     listeners.forEach(fire);
     const t = document.getElementById('pd-updated');
     if (t && DATA_AT) t.textContent = 'Data as of ' + new Date(DATA_AT).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
@@ -176,7 +220,7 @@ body.pd-locked{overflow:hidden}
     try { if (!PK8) { PK8 = await loadFromDevice(); await start(); } else if (Date.now() - lastFetch > REFRESH_MS) refresh(); open(); }
     catch (e) { console.error(e); if (/not set up/.test(e.message) || e.name === 'OperationError') { await forget(); setupScreen('This device needs to be set up again.'); } else err(e.message); }
   }
-  async function start() { publish(await fetchData()); dbResolve(db); }
+  async function start() { publish(await fetchData()); dbResolve(db); livePrices().catch((e) => console.warn('live prices unavailable', e)); }
   async function refresh() { try { const b = await fetchData(); if (b.exportedAt !== DATA_AT) publish(b); } catch (e) { console.warn('refresh failed', e); } }
   window.pdLock = () => { if (getDev()) unlockScreen(false); };
 
@@ -186,6 +230,7 @@ body.pd-locked{overflow:hidden}
     if (document.hidden) { hiddenAt = Date.now(); return; }
     if (!PK8 || !lockEl().hidden) return;
     if (Date.now() - hiddenAt > RELOCK_MS) unlockScreen(true); else if (Date.now() - lastFetch > REFRESH_MS) refresh();
+    if (Date.now() - liveAt > 10 * 60e3) livePrices().catch(() => {});
   });
   (async () => {
     if (!window.crypto || !crypto.subtle || !window.DecompressionStream) return screen('<h1>Browser too old</h1><p>Update your browser (Safari 16.4+, Chrome 80+) to open the portfolio.</p>');
@@ -2233,7 +2278,7 @@ document.addEventListener('submit', async e=>{
 function toCsv(rows){ return rows.map(r=>r.map(v=>{ const s=v==null?'':String(v); return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s; }).join(',')).join('\n'); }
 async function download(filename, data){ const dl=await window.claude?.use?.('downloads'); if(!dl){ toast('Downloads are not available in this view','error'); return; }
   try{ await dl.save({filename, data}); }catch(e){ if(e&&e.code!=='declined') toast('Download failed: '+(e.message||e.code),'error'); } }
-async function refreshNow(btn){ const mcp=await window.claude?.use?.('mcp'); if(!mcp){ toast('Refreshing from the page is not available here. Prices update automatically after each session.','error'); return; }
+async function refreshNow(btn){ if(window.pdRefreshPrices) return window.pdRefreshPrices(btn, toast); const mcp=await window.claude?.use?.('mcp'); if(!mcp){ toast('Refreshing from the page is not available here. Prices update automatically after each session.','error'); return; }
   btn.disabled=true; btn.textContent='Starting…';
   try{ await mcp.callTool('Claude Code Remote','fire_trigger',{trigger_id:REFRESH_TRIGGER_ID},{cache:false}); toast('Price refresh started. New prices arrive in about two minutes.'); btn.textContent='Refresh started'; }
   catch(e){ toast('Could not start the refresh: '+(e.message||e.code),'error'); btn.disabled=false; btn.textContent='Refresh now'; } }
@@ -2256,5 +2301,5 @@ async function refreshNow(btn){ const mcp=await window.claude?.use?.('mcp'); if(
 })();
 })();
 </script>
-<div id="pd-bar" data-testid="live-bar"><span id="pd-updated">Loading…</span><span>Read-only live copy · edits and statement imports happen on the Claude page</span><button type="button" onclick="pdLock()" data-testid="live-lock">Lock</button></div>
+<div id="pd-bar" data-testid="live-bar"><span id="pd-updated">Loading…</span><span>Prices live from TradingView · edits and statement imports happen on the Claude page</span><button type="button" onclick="pdLock()" data-testid="live-lock">Lock</button></div>
 </body></html>
