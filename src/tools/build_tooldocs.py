@@ -2,13 +2,14 @@
 """Build the tools/<id> documents that each portfolio page keeps in its database so the scheduled jobs can fetch their
 code. Usage: python3 tools/build_tooldocs.py [--live <dir with tools/<id>.json as ArtifactData saves them>] [--out <dir>]
 Writes <out>/<id>.json = {filename, content, sha256, builtAt} for engine_js, engine2_js, statement, sync, excel_js,
-excel_py, factsheet, plan (sources: the .js/.py files next to this script, or one directory up for engine.js, engine2.js and
+excel_py, factsheet, plan, weekly (sources: the .js/.py files next to this script, or one directory up for engine.js, engine2.js and
 statement.js when tools/ holds no copy), prints a manifest table and, with --live, marks which live documents differ.
 Exit code 0 always; the manifest is for the owner to read before saving the documents with ArtifactData "set"."""
 import os, sys, json, hashlib, datetime, argparse
 
 IDS = [("engine_js", "engine.js"), ("engine2_js", "engine2.js"), ("statement", "statement.js"), ("sync", "sync.js"),
-       ("excel_js", "excel.js"), ("excel_py", "excel.py"), ("factsheet", "factsheet.js"), ("plan", "plan.js")]
+       ("excel_js", "excel.js"), ("excel_py", "excel.py"), ("factsheet", "factsheet.js"), ("plan", "plan.js"),
+       ("weekly", "weekly.js")]
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 def source(filename):

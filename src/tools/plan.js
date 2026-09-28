@@ -4,7 +4,7 @@
    Prints ONE JSON object:
      nowCairo      Cairo wall-clock time with its UTC offset, e.g. '2026-09-28T15:10:04+03:00'
      today         'YYYY-MM-DD' (Cairo)             month / prevMonth  'YYYY-MM'        dayOfMonth  1..31
-     weekday       'Sun'..'Sat' (Cairo)
+     weekday       'Sun'..'Sat' (Cairo)          hour  0..23, the Cairo local hour (integer)
      gmailAfter    'YYYY/MM/DD' for a Gmail "after:" search: the Cairo date of --lastRun minus 5 days, or today minus 7 days
                    when there is no (valid) --lastRun
      isEgxSession  true Sunday to Thursday (the EGX trading week; public holidays are not known here)
@@ -31,7 +31,7 @@ function plan(now, lastRun) {
   const lr = lastRun ? new Date(lastRun) : null;
   const gmailAfter = lr && !isNaN(lr) ? ymd(shift(parts(lr), -5), '/') : ymd(shift(p, -7), '/');
   return {
-    nowCairo: `${ymd(p)}T${pad(p.hh)}:${pad(p.mi)}:${pad(p.ss)}${off}`, today: ymd(p), month, prevMonth, dayOfMonth: p.d, weekday: p.weekday,
+    nowCairo: `${ymd(p)}T${pad(p.hh)}:${pad(p.mi)}:${pad(p.ss)}${off}`, today: ymd(p), month, prevMonth, dayOfMonth: p.d, weekday: p.weekday, hour: p.hh,
     gmailAfter, isEgxSession: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu'].includes(p.weekday),
   };
 }
