@@ -575,7 +575,7 @@ body.pd-locked>:not(#lock){display:none!important}
   })();
 })();
 </script>
-<meta name="pd-build" content="42f6592e505a 2026-09-28 10:10">
+<meta name="pd-build" content="fc8c808245f9 2026-09-28 11:10">
 <style>
 :root{
   --bg:#F3F6F4; --surface:#FFFFFF; --surface-2:#EDF2EF; --ink:#0F1A17; --ink-2:#46534E; --ink-3:#5F6C67;
@@ -815,6 +815,23 @@ tr.note-row td{background:var(--surface-2)}
 .heads{display:grid;gap:6px;margin:8px 0 0;padding:0;list-style:none}
 .heads li{display:flex;gap:8px;align-items:baseline;font-size:13.5px;line-height:1.45}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+/* Daily P/L calendar (Performance → Daily P/L): one cell per EGX session, Sun–Thu */
+.plnav{display:flex;align-items:center;gap:6px}
+.plnav select{font:inherit;padding:6px 8px;border:1px solid var(--input-rule);border-radius:8px;background:var(--input);color:var(--ink)}
+.plcal{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;margin-top:4px}
+.plcal .wd{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);padding:0 6px 2px}
+.plc{position:relative;min-height:70px;border-radius:9px;border:1px solid var(--rule);background:var(--surface);padding:6px 8px;text-align:left;font:inherit;color:var(--ink);display:flex;flex-direction:column;gap:2px;min-width:0}
+button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.plc:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.plc.sel{box-shadow:inset 0 0 0 2px var(--ink)}
+.plc.empty{background:transparent;border-color:transparent}
+.plc.closed{background:var(--surface-2);border-style:dashed}
+.plc .dn{font-size:12px;color:var(--ink-2);display:flex;justify-content:space-between;gap:4px}
+.plc .pl{font-weight:700;font-size:14px;font-variant-numeric:tabular-nums;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.plc .pc{font-size:11.5px;font-variant-numeric:tabular-nums;color:var(--ink-2)}
+.plc .mk{font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3)}
+.plc .flow{position:absolute;right:6px;bottom:5px;font-size:10px;color:var(--ink-3)}
+.pldet{margin-top:14px;border-top:1px solid var(--rule);padding-top:12px}
+@media (max-width:520px){.plcal{gap:3px}.plc{min-height:60px;padding:5px 5px}.plc .pl{font-size:12.5px;letter-spacing:-.02em;text-overflow:clip}.plc .pc{font-size:10.5px}.plc .flow{display:none}.plkpis{grid-template-columns:repeat(2,minmax(0,1fr))}.plkpis .kpi:first-child{grid-column:1/-1}.plname{display:none}}
 </style>
 
 <header class="mast">
@@ -2327,11 +2344,11 @@ function renderEmpty(){ $('#main').innerHTML = `<div class="empty"><h2>No portfo
 
 // ---------- tabs ----------
 // Seven tabs; the older, finer-grained names still work as links and jump to their section inside the merged tab.
-const TAB_ALIAS = {attribution:'analysis', risk:'analysis', income:'holdings', watchlist:'holdings', trades:'activity', ledger:'activity', statements:'settings', factsheet:'reports', inputs:'settings', checks:'settings'};
+const TAB_ALIAS = {dailypl:'performance', attribution:'analysis', risk:'analysis', income:'holdings', watchlist:'holdings', trades:'activity', ledger:'activity', statements:'settings', factsheet:'reports', inputs:'settings', checks:'settings'};
 const TAB_VIEWS = {
   overview: [['overview','Overview',()=>vOverview()]],
   holdings: [['holdings','Holdings',()=>vHoldings()],['watchlist','Watchlist',()=>vWatchlist()],['income','Income & dividends',()=>vIncome()]],
-  performance: [['performance','Performance',()=>vPerformance()]],
+  performance: [['performance','Performance',()=>vPerformance()],['dailypl','Daily P/L',()=>vDailyPL()]],
   analysis: [['analysis','What the numbers say',()=>vAnalysis()],['attribution','Attribution vs EGX30 Capped',()=>vAttribution()]],
   activity: [['trades','Closed trades',()=>vTrades()],['ledger','Ledger',()=>vLedger()]],
   reports: [['factsheet','Monthly factsheet & Excel',()=>vFactsheet()]],
@@ -3060,6 +3077,121 @@ function dailySection(){
     </tbody></table></div>
     <p class="note" style="margin:10px 0 0">Large gaps usually mean the month-end mark was typed as a round number. Posting the Thndr statement (Settings → Statements &amp; imports) replaces it with the exact figure from the positions snapshot.</p></div>`;
 }
+
+// ---------- Performance: Daily P/L calendar ----------
+// A session's P/L = value at its close − value at the previous session's close − deposits + withdrawals booked in between.
+// Values are the daily series above (ledger holdings × closing prices + ledger cash), so the calendar, the daily charts and
+// the month-end check all agree. Before the market job has written today's closes, today's cell moves the last close by the
+// live price changes only, through the same pricer, so the way funds are valued never shows up as a fake gain or loss.
+const WD3 = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+function plShares(led, upTo){ const sh={}; led.forEach(t=>{ if(t.d<=upTo && t.a && (t.t==='Buy'||t.t==='Sell'||t.t==='Bonus')) sh[t.a]=(sh[t.a]||0)+(t.t==='Sell'?-1:1)*(t.q||0); }); return sh; }
+function plLivePrices(){ const R=S.R; return new Map(R.pos.open.filter(r=>r.priceSource==='auto'&&r.priceDate===R.today&&r.price>0).map(r=>[r.name,r.price])); }
+// value change of each asset between two closes (or the last close and live prices), plus its own cash rows in between
+function plMoves(from, to, live){
+  const R=S.R, price=PA.makePricer(S.assets, R.ledger, pbook()), led=PE.sortLedger(R.ledger);
+  const sh0=plShares(led,from), sh1=plShares(led,to), out={}; let other=0, flow=0, unpriced=[];
+  led.forEach(t=>{ if(t.d>from && t.d<=to){ if(t.t==='Deposit'||t.t==='Withdrawal'){ flow+=t.amt||0; return; } if(t.a) (out[t.a]||(out[t.a]={cash:0})).cash+=t.amt||0; else other+=t.amt||0; } });
+  new Set([...Object.keys(sh0),...Object.keys(sh1),...Object.keys(out)]).forEach(n=>{
+    const a=sh0[n]||0, b=sh1[n]||0, o=out[n]||(out[n]={cash:0});
+    const p0=a>0.5?(price(n,from)||{}).p:null, p1=b>0.5?(live&&live.has(n)?live.get(n):(price(n,to)||{}).p):null;
+    if((a>0.5&&p0==null)||(b>0.5&&p1==null)){ unpriced.push(n); o.v=o.cash; return; }
+    o.v=(b>0.5?b*p1:0)-(a>0.5?a*p0:0)+o.cash; o.chg=(a>0.5&&b>0.5&&p0>0)?p1/p0-1:null; o.held=a>0.5||b>0.5; });
+  return {items:Object.entries(out).map(([name,o])=>({name, symbol:(S.assets[name]||{}).symbol||'', v:o.v||0, chg:o.chg??null, traded:Math.abs(o.cash)>0.005})), other, flow, unpriced};
+}
+const plA = () => an('pl', () => {
+  const D=dailyA(); if(!D||D.rows.length<2) return null;
+  const rows=[];
+  D.rows.forEach((r,k)=>{ if(!k) return; const p=D.rows[k-1]; rows.push({d:r.d, prev:p.d, value:r.value, prevValue:p.value, flow:r.flow, pnl:r.value-p.value-r.flow, ret:r.ret, benchRet:r.benchRet}); });
+  const R=S.R, last=D.rows[D.rows.length-1], today=R.today, live=plLivePrices();
+  if(today>last.d && isSession(today) && live.size){
+    const mv=plMoves(last.d, today, live); const dv=mv.items.reduce((a,x)=>a+x.v,0)+mv.other;
+    const value=last.value+dv+mv.flow, ix=((S.market||{}).index||{}).EGX30CAPPED;
+    rows.push({d:today, prev:last.d, value, prevValue:last.value, flow:mv.flow, pnl:dv, ret:last.value+mv.flow>0?value/(last.value+mv.flow)-1:null, benchRet:ix&&ix.date===today&&ix.chg!=null?ix.chg/100:null, live:true});
+  }
+  return {rows, byDay:new Map(rows.map(r=>[r.d,r]))};
+});
+const plSigned = (x) => (x>0.5?'+':'')+short(x);
+// calendar cells: at most 5 characters so a phone-width cell never truncates (−75k, +1.3k, −848, +2.1M)
+const plCell = (x) => { const a=Math.abs(x), s=a>=1e6?(a/1e6).toFixed(1)+'M':a>=1e4?Math.round(a/1e3)+'k':a>=1e3?(a/1e3).toFixed(1)+'k':Math.round(a)+''; return a<0.5?'0':(x<0?'−':'+')+s; };
+const plFull = (x) => Math.abs(x)<0.5 ? '0' : (x<0?'−':'+')+egp(Math.abs(x));
+function vDailyPL(){
+  const P=plA();
+  if(!P||!P.rows.length) return `<div class="panel" id="pl-root"><h2>Daily P/L</h2><p class="muted">Daily closing prices are not available yet.</p></div>`;
+  const months=[...new Set(P.rows.map(r=>r.d.slice(0,7)))];
+  const mo = S.plMonth&&months.includes(S.plMonth) ? S.plMonth : months.includes(S.R.range.to) ? S.R.range.to : months[months.length-1];
+  const mi=months.indexOf(mo), mrows=P.rows.filter(r=>r.d.slice(0,7)===mo);
+  const sel = S.plDay&&S.plDay.slice(0,7)===mo&&P.byDay.has(S.plDay) ? P.byDay.get(S.plDay) : mrows[mrows.length-1];
+  const tot=mrows.reduce((a,r)=>a+r.pnl,0), mret=mrows.reduce((a,r)=>a*(1+(r.ret||0)),1)-1;
+  const bret=mrows.every(r=>r.benchRet!=null)?mrows.reduce((a,r)=>a*(1+r.benchRet),1)-1:null;
+  const flows=mrows.reduce((a,r)=>a+r.flow,0), endR=mrows[mrows.length-1];
+  const up=mrows.filter(r=>r.pnl>0.5).length, dn=mrows.filter(r=>r.pnl<-0.5).length;
+  const best=mrows.reduce((a,r)=>r.pnl>a.pnl?r:a), worst=mrows.reduce((a,r)=>r.pnl<a.pnl?r:a);
+  const maxAbs=Math.max(1e-9,...mrows.map(r=>Math.abs(r.ret||0)));
+  // calendar: Sunday to Thursday only (EGX sessions); a past weekday with no session is a market holiday
+  const [y,m]=mo.split('-').map(Number), nDays=new Date(Date.UTC(y,m,0)).getUTCDate();
+  const cell=(ds)=>{ const r=P.byDay.get(ds), dn=+ds.slice(8);
+    if(!r){ const past=ds<=S.R.today; return `<div class="plc ${past?'closed':'empty'}" data-testid="pl-day-${ds}"><div class="dn"><span>${dn}</span></div>${past?'<div class="mk">Closed</div>':''}</div>`; }
+    const tone=Math.abs(r.pnl)<0.5?null:r.pnl>0?'--pos':'--neg', a=Math.round(8+30*Math.min(1,Math.abs(r.ret||0)/maxAbs));
+    const fl=Math.abs(r.flow)>0.5?`<span class="flow" title="${r.flow>0?'Deposit':'Withdrawal'} ${egp(Math.abs(r.flow))} EGP, not counted as P/L">${r.flow>0?'dep':'wdr'}</span>`:'';
+    const lbl=`${WD3[new Date(ds+'T12:00:00Z').getUTCDay()]} ${dfmt(ds)}${r.live?' (live)':''}: P/L ${plFull(r.pnl)} EGP, ${pct(r.ret,2)}`;
+    return `<button type="button" class="plc${r===sel?' sel':''}" data-pld="${ds}" data-testid="pl-day-${ds}" aria-pressed="${r===sel}" aria-label="${esc(lbl)}" title="${esc(lbl)}" ${tone?`style="background:color-mix(in srgb,var(${tone}) ${a}%,var(--surface))"`:''}>
+      <div class="dn"><span>${dn}</span>${r.live?'<span class="mk">Live</span>':''}</div><div class="pl ${sgn(Math.abs(r.pnl)<0.5?0:r.pnl)}">${plCell(r.pnl)}</div><div class="pc">${pct(r.ret,2)}</div>${fl}</button>`; };
+  let cal=WD3.slice(0,5).map(w=>`<div class="wd">${w}</div>`).join(''), started=false;
+  for(let d=1; d<=nDays; d++){ const ds=`${mo}-${String(d).padStart(2,'0')}`, wd=new Date(Date.UTC(y,m-1,d)).getUTCDay(); if(wd>4) continue;
+    if(!started){ cal+='<div class="plc empty" aria-hidden="true"></div>'.repeat(wd); started=true; } cal+=cell(ds); }
+  // the selected session: where its P/L came from, stock by stock
+  const mv=plMoves(sel.prev, sel.d, sel.live?plLivePrices():null);
+  const items=mv.items.filter(x=>Math.abs(x.v)>=0.5).sort((a,b)=>Math.abs(b.v)-Math.abs(a.v));
+  const shown=items.slice(0,8), rest=items.slice(8).reduce((a,x)=>a+x.v,0)+mv.other;
+  const labels=mrows.map(r=>String(+r.d.slice(8)));
+  return `<div id="pl-root" data-testid="daily-pl">
+  <div class="panel"><div class="phead"><div><h2>Daily P/L · ${M(mo)}</h2><div class="sub">Profit or loss at every EGX session close · deposits and withdrawals are not P/L · tap a day for what moved it</div></div>
+    <div class="plnav"><button type="button" class="btn sm" data-plm="${months[mi-1]||''}" ${mi>0?'':'disabled'} aria-label="Previous month" data-testid="pl-prev">‹</button>
+      <select id="pl-month" aria-label="Month" data-testid="pl-month">${months.slice().reverse().map(x=>`<option value="${x}" ${x===mo?'selected':''}>${M(x)}</option>`).join('')}</select>
+      <button type="button" class="btn sm" data-plm="${months[mi+1]||''}" ${mi<months.length-1?'':'disabled'} aria-label="Next month" data-testid="pl-next">›</button></div></div>
+    <div class="kpis plkpis" data-testid="pl-tiles" style="margin-bottom:14px">
+      ${kpi('Month P/L', `<span class="${sgn(tot)}">${plFull(tot)}</span>`, `${pct(mret,2)} daily-linked${bret!=null?` · EGX30 Capped ${pct(bret,2)}`:''}`,'','EGP')}
+      ${kpi(endR.live?'Value now':'Value at last close', egp(endR.value), `${dfmt(endR.d)}${endR.live?' · live prices':''} · month started at ${egp(mrows[0].prevValue)}`,'','EGP')}
+      ${kpi('Best day', `<span class="${sgn(best.pnl)}">${plFull(best.pnl)}</span>`, `${dfmt(best.d)} · ${pct(best.ret,2)}`,'','EGP')}
+      ${kpi('Worst day', `<span class="${sgn(worst.pnl)}">${plFull(worst.pnl)}</span>`, `${dfmt(worst.d)} · ${pct(worst.ret,2)}`,'','EGP')}
+      ${kpi('Up / down days', `${up} / ${dn}`, `${mrows.length} session${mrows.length>1?'s':''}${Math.abs(flows)>0.5?` · net ${flows>0?'deposits':'withdrawals'} ${egp(Math.abs(flows))} EGP`:''}`)}
+    </div>
+    <div class="plcal" role="group" aria-label="Daily P/L calendar for ${M(mo)}" data-testid="pl-calendar">${cal}</div>
+    <div class="pldet" data-testid="pl-detail">
+      <div class="phead" style="margin-bottom:8px"><div><h2 style="font-size:17px">${WD3[new Date(sel.d+'T12:00:00Z').getUTCDay()]} ${dfmt(sel.d)}${sel.live?' <span class="pill prov">Live</span>':''}</h2>
+        <div class="sub">${sel.live?'Value now':'Close'} ${egp(sel.value)} EGP · previous close ${egp(sel.prevValue)} EGP (${dfmt(sel.prev)})${Math.abs(sel.flow)>0.5?` · ${sel.flow>0?'deposit':'withdrawal'} ${egp(Math.abs(sel.flow))} EGP`:''}${sel.benchRet!=null?` · EGX30 Capped ${pct(sel.benchRet,2)}`:''}</div></div>
+        <div style="text-align:right"><div class="num ${sgn(sel.pnl)}" style="font-size:22px;font-weight:700" data-testid="pl-detail-pnl">${plFull(sel.pnl)} <small class="muted" style="font-size:12px;font-weight:500">EGP</small></div><div class="muted num">${pct(sel.ret,2)}</div></div></div>
+      ${shown.length?`<div class="tbl"><table data-testid="pl-movers"><thead><tr><th>What moved it</th><th class="n">Price change</th><th class="n">P/L (EGP)</th></tr></thead><tbody>
+        ${shown.map(x=>`<tr><td>${x.symbol?`<span class="sym">${esc(x.symbol)}</span> `:''}<span class="ink2${x.symbol?' plname':''}">${esc(x.name)}</span>${x.traded?' <span class="pill prov" title="Bought, sold or paid a dividend that day; its cash is included">traded</span>':''}</td><td class="n">${x.chg!=null?`<span class="${sgn(x.chg)}">${pct(x.chg,2)}</span>`:'—'}</td><td class="n ${sgn(x.v)}">${plFull(x.v)}</td></tr>`).join('')}
+        ${Math.abs(rest)>=0.5?`<tr><td class="ink2">${items.length>8?'Other holdings, fees and rebates':'Fees, rebates and other'}</td><td class="n">—</td><td class="n ${sgn(rest)}">${plFull(rest)}</td></tr>`:''}
+        </tbody><tfoot><tr><td>Total</td><td></td><td class="n ${sgn(sel.pnl)}">${plFull(sel.pnl)}</td></tr></tfoot></table></div>`:`<p class="muted" style="margin:0">Nothing you held changed in value that session.</p>`}
+      ${mv.unpriced.length?`<p class="note" style="margin:8px 0 0">No price for ${esc(mv.unpriced.join(', '))} that day; left out.</p>`:''}
+    </div>
+  </div>
+  <div class="grid g2">
+    <div class="panel"><div class="phead"><div><h2>Value at each close</h2><div class="sub">${M(mo)} · holdings × closing prices + cash; jumps on deposit days</div></div></div>
+      ${chartSlot('ch-pl-value',{kind:'line',title:'Portfolio value at each session close',labels,series:[{name:'Value',color:C.s1(),values:mrows.map(r=>r.value)}],yFmt:egpAxis,minZero:false,tipLabel:i=>dfmt(mrows[i].d)+(mrows[i].live?' · live':''),tipExtra:i=>`<div>P/L <b>${plFull(mrows[i].pnl)} EGP</b></div>`},220)}</div>
+    <div class="panel"><div class="phead"><div><h2>Daily P/L</h2><div class="sub">${M(mo)} · EGP per session</div></div></div>
+      ${chartSlot('ch-pl-bars',{kind:'bar',title:'Daily profit or loss',labels,series:[{name:'P/L',colorFn:v=>v>=0?C.pos():C.neg(),values:mrows.map(r=>r.pnl)}],yFmt:egpAxis,tipLabel:i=>dfmt(mrows[i].d)+(mrows[i].live?' · live':''),tipExtra:i=>`<div>Return <b>${pct(mrows[i].ret,2)}</b></div>`},220)}</div>
+  </div>
+  <div class="panel"><details data-testid="pl-table-toggle"><summary style="cursor:pointer;font-weight:600">Day-by-day table · ${M(mo)}</summary>
+    <div class="tbl" style="margin-top:10px"><table data-testid="pl-table"><thead><tr><th>Session</th><th class="n">Value at close</th><th class="n">Deposits / withdrawals</th><th class="n">P/L (EGP)</th><th class="n">Return</th><th class="n">EGX30 Capped</th></tr></thead><tbody>
+    ${mrows.map(r=>`<tr><td>${WD3[new Date(r.d+'T12:00:00Z').getUTCDay()]} ${dfmt(r.d)}${r.live?' <span class="pill prov">Live</span>':''}</td><td class="n">${egp(r.value)}</td><td class="n">${Math.abs(r.flow)>0.5?egp(r.flow):'—'}</td><td class="n ${sgn(r.pnl)}">${egp(r.pnl)}</td><td class="n ${sgn(r.ret)}">${pct(r.ret,2)}</td><td class="n ${sgn(r.benchRet)}">${r.benchRet!=null?pct(r.benchRet,2):'—'}</td></tr>`).join('')}
+    </tbody><tfoot><tr><td>${M(mo)}</td><td class="n">${egp(endR.value)}</td><td class="n">${Math.abs(flows)>0.5?egp(flows):'—'}</td><td class="n ${sgn(tot)}">${egp(tot)}</td><td class="n ${sgn(mret)}">${pct(mret,2)}</td><td class="n">${bret!=null?pct(bret,2):'—'}</td></tr></tfoot></table></div></details></div>
+  </div>`;
+}
+function rerenderPL(focusDay){
+  const el=document.getElementById('pl-root'); if(!el) return;
+  el.outerHTML=vDailyPL();
+  charts.splice(0).forEach(c=>{ const x=document.getElementById(c.id); if(x){ x._spec=c; drawChart(x); ro.observe(x); } });
+  markScrollables();
+  if(focusDay){ const b=document.querySelector(`[data-pld="${focusDay}"]`); if(b) b.focus({preventScroll:true}); }
+}
+document.addEventListener('click', e=>{
+  const d=e.target.closest('[data-pld]'); if(d){ S.plDay=d.dataset.pld; S.plMonth=S.plDay.slice(0,7); rerenderPL(S.plDay); return; }
+  const m=e.target.closest('button[data-plm]'); if(m&&!m.disabled&&m.dataset.plm){ S.plMonth=m.dataset.plm; S.plDay=null; rerenderPL(); }
+});
+document.addEventListener('change', e=>{ if(e.target&&e.target.id==='pl-month'){ S.plMonth=e.target.value; S.plDay=null; rerenderPL(); } });
 
 // ---------- Attribution ----------
 function vAttribution(){

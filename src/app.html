@@ -241,6 +241,23 @@ tr.note-row td{background:var(--surface-2)}
 .heads{display:grid;gap:6px;margin:8px 0 0;padding:0;list-style:none}
 .heads li{display:flex;gap:8px;align-items:baseline;font-size:13.5px;line-height:1.45}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+/* Daily P/L calendar (Performance → Daily P/L): one cell per EGX session, Sun–Thu */
+.plnav{display:flex;align-items:center;gap:6px}
+.plnav select{font:inherit;padding:6px 8px;border:1px solid var(--input-rule);border-radius:8px;background:var(--input);color:var(--ink)}
+.plcal{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;margin-top:4px}
+.plcal .wd{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);padding:0 6px 2px}
+.plc{position:relative;min-height:70px;border-radius:9px;border:1px solid var(--rule);background:var(--surface);padding:6px 8px;text-align:left;font:inherit;color:var(--ink);display:flex;flex-direction:column;gap:2px;min-width:0}
+button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.plc:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.plc.sel{box-shadow:inset 0 0 0 2px var(--ink)}
+.plc.empty{background:transparent;border-color:transparent}
+.plc.closed{background:var(--surface-2);border-style:dashed}
+.plc .dn{font-size:12px;color:var(--ink-2);display:flex;justify-content:space-between;gap:4px}
+.plc .pl{font-weight:700;font-size:14px;font-variant-numeric:tabular-nums;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.plc .pc{font-size:11.5px;font-variant-numeric:tabular-nums;color:var(--ink-2)}
+.plc .mk{font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3)}
+.plc .flow{position:absolute;right:6px;bottom:5px;font-size:10px;color:var(--ink-3)}
+.pldet{margin-top:14px;border-top:1px solid var(--rule);padding-top:12px}
+@media (max-width:520px){.plcal{gap:3px}.plc{min-height:60px;padding:5px 5px}.plc .pl{font-size:12.5px;letter-spacing:-.02em;text-overflow:clip}.plc .pc{font-size:10.5px}.plc .flow{display:none}.plkpis{grid-template-columns:repeat(2,minmax(0,1fr))}.plkpis .kpi:first-child{grid-column:1/-1}.plname{display:none}}
 </style>
 
 <header class="mast">
@@ -355,11 +372,11 @@ function renderEmpty(){ $('#main').innerHTML = `<div class="empty"><h2>No portfo
 
 // ---------- tabs ----------
 // Seven tabs; the older, finer-grained names still work as links and jump to their section inside the merged tab.
-const TAB_ALIAS = {attribution:'analysis', risk:'analysis', income:'holdings', watchlist:'holdings', trades:'activity', ledger:'activity', statements:'settings', factsheet:'reports', inputs:'settings', checks:'settings'};
+const TAB_ALIAS = {dailypl:'performance', attribution:'analysis', risk:'analysis', income:'holdings', watchlist:'holdings', trades:'activity', ledger:'activity', statements:'settings', factsheet:'reports', inputs:'settings', checks:'settings'};
 const TAB_VIEWS = {
   overview: [['overview','Overview',()=>vOverview()]],
   holdings: [['holdings','Holdings',()=>vHoldings()],['watchlist','Watchlist',()=>vWatchlist()],['income','Income & dividends',()=>vIncome()]],
-  performance: [['performance','Performance',()=>vPerformance()]],
+  performance: [['performance','Performance',()=>vPerformance()],['dailypl','Daily P/L',()=>vDailyPL()]],
   analysis: [['analysis','What the numbers say',()=>vAnalysis()],['attribution','Attribution vs EGX30 Capped',()=>vAttribution()]],
   activity: [['trades','Closed trades',()=>vTrades()],['ledger','Ledger',()=>vLedger()]],
   reports: [['factsheet','Monthly factsheet & Excel',()=>vFactsheet()]],
