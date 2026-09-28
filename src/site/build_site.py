@@ -1,5 +1,5 @@
 """Build the live site's index.html from the desk page + lock layer. Usage: python3 build_site.py <site repo dir>"""
-import re, json, sys, os
+import re, json, sys, os, shutil
 from PIL import Image, ImageDraw
 REPO = sys.argv[1] if len(sys.argv) > 1 else 'repo'
 PORTFOLIOS = [{"id": "khaled", "name": "Khaled's Portfolio"}, {"id": "yassin", "name": "Yassin's Portfolio"}]
@@ -13,10 +13,20 @@ page = page.replace(hook, hook + " if(window.pdRefreshPrices) return window.pdRe
 hook = "function toast(msg, kind){"   # lock.js shows its notices (live prices unavailable) through the page's own toast
 assert page.count(hook) == 1, 'page layout changed: toast() not found'
 page = page.replace(hook, "window.pdToast = (m, k) => toast(m, k);\n" + hook)
-# Content-Security-Policy: the page loads only itself, Google Fonts and the TradingView scanner (pdf.js is never loaded on the site:
-# it is only fetched by the Claude page's statement reader). Inline scripts/styles are the whole app, hence 'unsafe-inline'.
-CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-       "font-src https://fonts.gstatic.com; connect-src 'self' https://scanner.tradingview.com; img-src 'self' data: blob:; base-uri 'none'; form-action 'none'")
+# Self-hosted fonts: the Claude page links Google Fonts; the site serves the same WOFF2 files itself (site/fonts/, listed in
+# fonts.json with each face's weight and unicode-range) from its own fonts/ folder, so no request leaves for Google.
+FONTS = json.load(open('fonts/fonts.json'))
+os.makedirs(os.path.join(REPO, 'fonts'), exist_ok=True)
+for f in sorted({x['file'] for x in FONTS}): shutil.copyfile(os.path.join('fonts', f), os.path.join(REPO, 'fonts', f))
+face = ''.join("@font-face{font-family:'%s';font-style:normal;font-weight:%s;font-display:swap;src:url(fonts/%s) format('woff2');unicode-range:%s}\n" % (x['family'], x['weight'], x['file'], x['range']) for x in FONTS)
+gf = re.findall(r'<link rel="(?:preconnect|stylesheet)" href="https://fonts\.(?:googleapis|gstatic)\.com[^>]*>\n?', page)
+assert len(gf) == 3, 'page layout changed: expected the 3 Google Fonts <link> tags, found %d' % len(gf)
+for x in gf: page = page.replace(x, '', 1)
+assert 'fonts.googleapis.com' not in page and 'fonts.gstatic.com' not in page, 'a Google Fonts reference is left in the page'
+# Content-Security-Policy: the page loads only itself (fonts included) and the TradingView scanner (pdf.js is never loaded on the
+# site: it is only fetched by the Claude page's statement reader). Inline scripts/styles are the whole app, hence 'unsafe-inline'.
+CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+       "font-src 'self'; connect-src 'self' https://scanner.tradingview.com; img-src 'self' data: blob:; base-uri 'none'; form-action 'none'")
 css, js = open('lock.css').read(), open('lock.js').read()
 head = '''<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="''' + CSP + '''">
@@ -26,7 +36,7 @@ head = '''<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="apple-mobile-web-app-title" content="Portfolio Tracker"><meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="icon-180.png"><link rel="icon" href="icon-192.png">
 <title>Stock Market Portfolio Tracker</title>
-<style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:#F3F6F4}img{max-width:100%}[hidden]{display:none!important}
+<style>''' + face + ''':root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:#F3F6F4}img{max-width:100%}[hidden]{display:none!important}
 ''' + css + '''
 [data-testid=scan-gmail],[data-testid=factsheet-email],[data-testid=post-statement],[data-testid=csv-import],[data-testid=csv-import-input],[data-testid=save-marks],[data-testid=save-assets],[data-testid=save-settings]{display:none!important}
 </style></head><body class="pd-locked">

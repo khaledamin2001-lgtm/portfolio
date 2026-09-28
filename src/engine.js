@@ -83,10 +83,18 @@
   // A sell larger than the shares held is flagged r.oversold = q − held. Tolerance: 0.5 sh or 1% of the shares held; for fund
   // rows (MF account or a savings fund) 1% of the larger of shares held and units ever bought, because the savings fund's sells
   // run ~0.2% over its buys as interest accrues in extra units, and its small interest-only sells land after full redemption.
+  // Trading cost (commission + exchange fees) of a stock trade: the net amount vs price × shares — Buy |amt| − p×q, Sell p×q − amt,
+  // clamped at 0 and rounded to 2 dp. Fund rows (acc 'MF') and rows missing a price or share count carry no cost (null).
+  function tradeCostRaw(t) {
+    if ((t.t !== 'Buy' && t.t !== 'Sell') || t.acc === 'MF' || !(t.p > 0) || !(t.q > 0) || typeof t.amt !== 'number') return null;
+    return t.t === 'Buy' ? Math.abs(t.amt) - t.p * t.q : t.p * t.q - t.amt;
+  }
   function runLedger(tx, opts) {
     const run = {};
     return sortLedger(tx, opts).map((t) => {
       const r = { ...t, basis: 0 };
+      const raw = tradeCostRaw(t);
+      if (raw != null) r.cost = Math.max(0, Math.round(raw * 100) / 100);
       if (!t.a || (t.t !== 'Buy' && t.t !== 'Sell' && t.t !== 'Bonus')) return r;
       const s = run[t.a] || (run[t.a] = { sh: 0, cost: 0, bought: 0 });
       if (t.t === 'Buy') { s.sh += t.q || 0; s.bought += t.q || 0; s.cost += Math.abs(t.amt || 0); }
@@ -222,8 +230,20 @@
   // Modified Dietz weights over the span's total calendar days, benchmark/FX/CPI compounded over the span; row.spans = months
   // covered (1 normally), row.spanFrom = first month of the span. A gap row keeps its own month's activity for display only —
   // it is never in a period's rows, so nothing double-counts.
+  // Cash benchmark: row.cashRet = what cash at the CBE policy rate earned over the row's span, (1 + annual rate)^(1/12) − 1 per
+  // calendar month, compounded. The rate of month k is marks[k].cashRate; else opts.policyRate {rate, date: 'YYYY-MM'} (the
+  // market job's current rate, for months from its date on — the live month); else settings.riskFree, and row.cashFallback = true.
+  // Trading costs: row.tradingCost / row.tradedValue sum ledger r.cost and p×q of the cost-bearing trades in the span;
+  // row.retGross = the same return with the month's trading cost added back to the month-end value (approximation).
   function monthly(settings, marks, ledger, live, opts) {
     const dietz = !(opts && opts.flowTiming === 'start');
+    const pol = opts && opts.policyRate && typeof opts.policyRate.rate === 'number' && opts.policyRate.date ? opts.policyRate : null;
+    const cashRateOf = (k) => {
+      const x = marks && marks[k];
+      if (x && typeof x.cashRate === 'number') return { rate: x.cashRate, fallback: false };
+      if (pol && k >= String(pol.date).slice(0, 7)) return { rate: pol.rate, fallback: false };
+      return { rate: typeof settings.riskFree === 'number' ? settings.riskFree : null, fallback: true };
+    };
     const out = [];
     const inc = settings.inception;
     const keys = Object.keys(marks || {}).filter((k) => k >= inc).sort();
@@ -262,7 +282,20 @@
       };
       row.opening = prev ? prev.value : settings.openingValue;
       row.retSimple = has && row.opening != null && row.opening + row.netFlow > 0 ? row.value / (row.opening + row.netFlow) - 1 : null;
-      row.ret = dietz && has && row.opening != null && row.opening + weightedFlow > 0 ? (row.value - row.opening - row.netFlow) / (row.opening + weightedFlow) : row.retSimple;
+      const useDietz = dietz && has && row.opening != null && row.opening + weightedFlow > 0;
+      row.ret = useDietz ? (row.value - row.opening - row.netFlow) / (row.opening + weightedFlow) : row.retSimple;
+      // trading costs of the span, and the return with them added back to the month-end value
+      const costRows = inM.filter((t) => t.cost != null);
+      row.tradingCost = sum(costRows.map((t) => t.cost));
+      row.tradedValue = sum(costRows.map((t) => t.p * t.q));
+      row.retGross = row.ret == null ? null : row.ret + (row.tradingCost ? row.tradingCost / (useDietz ? row.opening + weightedFlow : row.opening + row.netFlow) : 0);
+      // cash at the CBE policy rate over the same span (one rate per calendar month)
+      if (has) {
+        const rates = Array.from({ length: spans }, (_, k) => cashRateOf(addMonths(spanFrom, k)));
+        row.cashRate = rates[rates.length - 1].rate;
+        row.cashFallback = rates.some((x) => x.fallback);
+        row.cashRet = rates.every((x) => typeof x.rate === 'number') ? rates.reduce((a, x) => a * Math.pow(1 + x.rate, 1 / 12), 1) - 1 : null;
+      } else { row.cashRate = null; row.cashFallback = false; row.cashRet = null; }
       // the marks of the months inside the span (typed benchmark % and CPI are compounded across them)
       const spanMarks = spans > 1 ? Array.from({ length: spans }, (_, k) => (marks && marks[addMonths(spanFrom, k)]) || {}) : [mk];
       const compound = (key) => (spanMarks.every((x) => typeof x[key] === 'number') ? spanMarks.reduce((a, x) => a * (1 + x[key]), 1) - 1 : null);
@@ -328,10 +361,11 @@
     S.monthsElapsed = monthsBetween(range.from, range.to) + 1;
     S.gaps = inRange.filter((r) => r.gap).map((r) => r.month);
     const first = P[0], last = P[n - 1];
-    let cf = 1, cb = 1, cu = 1, cc = 1, peak = 1;
+    let cf = 1, cb = 1, cu = 1, cc = 1, peak = 1, ck = 1;
     P.forEach((r) => {
       cf *= 1 + r.ret; cb = cb != null && r.bench != null ? cb * (1 + r.bench) : null; cu *= 1 + (r.usdRet ?? 0); cc *= 1 + (r.cpiSpan ?? 0);
-      r.pCum = cf - 1; r.pBench = cb != null ? cb - 1 : null;
+      ck = ck != null && r.cashRet != null ? ck * (1 + r.cashRet) : null;
+      r.pCum = cf - 1; r.pBench = cb != null ? cb - 1 : null; r.pCash = ck != null ? ck - 1 : null;
       peak = Math.max(peak, cf); r.dd = cf / peak - 1;
     });
     S.rows = P;
@@ -386,6 +420,23 @@
     S.upCapture = bpOk && upM.length ? chainK(upM, 'ret') / chainK(upM, 'bench') : null;
     S.downCapture = bpOk && dnM.length ? chainK(dnM, 'ret') / chainK(dnM, 'bench') : null;
     S.upMonths = upM.length; S.downMonths = dnM.length;
+    // Jensen's alpha (annualized): the average monthly return beyond what beta × the benchmark's excess return explains
+    S.jensen = S.beta != null ? ((mean(bp.map((r) => r.ret)) - rfM) - S.beta * (mean(bp.map((r) => r.bench)) - rfM)) * 12 : null;
+    // cash benchmark (CBE policy rate); cashComplete false when any month used settings.riskFree instead of a known rate
+    S.cashTwr = ck != null ? ck - 1 : null;
+    S.aheadOfCash = S.cashTwr != null ? S.twr - S.cashTwr : null;
+    S.cashComplete = S.cashTwr != null && P.every((r) => !r.cashFallback);
+    S.cashFallbackMonths = P.filter((r) => r.cashFallback).map((r) => r.month);
+    // benchmark with dividends (estimate): the price index compounded with the index's estimated annual dividend yield
+    const dy = opts && typeof opts.benchDivYield === 'number' ? opts.benchDivYield : null;
+    S.benchDivYield = dy; S.benchDivYieldAsOf = dy != null ? (opts.benchDivYieldAsOf || null) : null;
+    S.benchTrEstimate = dy != null && S.benchTwr != null ? (1 + S.benchTwr) * Math.pow(1 + dy, S.monthsElapsed / 12) - 1 : null;
+    // trading costs over the period; tradedValue = p × q of the trades that carry a cost (stock buys and sells, funds excluded)
+    S.tradingCost = sum(P.map((r) => r.tradingCost || 0)); S.tradedValue = sum(P.map((r) => r.tradedValue || 0));
+    S.costPct = S.tradedValue ? S.tradingCost / S.tradedValue : null;
+    S.twrGross = P.every((r) => r.retGross != null) ? P.reduce((a, r) => a * (1 + r.retGross), 1) - 1 : null;
+    // daily-linked return (opts.daily = engine2's daily series); the headline uses it only when settings.returnMethod is 'daily'
+    setDaily(S, opts && opts.daily, range, settings);
     // Money-weighted
     const d0 = eom(addMonths(range.from, -1)), d1 = eom(range.to);
     const flows = [{ date: d0, amount: -S.opening }];
@@ -415,6 +466,50 @@
     S.bestTrade = closed.length ? Math.max(...closed.map((r) => r.total)) : 0;
     S.worstTrade = closed.length ? Math.min(...closed.map((r) => r.total)) : 0;
     return S;
+  }
+
+  // Daily-linked TWR over a range from engine2's daily series D (PA.daily): the product of the sessions' returns from the 1st of
+  // range.from to the last day of range.to — the same chain as PA.dailyStats(D, range).twr. from = the base session (the last one
+  // before the range, when there is one), to = the last session, n = sessions linked. Also exported as PA.dailyTwr.
+  function dailyTwr(D, range) {
+    if (!D || !D.rows || !range) return null;
+    const lo = `${range.from}-01`, hi = eom(range.to);
+    let base = null; D.rows.forEach((r) => { if (r.d < lo) base = r; });
+    const rows = D.rows.filter((r) => r.d >= lo && r.d <= hi && r.ret != null);
+    if (!rows.length) return null;
+    let cf = 1; rows.forEach((r) => { cf *= 1 + r.ret; });
+    return { twr: cf - 1, from: base ? base.d : rows[0].d, to: rows[rows.length - 1].d, n: rows.length };
+  }
+
+  // stats.twrDaily/From/To/N from the daily series (null without one); returnMethod = 'daily' only when settings.returnMethod is
+  // 'daily' and a daily figure exists, and headlineTwr is the figure the headline tile shows (monthly rows stay Modified Dietz).
+  // withDaily(R, D) attaches a daily series to a finished run (the page builds D from R.ledger after PE.run).
+  function setDaily(S, D, range, settings) {
+    const dt = D ? dailyTwr(D, range) : null;
+    S.twrDaily = dt ? dt.twr : null; S.twrDailyFrom = dt ? dt.from : null; S.twrDailyTo = dt ? dt.to : null; S.twrDailyN = dt ? dt.n : 0;
+    S.returnMethod = settings.returnMethod === 'daily' && S.twrDaily != null ? 'daily' : 'dietz';
+    S.headlineTwr = S.returnMethod === 'daily' ? S.twrDaily : S.twr;
+    return S;
+  }
+  function withDaily(R, D) { if (R && R.stats && R.stats.n) setDaily(R.stats, D, R.range, R.settings); return R; }
+
+  // Provenance of ledger rows by src: 'stmt-…' or 'statement' → statement; 'invoice-…' → invoice; 'manual' → manual; else typed.
+  const srcKind = (src) => {
+    const s = src == null ? '' : String(src);
+    return s === 'statement' || s.startsWith('stmt-') ? 'statement' : s.startsWith('invoice-') ? 'invoice' : s === 'manual' ? 'manual' : 'typed';
+  };
+  // byMonth[M] counts rows per kind; unverified = ids of rows with neither a statement nor an invoice source, dated in a month whose
+  // mark comes from a Thndr statement (the statement confirms the month's totals, not those rows individually).
+  function provenance(tx, marks) {
+    const byMonth = {}, unverified = [];
+    (tx || []).forEach((t) => {
+      if (!t.d) return;
+      const M = monthOf(t.d), k = srcKind(t.src);
+      const b = byMonth[M] || (byMonth[M] = { statement: 0, invoice: 0, typed: 0, manual: 0, total: 0 });
+      b[k]++; b.total++;
+      if (k !== 'statement' && k !== 'invoice' && t.id != null && marks && marks[M] && marks[M].source === 'statement') unverified.push(t.id);
+    });
+    return { byMonth, unverified };
   }
 
   function sectors(pos) {
@@ -480,7 +575,9 @@
   }
   const fmtNum = (x) => (x == null ? '—' : x.toLocaleString('en-US', { maximumFractionDigits: 2, minimumFractionDigits: 2 }));
 
-  // One call that runs the whole model. opts: {today, live, fallback, flowTiming: 'dietz' | 'start', sameDay: 'type' | 'ledger', closedTrades: 'trip' | 'name'}
+  // One call that runs the whole model. opts: {today, live, fallback, flowTiming: 'dietz' | 'start', sameDay: 'type' | 'ledger', closedTrades: 'trip' | 'name',
+  // daily: engine2's daily series (PA.daily) — gives stats.twrDaily; without it twrDaily is null}.
+  // data.bench (bench/egx30, optional) supplies divYield; data.market.rates.policy is the current CBE rate for months without a cashRate.
   function run(data, sel, opts) {
     opts = opts || {};
     const today = opts.today || cairoToday();
@@ -511,17 +608,21 @@
         };
       }
     }
-    const months = monthly(settings, data.marks || {}, ledger, live, { flowTiming: opts.flowTiming });
+    const policyRate = market && market.rates && market.rates.policy ? market.rates.policy : null;
+    const months = monthly(settings, data.marks || {}, ledger, live, { flowTiming: opts.flowTiming, policyRate });
     const range = periodRange(sel, settings, months);
     const pos = positions(ledger, assets, market, settings, today, range, opts.fallback);
-    const stats = periodStats(months, range, ledger, settings, pos, { closedTrades: opts.closedTrades });
+    const bench = data.bench || null;
+    const stats = periodStats(months, range, ledger, settings, pos, { closedTrades: opts.closedTrades, daily: opts.daily || null,
+      benchDivYield: bench && typeof bench.divYield === 'number' ? bench.divYield : null, benchDivYieldAsOf: bench ? bench.divYieldAsOf || null : null });
     return {
       today, settings, ledger, months, range, pos, stats, ledgerCash, ledgerCashAt, liveCash, live, flowTiming: opts.flowTiming || 'dietz', sameDay: opts.sameDay || 'type', closedTrades: opts.closedTrades || 'trip',
+      provenance: provenance(tx, data.marks || {}),
       sectors: sectors(pos), conc: concentration(pos, settings),
       checks: checks({ tx, ledger, months, range, pos, settings, today, ledgerCash: ledgerCashAt, sameDay: opts.sameDay }),
     };
   }
 
-  const api = { run, runLedger, positions, monthly, periodRange, periodStats, sectors, xirr, eom, addMonths, monthsBetween, fmtMonth, monthOf, dayNum, cairoToday, effectivePrice, MIN_RATIO_N, MIN_FULL_N, TYPES, PERIOD_TYPES, DAY_ORDER, CASH_LIKE, sortLedger };
+  const api = { run, runLedger, tradeCostRaw, dailyTwr, withDaily, provenance, srcKind, positions, monthly, periodRange, periodStats, sectors, xirr, eom, addMonths, monthsBetween, fmtMonth, monthOf, dayNum, cairoToday, effectivePrice, MIN_RATIO_N, MIN_FULL_N, TYPES, PERIOD_TYPES, DAY_ORDER, CASH_LIKE, sortLedger };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.PE = api;
 })(this);

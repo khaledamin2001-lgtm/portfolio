@@ -119,12 +119,16 @@
   // month-end Excel workbooks, published encrypted under p/<id>/exports/ (exports/index.json lists them)
   let EXPORTS = null;
   window.pdExports = async () => { if (EXPORTS) return EXPORTS; try { const r = await fetch(base() + 'exports/index.json?t=' + Date.now(), { cache: 'no-store' }); EXPORTS = r.ok ? await r.json() : []; } catch (e) { EXPORTS = []; } return EXPORTS; };
-  window.pdDownloadExport = async (month) => {
+  // kind 'xlsx' (default): the Excel workbook (entry.file); 'pdf': the PDF factsheet (entry.pdf), both encrypted the same way
+  const FILE_KINDS = { xlsx: { key: 'file', what: 'workbook', type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }, pdf: { key: 'pdf', what: 'PDF factsheet', type: 'application/pdf' } };
+  window.pdDownloadExport = async (month, kind) => {
     if (!PK8) throw new Error('The portfolio is locked. Unlock it first.');
-    const list = await window.pdExports(); const x = list.find((e) => e.month === month); if (!x) throw new Error('No workbook published for ' + month);
-    const r = await fetch(base() + x.file + '?t=' + Date.now(), { cache: 'no-store' }); if (!r.ok) throw new Error('Could not download the workbook (' + r.status + ')');
+    const k = FILE_KINDS[kind || 'xlsx']; if (!k) throw new Error('Unknown file kind ' + kind);
+    const list = await window.pdExports(); const x = list.find((e) => e.month === month); if (!x || !x[k.key]) throw new Error('No ' + k.what + ' published for ' + month);
+    const r = await fetch(base() + x[k.key] + '?t=' + Date.now(), { cache: 'no-store' }); if (!r.ok) throw new Error('Could not download the ' + k.what + ' (' + r.status + ')');
     const e = await r.json(); const bytes = await unseal(e, 'portfolio-file-v1');
-    await downloads.save({ filename: e.name || x.name, data: new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }) });
+    const fallback = kind === 'pdf' ? String(x.pdf).split('/').pop().replace(/\.enc\.json$/, '') : x.name;
+    await downloads.save({ filename: e.name || fallback, data: new Blob([bytes], { type: k.type }) });
   };
 
   /* ---------- read-only database for the page ---------- */
@@ -161,7 +165,8 @@
     const items = (DOCS['portfolio/assets'] || {}).items || {};
     const syms = [...new Set(Object.values(items).map((a) => (a.symbol || '').toUpperCase()).filter((s) => s && s !== 'SAVINGS' && s !== 'THNDRGOLD'))].sort();
     const idx = ['EGX30CAPPED', 'EGX30', 'EGX70EWI', 'EGX100EWI'], today = cairoDay(Date.now() / 1000);
-    const cols = ['close', 'change', 'time', 'close[1]|1M', 'description', 'dividends_yield_current', 'ex_dividend_date_upcoming', 'dividend_amount_upcoming', 'ex_dividend_date_recent', 'dividend_amount_recent'];
+    const cols = ['close', 'change', 'time', 'close[1]|1M', 'description', 'dividends_yield_current', 'ex_dividend_date_upcoming', 'dividend_amount_upcoming', 'ex_dividend_date_recent', 'dividend_amount_recent',
+      'price_earnings_ttm', 'price_book_fq', 'return_on_equity', 'market_cap_basic', 'price_52_week_high', 'price_52_week_low'];   // valuation for the watchlist
     // every stock listed on the EGX in one call, plus the indices, plus USD/EGP and gold. Only the stock scan is required: a failed
     // index or FX/gold call keeps the saved values (each carries its own date), and asOf is the time the stock scan came back.
     let scanAt = null;
@@ -175,7 +180,9 @@
     if (glR.status !== 'fulfilled') console.warn('USD/EGP and gold unavailable, keeping the saved ones', glR.reason);
     const prev = DOCS['market/latest'] || {}, quotes = {}, index = {}, missing = [], carried = [];
     const put = (s, d) => { quotes[s] = { price: d[0], chg: +(d[1] || 0).toFixed(4), date: d[2] ? cairoDay(d[2]) : today, prevMonthClose: d[3], name: d[4], dy: d[5] == null ? null : +d[5].toFixed(4),
-      exDate: d[6] ? cairoDay(d[6]) : null, divUp: d[7] ?? null, exRecent: d[8] ? cairoDay(d[8]) : null, divRecent: d[9] ?? null }; };
+      exDate: d[6] ? cairoDay(d[6]) : null, divUp: d[7] ?? null, exRecent: d[8] ? cairoDay(d[8]) : null, divRecent: d[9] ?? null,
+      pe: num(d[10], 2), pb: num(d[11], 2), roe: num(d[12], 2), mcap: d[13] == null ? null : Math.round(d[13]), hi52: d[14] ?? null, lo52: d[15] ?? null }; };
+    const num = (x, dp) => (x == null || !isFinite(x) ? null : +(+x).toFixed(dp));
     for (const [t, d] of Object.entries(all)) { if (d && d[0] != null) put(t.replace(/^EGX:/, ''), d); }
     for (const s of syms) { if (!quotes[s]) { if (prev.quotes && prev.quotes[s]) quotes[s] = prev.quotes[s]; else missing.push(s); } }
     for (const s of idx) { const d = eg['EGX:' + s]; if (d && d[0] != null) index[s] = { close: d[0], chg: +(d[1] || 0).toFixed(4), date: d[2] ? cairoDay(d[2]) : today, prevMonthClose: d[3] };
@@ -183,7 +190,8 @@
     if (!Object.keys(quotes).length || !index.EGX30CAPPED) throw new Error('TradingView returned no EGX prices');
     const fx = gl['FX_IDC:USDEGP'], xau = gl['OANDA:XAUUSD'];
     if (!fx) carried.push('USD/EGP'); if (!(fx && xau)) carried.push('gold');
-    LIVE = { asOf: scanAt || new Date().toISOString(), source: 'TradingView scanner (15-min delayed), fetched by this browser', quotes, index,
+    // everything else the market job wrote (rates, …) is kept; jobAsOf remembers when the job itself last ran (Settings → Jobs)
+    LIVE = { ...prev, jobAsOf: prev.jobAsOf || prev.asOf || null, asOf: scanAt || new Date().toISOString(), source: 'TradingView scanner (15-min delayed), fetched by this browser', quotes, index,
       fx: fx ? { USDEGP: { price: fx[0], chg: +(fx[1] || 0).toFixed(4), prevMonthClose: fx[2], date: today } } : prev.fx || {},
       gold: fx && xau ? { XAUUSD: xau[0], gram24kEgp: +(xau[0] * fx[0] / 31.1035).toFixed(2), date: today } : prev.gold || {}, missing, carried };
     liveAt = Date.now();
@@ -215,15 +223,32 @@
     catch (e) { console.error(e); toast && toast('Could not reach TradingView: ' + (e.message || e) + '. Showing the last saved prices.', 'error'); }
     finally { const b = document.getElementById('refresh-prices'); if (b) { b.disabled = false; b.textContent = 'Refresh now'; } }
   };
+  // Site data freshness: the site job publishes Sunday to Thursday at 3:38 PM Cairo. Stale = older than 26 hours on an EGX
+  // weekday, older than 74 hours otherwise (Friday, Saturday, and Sunday until the day's job has had time to run at 4 PM).
+  const FRESH_H = { weekday: 26, other: 74 };
+  function dataStale(iso, now = Date.now()) {
+    const t = Date.parse(iso); if (!isFinite(t)) return true;
+    const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'Africa/Cairo', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(now)).map((x) => [x.type, x.value]));
+    const hm = (+p.hour % 24) * 60 + +p.minute, weekday = ['Mon', 'Tue', 'Wed', 'Thu'].includes(p.weekday) || (p.weekday === 'Sun' && hm >= 16 * 60);
+    return (now - t) / 36e5 > (weekday ? FRESH_H.weekday : FRESH_H.other);
+  }
+  window.pdDataAt = () => DATA_AT; window.pdDataStale = dataStale;
+  function footerFresh() {
+    const t = document.getElementById('pd-updated'); if (!t || !DATA_AT) return;
+    const d = new Date(DATA_AT), p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'Africa/Cairo', day: 'numeric', month: 'short', year: 'numeric' }).formatToParts(d).map((x) => [x.type, x.value]));
+    const stale = dataStale(DATA_AT);
+    t.textContent = `Ledger data as of ${p.day} ${p.month} ${p.year}, ${cairoTime(DATA_AT)} Cairo${stale ? ' · stale' : ''}`;
+    t.classList.toggle('stale', stale); t.dataset.state = stale ? 'stale' : 'fresh';
+    t.title = stale ? 'The daily site update has not arrived when expected; the figures may be out of date.' : '';
+  }
   function publish(bundle) {
     DOCS = bundle.docs || {}; DATA_AT = bundle.exportedAt; OPENED = CUR.id;
-    if (LIVE && Date.parse(LIVE.asOf) > Date.parse((DOCS['market/latest'] || {}).asOf || 0)) DOCS['market/latest'] = LIVE;
+    const jm = DOCS['market/latest'] || {};   // the market job's own document in this bundle: its asOf is the job's heartbeat
+    if (LIVE && Date.parse(LIVE.asOf) > Date.parse(jm.asOf || 0)) DOCS['market/latest'] = { ...jm, ...LIVE, jobAsOf: jm.asOf || LIVE.jobAsOf };
     listeners.forEach(fire);
     document.title = CUR.name + ' · Stock Market Portfolio Tracker';
     whenReady(() => {   // the bottom bar is the last thing in the document; the data can be ready before it is parsed
-      const t = document.getElementById('pd-updated');
-      if (t && DATA_AT) { const d = new Date(DATA_AT), p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'Africa/Cairo', day: 'numeric', month: 'short', year: 'numeric' }).formatToParts(d).map((x) => [x.type, x.value]));
-        t.textContent = `Ledger data as of ${p.day} ${p.month} ${p.year}, ${cairoTime(DATA_AT)} Cairo`; }
+      footerFresh();
       const w = document.getElementById('pd-who'); if (w) w.textContent = CUR.name;
     });
   }
@@ -231,6 +256,7 @@
   // Lock means locked: drop the key and every decrypted document, tell the page (its state is rebuilt from the snapshots it
   // receives, so it renders its empty state) and blank whatever it had drawn. LIVE (public market prices) is kept for reuse.
   function blank() {
+    const u = document.getElementById('pd-updated'); if (u) { u.classList.remove('stale'); delete u.dataset.state; u.title = ''; }
     for (const id of ['main', 'tape', 'feed', 'period', 'pf-name-text', 'pf-menu', 'pd-updated', 'pd-who']) { const el = document.getElementById(id); if (el) el.textContent = ''; }
     const t = document.getElementById('toast'); if (t) { t.hidden = true; t.textContent = ''; }
   }
@@ -472,12 +498,12 @@
   // while the page is visible and unlocked: the data every 30 minutes, live prices every 10 minutes during the session
   function tick() {
     if (document.hidden || !PK8 || !lockEl().hidden) return;
-    const now = Date.now();
+    const now = Date.now(); footerFresh();
     if (now - Math.max(lastFetch, fetchTry) > REFRESH_MS) refresh();
     if (egxOpen(now) && now - Math.max(liveAt, liveTry) > LIVE_MS) updateLive().catch((e) => console.warn('live prices unavailable', e));
   }
   setInterval(tick, 60e3);
-  window.pdTick = tick; window.pdEgxOpen = egxOpen;   // for tests
+  window.pdTick = tick; window.pdEgxOpen = egxOpen; window.pdFooterFresh = footerFresh;   // for tests
   (async () => {
     if (!window.crypto || !crypto.subtle || !window.DecompressionStream) return screen('<h1>Browser too old</h1><p>Update your browser (Safari 16.4+, Chrome 80+) to open the portfolio.</p>');
     try { PORTFOLIOS = await (await fetch('portfolios.json', { cache: 'no-store' })).json(); } catch (e) { return screen('<h1>Offline</h1><p>The portfolio could not load. Check your connection and reload.</p>'); }

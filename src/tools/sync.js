@@ -38,7 +38,18 @@
    is stamped by the routine); sync_state.json carries toolSha = sha256 (12 hex) of the tool files that ran.
    summary.alert is null, or — when a month's monthly statement newly became overdue (once per month, from the 10th
    of the next month; state.alerts[M]) — every month still missing one, e.g. ['2026-06', '2026-09'] (missingStatements).
-   The email subject starts with settings.name and links the page for settings.portfolioId (PAGE_URLS) and the site. */
+   The email subject starts with settings.name and links the page for settings.portfolioId (PAGE_URLS) and the site.
+   Heads-up digest (digest()): after the emails, from the data dir as it stands after this run — (exdiv) a held stock
+   whose market/latest quote goes ex-dividend within 7 days; (target/stop) a held stock whose latest price is at or past
+   its asset target (≥) or stop (≤); (drawdown) the portfolio's return index (deposits and withdrawals excluded) more
+   than 10% below its highest daily (else month-end) point of the last 12 months, the live month valued with
+   ./engine.js + ./engine2.js; (statement) every month in missingStatements(). Each item has a stable key
+   ('exdiv:COMI:2026-10-02', 'target:COMI:125', 'drawdown:2026-03-15:10', 'statement:2026-08'). sync/state.digest =
+   {at, items} (every current item), state.alertsSent = {key: date} (emailed once): a new exdiv/target/stop/drawdown
+   item makes the email notify with a "Heads-up" section at the top of its text; statement items keep their own
+   "Monthly statements still missing" line (state.alerts) and are stamped in alertsSent when that line goes out.
+   state.heartbeat.sync = this run's time. A digest check that fails (e.g. no engine) is skipped and listed in
+   summary.digest.errors; it never stops the sync. */
 'use strict';
 const fs = require('fs'), path = require('path'), crypto = require('crypto');
 const TS = require('./statement.js');
@@ -63,7 +74,7 @@ const SITE_URL = 'https://khaledamin2001-lgtm.github.io/portfolio/';
 
 // ---------- current state ----------
 // Loaded from --data by run(); tests inject their own through _reset().
-let tx = [], marks = {}, assets = {}, settings = {}, imports = {}, bench = { members: [] }, state = { seen: {}, alerts: {} };
+let tx = [], marks = {}, assets = {}, settings = {}, imports = {}, bench = { members: [] }, state = { seen: {}, alerts: {} }, market = null, history = {};
 const freshChanged = () => ({ ledgerYears: new Set(), marks: false, settings: false, newAssets: {}, imports: {} });
 let changed = freshChanged();
 const log = [];
@@ -80,11 +91,14 @@ function loadState() {
   bench = opt(D('bench', 'egx30.json'), { members: [] });
   state = opt(D('sync', 'state.json'), { seen: {}, alerts: {} });
   state.seen = state.seen || {}; state.alerts = state.alerts || {};
+  market = opt(D('market', 'latest.json'), null);
+  history = fs.existsSync(D('history')) ? Object.fromEntries(fs.readdirSync(D('history')).filter((f) => /^\d{4}-\d{2}\.json$/.test(f)).map((f) => [f.slice(0, 7), J(D('history', f))])) : {};
   changed = freshChanged(); log.length = 0; consumed.clear();
 }
 function _reset(txRows, assetsObj, settingsObj, extra) {
   tx = txRows || []; assets = assetsObj || {}; settings = settingsObj || {};
   marks = (extra && extra.marks) || {}; imports = (extra && extra.imports) || {}; bench = (extra && extra.bench) || { members: [] };
+  market = (extra && extra.market) || null; history = (extra && extra.history) || {};
   state = { seen: {}, alerts: {} }; changed = freshChanged(); log.length = 0; consumed.clear();
 }
 
@@ -364,6 +378,14 @@ async function run() {
   const missing = missingStatements(today, settings, imports, marks);
   let alert = null;
   if (missing.some((m) => !state.alerts[m])) { alert = missing; missing.forEach((m) => { if (!state.alerts[m]) state.alerts[m] = today; }); }
+  // heads-up digest: every current item goes to state.digest; items never emailed before go into this email
+  const dg = digest({ today, missing });
+  const sent = state.alertsSent = pruneSent(state.alertsSent || {}, today);
+  const heads = dg.items.filter((it) => it.kind !== 'statement' && !sent[it.key]);
+  heads.forEach((it) => { sent[it.key] = today; });
+  dg.items.filter((it) => it.kind === 'statement' && !sent[it.key] && state.alerts[it.key.slice(10)]).forEach((it) => { sent[it.key] = state.alerts[it.key.slice(10)]; });
+  state.digest = { at: new Date().toISOString(), items: dg.items };
+  state.heartbeat = { ...(state.heartbeat || {}), sync: state.digest.at };
   state.lastRun = new Date().toISOString();
   state.toolSha = toolSha();
 
@@ -381,6 +403,7 @@ async function run() {
   const holds = processed.filter((e) => e.status === 'hold');
   const applied = processed.filter((e) => e.status === 'applied');
   const lines = [];
+  if (heads.length) lines.push('Heads-up:', ...heads.map((it) => '  • ' + it.text), '');
   applied.forEach((e) => { lines.push(`${e.subject}${e.period ? ` (${e.period})` : ''}:`); e.changes.forEach((c) => lines.push('  • ' + c)); e.notes.forEach((c) => lines.push('  • ' + c)); });
   holds.forEach((e) => { lines.push(`NEEDS REVIEW — ${e.subject}${e.period ? ` (${e.period})` : ''}: nothing from this email was saved.`); e.reasons.forEach((c) => lines.push('  • ' + c)); if (e.proposed && e.proposed.length) { lines.push('  Proposed changes that were not applied:'); e.proposed.forEach((c) => lines.push('    – ' + c)); } });
   if (alert) lines.push(`Monthly statement${alert.length > 1 ? 's' : ''} still missing: ${alert.map(lbl).join(', ')} (checked on ${today}).`);
@@ -391,15 +414,16 @@ async function run() {
     processed: processed.length, applied: applied.length, held: holds.length, ignored: log.length - processed.length,
     monthlyPosted, monthlyPending: monthlyPending(imports, monthlyPosted), alert, toolSha: state.toolSha,
     writes: fs.readdirSync(path.join(out, 'write')),
-    email: applied.length || holds.length || alert ? {
-      subject: holds.length ? `${who}: ${holds.length} Thndr email${holds.length > 1 ? 's' : ''} need${holds.length > 1 ? '' : 's'} your review` : applied.some((e) => e.monthly) ? `${who}: ${applied.filter((e) => e.monthly).map((e) => lbl(e.monthly)).join(', ')} statement posted` : alert && !applied.length ? `${who}: ${alert.map(lbl).join(', ')} Thndr statement${alert.length > 1 ? 's have' : ' has'} not arrived` : `${who}: updated from Thndr`,
-      text: lines.join('\n') + '\n\n' + [PAGE_URLS[settings.portfolioId], SITE_URL].filter(Boolean).join(' · '),
-      notify: holds.length > 0 || !!alert || applied.some((e) => e.monthly || e.kind !== 'invoice'),
+    email: applied.length || holds.length || alert || heads.length ? {
+      subject: holds.length ? `${who}: ${holds.length} Thndr email${holds.length > 1 ? 's' : ''} need${holds.length > 1 ? '' : 's'} your review` : applied.some((e) => e.monthly) ? `${who}: ${applied.filter((e) => e.monthly).map((e) => lbl(e.monthly)).join(', ')} statement posted` : alert && !applied.length ? `${who}: ${alert.map(lbl).join(', ')} Thndr statement${alert.length > 1 ? 's have' : ' has'} not arrived` : applied.length ? `${who}: updated from Thndr` : `${who}: heads-up — ${heads.length > 1 ? `${heads.length} things to look at` : heads[0].text}`,
+      text: lines.join('\n').replace(/\n+$/, '') + '\n\n' + [PAGE_URLS[settings.portfolioId], SITE_URL].filter(Boolean).join(' · '),
+      notify: holds.length > 0 || !!alert || heads.length > 0 || applied.some((e) => e.monthly || e.kind !== 'invoice'),
     } : null,
+    digest: { items: dg.items, emailed: heads.map((it) => it.key), drawdown: dg.drawdown, errors: dg.errors },
     log: log.map(({ removedRows, ...e }) => e),
   };
   fs.writeFileSync(path.join(out, 'summary.json'), JSON.stringify(summary, null, 1));
-  console.log(JSON.stringify({ status: summary.status, processed: summary.processed, applied: summary.applied, held: summary.held, monthlyPosted: summary.monthlyPosted, monthlyPending: summary.monthlyPending, alert, writes: summary.writes, toolSha: summary.toolSha }));
+  console.log(JSON.stringify({ status: summary.status, processed: summary.processed, applied: summary.applied, held: summary.held, monthlyPosted: summary.monthlyPosted, monthlyPending: summary.monthlyPending, alert, headsUp: heads.map((it) => it.key), writes: summary.writes, toolSha: summary.toolSha }));
 }
 // Full months whose month-end reports are still owed: the routine stamps imports/<M>.reports.factsheetSentAt and
 // .workbooksPublishedAt after sending / publishing; a month posted on or after 2026-09-28 (when the stamp was
@@ -431,10 +455,82 @@ function missingStatements(todayStr, set, imp, mk) {
   }
   return out;
 }
+// ---------- heads-up digest ----------
+const EXDIV_DAYS = 7, DRAWDOWN = 0.10;
+const addDays = (d, k) => new Date(Date.parse(d + 'T00:00:00Z') + k * 864e5).toISOString().slice(0, 10);
+const dayLbl = (d) => `${+d.slice(8, 10)} ${MONTH_NAMES[+d.slice(5, 7) - 1]}`;
+const dayLblY = (d) => `${dayLbl(d)} ${d.slice(0, 4)}`;
+const pctTxt = (x) => `${(x * 100).toFixed(1)}%`;
+// alertsSent keys older than 400 days can never come back (their dates / 12-month peaks are long gone)
+const pruneSent = (o, t) => Object.fromEntries(Object.entries(o).filter(([, d]) => !(typeof d === 'string' && d < addDays(t, -400))));
+// shares held today per stock (funds and cash-like rows excluded), by ledger name
+function heldStocks(rows, items) {
+  const sh = {};
+  rows.forEach((t) => { if (!t.a || t.acc === 'MF' || !(t.t === 'Buy' || t.t === 'Sell' || t.t === 'Bonus')) return; sh[t.a] = (sh[t.a] || 0) + (t.t === 'Sell' ? -1 : 1) * (t.q || 0); });
+  const byName = {}; Object.values(items || {}).forEach((a) => { if (a && a.name) byName[a.name] = a; });
+  return Object.entries(sh).filter(([, q]) => q > 0.5).map(([name, q]) => ({ name, q, asset: byName[name] || {} }))
+    .filter((h) => !h.asset.fund && h.asset.symbol).map((h) => ({ ...h, sym: h.asset.symbol.toUpperCase() }));
+}
+// Portfolio return index over the last 12 months (daily from history when there is any, else month-end), with the live
+// value (engine R.live: broker cash + positions at the latest prices) as the last point. Flow-adjusted, so a withdrawal
+// is never mistaken for a loss. Returns { dd, peak: {d, idx}, now: {d, value}, points, basis } or null (also when there is
+// no market/latest: without today's prices there is no live value to compare).
+function drawdownCheck(o) {
+  if (!o.settings || !o.settings.inception || !o.market || !o.market.quotes) return null;
+  const PE = require(path.join(__dirname, 'engine.js')), PA = require(path.join(__dirname, 'engine2.js'));
+  const pb = PA.priceBook(o.history || {});
+  const pricer = PA.makePricer(o.assets, PE.runLedger(o.tx), pb);
+  const fallback = (name) => { const p = pricer(name, o.today); return p ? { p: p.p, d: pb.last } : null; };
+  const R = PE.run({ settings: o.settings, marks: o.marks, assets: o.assets, tx: o.tx, market: o.market }, { type: 'Since Inception' }, { today: o.today, fallback });
+  const from = addDays(o.today, -365), pts = [];
+  const Dly = pb.days.length ? PA.daily(o.settings, R.ledger, o.assets, pb, o.marks, o.today) : null;
+  const drows = Dly ? Dly.rows.filter((r) => r.d >= from && r.d <= o.today) : [];
+  let basis = 'daily';
+  if (drows.length) drows.forEach((r, i) => pts.push({ d: r.d, value: r.value, idx: i === 0 ? 1 : pts[i - 1].idx * (1 + (r.ret == null ? 0 : r.ret)) }));
+  else {
+    basis = 'month-end';
+    R.months.filter((r) => r.has && PE.eom(r.month) >= from && r.month < PE.monthOf(o.today)).forEach((r, i) => pts.push({ d: PE.eom(r.month), value: r.value, idx: i === 0 ? 1 : pts[i - 1].idx * (1 + (r.ret == null ? 0 : r.ret)) }));
+  }
+  if (R.live && pts.length) {
+    const last = pts[pts.length - 1], V = R.live.cash + R.live.securities;
+    const flow = o.tx.filter((t) => (t.t === 'Deposit' || t.t === 'Withdrawal') && t.d > last.d && t.d <= o.today).reduce((s, t) => s + (t.amt || 0), 0);
+    if (last.d < o.today && last.value + flow > 0) pts.push({ d: o.today, value: V, idx: last.idx * V / (last.value + flow), live: true });
+  }
+  if (pts.length < 2) return null;
+  const peak = pts.reduce((a, p) => (p.idx > a.idx ? p : a)), now = pts[pts.length - 1];
+  return { dd: now.idx / peak.idx - 1, peak: { d: peak.d, idx: peak.idx }, now: { d: now.d, value: now.value, live: !!now.live }, points: pts.length, basis };
+}
+// The heads-up list for this portfolio. ctx overrides the module state (tests); every check is independent.
+function digest(ctx) {
+  const o = { today, tx, assets, settings, marks, market, history, missing: [], ...(ctx || {}) };
+  const items = [], errors = [];
+  let drawdown = null;
+  const quotes = (o.market && o.market.quotes) || {};
+  let held = [];
+  try { held = heldStocks(o.tx, o.assets); } catch (e) { errors.push('holdings: ' + (e.message || e)); }
+  held.forEach((h) => {
+    const q = quotes[h.sym]; if (!q) return;
+    if (q.exDate && q.exDate >= o.today && q.exDate <= addDays(o.today, EXDIV_DAYS))
+      items.push({ kind: 'exdiv', key: `exdiv:${h.sym}:${q.exDate}`, text: `Ex-dividend on ${dayLbl(q.exDate)}: ${h.sym} ${q.divUp != null ? `${fmt(q.divUp)} EGP a share` : '(amount not published yet)'}` });
+    const px = Number(q.price), tg = Number(h.asset.target), sp = Number(h.asset.stop);
+    if (!(px > 0)) return;
+    if (h.asset.target != null && h.asset.target !== '' && tg > 0 && px >= tg) items.push({ kind: 'target', key: `target:${h.sym}:${tg}`, text: `${h.sym} reached its target: ${fmt(px)} vs target ${fmt(tg)}` });
+    if (h.asset.stop != null && h.asset.stop !== '' && sp > 0 && px <= sp) items.push({ kind: 'stop', key: `stop:${h.sym}:${sp}`, text: `${h.sym} is at or below its stop: ${fmt(px)} vs stop ${fmt(sp)}` });
+  });
+  try {
+    drawdown = drawdownCheck(o);
+    if (drawdown && drawdown.dd < -DRAWDOWN) {
+      const band = Math.floor(-drawdown.dd * 10) * 10;
+      items.push({ kind: 'drawdown', key: `drawdown:${drawdown.peak.d}:${band}`, text: `Portfolio down ${pctTxt(-drawdown.dd)} from its 12-month high on ${dayLblY(drawdown.peak.d)} (returns only, deposits and withdrawals left out); value now ${fmt(drawdown.now.value)} EGP` });
+    }
+  } catch (e) { errors.push('drawdown: ' + (e.message || e)); }
+  (o.missing || []).forEach((m) => items.push({ kind: 'statement', key: `statement:${m}`, text: `Monthly statement for ${lbl(m)} has not arrived` }));
+  return { items, drawdown, errors };
+}
 // sha256 (first 12 hex) of the tool files that ran, so every write records which code produced it
 function toolSha() {
   const sha = (f) => { const p = path.join(__dirname, f); return fs.existsSync(p) ? crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex').slice(0, 12) : null; };
   return { sync: sha('sync.js'), statement: sha('statement.js'), engine: sha('engine.js'), engine2: sha('engine2.js'), at: new Date().toISOString() };
 }
 if (require.main === module) run().catch((e) => { console.error(e); process.exit(1); });
-module.exports = { parseInvoices, applyInvoice, applyInvoiceEmail, applyStatement, monthlyPending, missingStatements, lbl, toolSha, run, _state: () => ({ tx, assets, changed, settings, marks, log }), _reset };
+module.exports = { parseInvoices, applyInvoice, applyInvoiceEmail, applyStatement, monthlyPending, missingStatements, digest, drawdownCheck, lbl, toolSha, run, _state: () => ({ tx, assets, changed, settings, marks, log }), _reset };

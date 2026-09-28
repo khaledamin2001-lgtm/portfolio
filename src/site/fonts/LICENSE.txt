@@ -1,0 +1,6 @@
+Self-hosted web fonts (WOFF2 subsets downloaded from Google Fonts):
+- IBM Plex Mono  Copyright IBM Corp.
+- Public Sans    Copyright the Public Sans project authors (USWDS)
+- Spectral       Copyright Production Type
+All three are licensed under the SIL Open Font License, Version 1.1:
+https://openfontlicense.org/open-font-license-official-text/

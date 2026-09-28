@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 /* Render a monthly factsheet with the page's own code.
-   node factsheet.js --page <published page html> --data <ArtifactData export dir> [--overlay <plan dir>/write] --month YYYY-MM --out <file.html>
-   The page runs headless with its database replaced by the exported documents (plus any planned writes). */
+   node factsheet.js --page <published page html> --data <ArtifactData export dir> [--overlay <plan dir>/write] --month YYYY-MM --out <file.html> [--pdf <file.pdf>]
+   The page runs headless with its database replaced by the exported documents (plus any planned writes).
+   --out writes the email HTML; --pdf also prints that same HTML to an A4 PDF (Playwright page.pdf, backgrounds on,
+   12 mm margins). At least one of the two is required. */
 'use strict';
 const fs = require('fs'), path = require('path');
 const args = Object.fromEntries(process.argv.slice(2).reduce((a, x, i, arr) => (x.startsWith('--') ? a.concat([[x.slice(2), arr[i + 1]]]) : a), []));
@@ -28,16 +30,31 @@ let page = fs.readFileSync(args.page, 'utf8');
 page = page.replace(/^<!doctype html><html><head>[\s\S]*?<\/head><body>/i, '');
 if (!page.includes('async function emailFactsheet(m, quiet){')) throw new Error('page layout changed: factsheet hook not found');
 page = page.replace('async function emailFactsheet(m, quiet){', 'window.__fs=(m)=>factsheetHTML(factsheetData(m));\nasync function emailFactsheet(m, quiet){');
-const tmp = path.join(path.dirname(args.out), '_factsheet_page.html');
+if (!args.out && !args.pdf) throw new Error('give --out <file.html> and/or --pdf <file.pdf>');
+const tmp = path.join(path.dirname(args.out || args.pdf), '_factsheet_page.html');
 fs.writeFileSync(tmp, '<!doctype html><html><head><meta charset="utf-8"></head><body>' + mock + page + '</body></html>');
 (async () => {
   const b = await playwright.chromium.launch(); const p = await b.newPage();
   const errs = []; p.on('pageerror', (e) => errs.push(e.message));
   await p.goto('file://' + path.resolve(tmp)); await p.waitForFunction(() => window.__fs && document.querySelector('#main section'), null, { timeout: 30000 });
   const html = await p.evaluate((m) => window.__fs(m), args.month);
-  await b.close();
-  if (errs.length) throw new Error('page errors: ' + errs.join('; '));
+  if (errs.length) { await b.close(); throw new Error('page errors: ' + errs.join('; ')); }
   const doc = `<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:16px;background:#EDF2EF">${html}</body></html>`.replace(/>\s+</g, '><');
-  fs.writeFileSync(args.out, doc);
-  console.log(JSON.stringify({ ok: true, out: args.out, bytes: doc.length }));
+  const res = { ok: true };
+  if (args.out) { fs.writeFileSync(args.out, doc); Object.assign(res, { out: args.out, bytes: doc.length }); }
+  if (args.pdf) {
+    // the same HTML, printed: the email's 16px page padding and grey page background are dropped (the PDF has its own
+    // 12 mm white margins), colours kept, table rows never split across pages.
+    // The email is laid out for up to 760px but A4 minus margins is 703 CSS px: measure the content at a wide viewport and
+    // scale the print down so it keeps the email's layout (no table spilling past the card).
+    const q = await b.newPage({ viewport: { width: 1000, height: 1400 } });
+    await q.setContent(doc.replace('<head>', '<head><style>tr,img{break-inside:avoid}</style>').replace(/<body style="margin:0;padding:16px;background:#[0-9A-Fa-f]{3,6}/, '<body style="margin:0;padding:0;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact'), { waitUntil: 'load' });
+    const width = await q.evaluate(() => { const c = document.body.firstElementChild, l = c.getBoundingClientRect().left; return Math.max(c.offsetWidth, ...[...c.querySelectorAll('*')].map((e) => e.getBoundingClientRect().right - l)); });
+    const printable = (210 - 24) / 25.4 * 96, scale = Math.max(0.5, Math.min(1, Math.floor(printable / width * 1000) / 1000));
+    const pdf = await q.pdf({ path: args.pdf, format: 'A4', printBackground: true, scale, margin: { top: '12mm', right: '12mm', bottom: '12mm', left: '12mm' } });
+    Object.assign(res, { pdf: args.pdf, pdfBytes: pdf.length, scale, contentWidth: Math.round(width), pages: (pdf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) || []).length });
+  }
+  await b.close();
+  fs.rmSync(tmp, { force: true });
+  console.log(JSON.stringify(res));
 })().catch((e) => { console.error(e); process.exit(1); });

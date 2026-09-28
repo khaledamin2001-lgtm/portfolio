@@ -26,7 +26,8 @@ let pbMemo = { h: null, pb: null };
 function pbook(){ if(pbMemo.h !== S.history){ pbMemo = { h: S.history, pb: PA.priceBook(S.history) }; } return pbMemo.pb; }
 const AN = { key: null, v: {} };
 function an(name, fn){ if(AN.key !== S.R){ AN.key = S.R; AN.v = {}; } if(!(name in AN.v)){ try{ AN.v[name] = fn(); }catch(e){ console.error(name, e); AN.v[name] = null; } } return AN.v[name]; }
-const dailyA = () => an('daily', () => PA.daily(S.settings, S.R.ledger, S.assets, pbook(), S.marks, S.R.today));
+// recompute() already built the daily series for the engine (opts.daily); reuse it rather than valuing every session twice
+const dailyA = () => an('daily', () => S.D !== undefined ? S.D : PA.daily(S.settings, S.R.ledger, S.assets, pbook(), S.marks, S.R.today));
 const dailyS = () => an('dstats', () => PA.dailyStats(dailyA(), S.R.range));
 const attrA = () => an('attr', () => PA.attribution(S.R.months, S.R.range, S.R.ledger, S.assets, pbook(), S.bench, S.R.today));
 const activeA = () => an('active', () => PA.activeWeights(S.R.pos, S.bench, pbook(), S.R.liveCash ?? S.settings.cash));
@@ -115,6 +116,7 @@ function vAttribution(){
 function vIncome(){
   const I = incomeA(); if(!I) return `<div class="panel empty"><h2>No income data</h2></div>`;
   const net = I.totals.div + I.totals.reb + I.totals.fee;
+  const costsByYear = {}; (S.R.ledger||[]).forEach(r=>{ const c=costOf(r); if(c) costsByYear[String(r.d).slice(0,4)] = (costsByYear[String(r.d).slice(0,4)]||0) + c; });
   const months=[]; I.years.forEach(Y=>Y.div.forEach((v,i)=>{ const m=`${Y.year}-${String(i+1).padStart(2,'0')}`; if(m>=S.settings.inception && m<=PE.monthOf(S.R.today)) months.push({m, div:Y.div[i], reb:Y.reb[i], fee:Y.fee[i]}); }));
   return `
   <div class="kpis">
@@ -140,9 +142,9 @@ function vIncome(){
       <p class="note" style="margin:10px 0 0">Dividend yield is TradingView's trailing yield, refreshed with prices after each session. Expected income is an estimate, not a declared dividend.</p></div>
   </div>
   ${declaredDividends()}
-  <div class="panel"><div class="phead"><div><h2>Yearly summary</h2></div></div>
-    <div class="tbl"><table><thead><tr><th>Year</th><th class="n">Dividends</th><th class="n">Rebates</th><th class="n">Fees</th><th class="n">Net income</th></tr></thead><tbody>
-    ${I.years.map(Y=>`<tr><td>${Y.year}</td><td class="n">${egp(Y.divT)}</td><td class="n">${egp(Y.rebT)}</td><td class="n neg">${egp(Y.feeT)}</td><td class="n ${sgn(Y.net)}"><b>${egp(Y.net)}</b></td></tr>`).join('')}
+  <div class="panel"><div class="phead"><div><h2>Yearly summary</h2><div class="sub">Trading costs are the commission inside each buy and sell (net amount minus price × shares); they are already in the trade amounts, so they are shown here, not deducted again</div></div></div>
+    <div class="tbl"><table data-testid="income-yearly"><thead><tr><th>Year</th><th class="n">Dividends</th><th class="n">Rebates</th><th class="n">Fees</th><th class="n">Net income</th><th class="n">Trading costs</th></tr></thead><tbody>
+    ${I.years.map(Y=>`<tr><td>${Y.year}</td><td class="n">${egp(Y.divT)}</td><td class="n">${egp(Y.rebT)}</td><td class="n neg">${egp(Y.feeT)}</td><td class="n ${sgn(Y.net)}"><b>${egp(Y.net)}</b></td><td class="n neg" data-testid="income-trading-costs">${egp(-(costsByYear[Y.year]||0))}</td></tr>`).join('')}
     </tbody></table></div></div>`;
 }
 
@@ -190,7 +192,11 @@ function factsheetHTML(F){
   const small = smallSample(st), ind = small ? ` <span style="font:600 9px Arial;letter-spacing:.04em;text-transform:uppercase;color:${ink3}">indicative</span>` : '';
   const incM = +String(set.inception||'').slice(5,7), incY = String(set.inception||'').slice(0,4);   // a first calendar year that starts after January is partial
   const eff = (A)=> A ? `${P(A.active,2)} = allocation ${P(A.alloc,2)} + selection ${P(A.sel,2)} + trading ${P(A.trading,2)} + model gap ${P(A.replication,2)}` : '—';
-  return `<div style="max-width:760px;margin:0 auto;background:#fff;color:${ink};font:13px Arial,sans-serif;padding:28px 30px;border:1px solid ${rule}">
+  // border-box: the card is 760px wide overall (padding included), so it fits an A4 PDF page (186 mm ≈ 703px) and email panes
+  const thM=(t,al='right',w='')=>`<th style="text-align:${al};font:600 9.5px Arial,sans-serif;letter-spacing:.04em;text-transform:uppercase;color:${ink3};padding:6px 2px;border-bottom:1px solid ${rule};${w?`width:${w};`:''}">${t}</th>`;
+  const tdM=(t,al='right',extra='')=>`<td style="text-align:${al};padding:6px 2px;border-bottom:1px solid ${bg2};font:11.5px Arial,sans-serif;color:${ink};white-space:nowrap;${extra}">${t}</td>`;
+  const PN=(x)=>x==null?'':`<span style="color:${col(x)}">${pct(x).replace('%','')}</span>`;   // monthly grid: the header says %, cells carry the number only
+  return `<div style="box-sizing:border-box;width:100%;max-width:760px;margin:0 auto;background:#fff;color:${ink};font:13px Arial,sans-serif;padding:28px 30px;border:1px solid ${rule}">
   <table role="presentation" width="100%" style="border-collapse:collapse"><tr><td style="border-bottom:3px solid ${acc};padding-bottom:10px">
     <div style="font:600 11px Arial;letter-spacing:.1em;text-transform:uppercase;color:${acc}">Monthly factsheet · ${M(F.m)}${F.live?' (month to date)':''}</div>
     <div style="font:600 24px Georgia,serif;color:${ink};margin-top:4px">${esc(set.name)}</div>
@@ -209,9 +215,9 @@ function factsheetHTML(F){
     <tr>${td(BENCH,'left')}${F.tr.map(t=>td(t.b!=null?pct(t.b):'—')).join('')}</tr>
     <tr>${td('Difference','left')}${F.tr.map(t=>td(t.a!=null?P(t.a):'—')).join('')}</tr></table>
   <div style="font:11px Arial;color:${ink3};margin-top:4px">Time-weighted: Modified Dietz monthly returns (deposits weighted by the days they were invested), chain-linked, net of commissions. Periods under one year are not annualized. The benchmark is a price index: it excludes dividends, the portfolio's return includes them.</div>
-  ${h2('Monthly returns')}
-  <table role="presentation" width="100%" style="border-collapse:collapse;font-size:12px"><tr>${th('Year','left')}${MON.map(x=>th(x)).join('')}${th('Year')}${th('Index')}</tr>
-    ${F.cal.map(Y=>`<tr>${td(`${Y.year}${String(Y.year)===incY&&incM>1?`<div style="font:400 10px Arial;color:${ink3}">(from ${MON3[incM-1]})</div>`:''}`,'left','font-weight:600')}${Y.m.map(v=>td(v==null?'':P(v),'right','font-size:12px;padding:6px 4px')).join('')}${td(P(Y.ytd),'right','font-weight:600')}${td(Y.bytd!=null?pct(Y.bytd):'—')}</tr>`).join('')}</table>
+  ${h2('Monthly returns · %')}
+  <table role="presentation" width="100%" data-testid="factsheet-monthly" style="border-collapse:collapse;table-layout:fixed;width:100%"><tr>${thM('Year','left','9%')}${MON.map(x=>thM(x)).join('')}${thM('Year','right','8.5%')}${thM('Index','right','8.5%')}</tr>
+    ${F.cal.map(Y=>`<tr>${tdM(`${Y.year}${String(Y.year)===incY&&incM>1?`<div style="font:400 9.5px Arial;color:${ink3}">(from ${MON3[incM-1]})</div>`:''}`,'left','font-weight:600;font-size:12px')}${Y.m.map(v=>tdM(PN(v))).join('')}${tdM(PN(Y.ytd),'right','font-weight:600')}${tdM(Y.bytd!=null?pct(Y.bytd).replace('%',''):'—')}</tr>`).join('')}</table>
   <table role="presentation" width="100%" style="border-collapse:collapse;margin-top:6px"><tr><td style="vertical-align:top;width:52%;padding-right:14px">
     ${h2('Top holdings')}
     <table role="presentation" width="100%" style="border-collapse:collapse">${`<tr>${th('Holding','left')}${th('Sector','left')}${th('Weight')}</tr>`}
@@ -254,10 +260,13 @@ function vFactsheet(){
   if(!S.fsMonth || !months.includes(S.fsMonth)) S.fsMonth = months.find(m=>!S.R.months.find(r=>r.month===m).live) || months[0];
   const F = factsheetData(S.fsMonth);
   const email = S.settings.factsheetEmail || '';
+  // the site publishes month-end files (exports/index.json): list them once so a month with a PDF gets its own button
+  if(window.pdExports && S.exportsList===null){ S.exportsList=false; window.pdExports().then(l=>{ S.exportsList=Array.isArray(l)?l:[]; if(S.tab==='reports') renderTab(false); }).catch(()=>{ S.exportsList=[]; }); }
+  const ex = Array.isArray(S.exportsList) ? S.exportsList.find(x=>x.month===S.fsMonth) : null;
   return `<div class="panel"><div class="phead"><div><h2>Monthly factsheet</h2><div class="sub">A one-page report in the format fund managers publish each month</div></div>
     <div class="row"><label class="ink2" style="font-size:12px">Month <select id="fs-month" data-testid="factsheet-month">${months.map(m=>`<option value="${m}" ${m===S.fsMonth?'selected':''}>${M(m)}${S.R.months.find(r=>r.month===m).live?' (live)':''}</option>`).join('')}</select></label>
     <button class="btn" id="fs-dl" data-testid="factsheet-download">Download HTML</button>
-    ${window.pdDownloadExport?`<button class="btn" id="fs-xlsx" data-testid="factsheet-excel" data-month="${S.fsMonth}">Download Excel</button>`:''}
+    ${window.pdDownloadExport?`<button class="btn" id="fs-xlsx" data-testid="factsheet-excel" data-month="${S.fsMonth}">Download Excel</button>`:''}${window.pdDownloadExport&&ex&&ex.pdf?`<button class="btn" id="fs-pdf" data-testid="factsheet-pdf" data-month="${S.fsMonth}">Download PDF</button>`:''}
     <button class="btn primary" id="fs-email" data-testid="factsheet-email" ${email?'':'disabled'} title="${email?'Send to '+esc(email):'Set an email address under Settings → Inputs &amp; settings'}">Email to me</button></div></div>
     <p class="note" style="margin:0 0 14px" data-testid="factsheet-note">${S.readOnly?`${S.sync&&email?`Emailed to <span class="mono">${esc(email)}</span> automatically after each monthly statement is posted. `:''}Download it here any time.`:email?`Sends from your Gmail to <span class="mono">${esc(email)}</span>. Posting a monthly statement offers to send it automatically.`:'Add an email address under Settings → Inputs &amp; settings to send factsheets.'}</p>
     <div style="overflow-x:auto;background:var(--surface-2);border-radius:10px;padding:14px 8px" data-testid="factsheet-preview">${factsheetHTML(F)}</div></div>`;

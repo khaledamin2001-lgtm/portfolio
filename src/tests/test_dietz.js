@@ -290,5 +290,164 @@ print(json.dumps({
   } catch (e) { check('Workbook Aug-26 build and openpyxl read-back', false, String(e.stderr || e.message).slice(0, 400)); }
 }
 
+// 12. ideas round: cash benchmark, Jensen's alpha, index with dividends, trading costs, daily-linked TWR, provenance
+{
+  const st = { ...settings, openingValue: 1000, riskFree: 0.24 };
+  const mR = (r) => Math.pow(1 + r, 1 / 12) - 1;
+  // 12.1 cash benchmark: marks[M].cashRate, fallback settings.riskFree, a gap month compounds both months' rates
+  const mkC = { '2026-01': { cash: 0, securities: 1020, cashRate: 0.27 }, '2026-02': { cashRate: 0.25 }, '2026-03': { cash: 0, securities: 1050, cashRate: 0.22 }, '2026-04': { cash: 0, securities: 1060 } };
+  const C = PE.run({ settings: st, marks: mkC, assets: {}, tx: [] }, { type: 'Since Inception' }, { today: '2026-05-10', live: false });
+  const [c1, c2, c3, c4] = C.months;
+  check('Cash: Jan-26 cashRet = 1.27^(1/12) − 1 from marks cashRate, no fallback', Math.abs(c1.cashRet - mR(0.27)) < 1e-15 && c1.cashFallback === false && c1.cashRate === 0.27, `${c1.cashRet}`);
+  check('Cash: gap Feb-26 has cashRet null; Mar-26 (spans 2) compounds Feb 25% and Mar 22%', c2.cashRet === null && c3.spans === 2 && Math.abs(c3.cashRet - ((1 + mR(0.25)) * (1 + mR(0.22)) - 1)) < 1e-15, `${c3.cashRet}`);
+  check('Cash: Apr-26 without cashRate falls back to settings.riskFree and is flagged', Math.abs(c4.cashRet - mR(0.24)) < 1e-15 && c4.cashFallback === true, `${c4.cashRet}`);
+  const expCash = (1 + mR(0.27)) * (1 + mR(0.25)) * (1 + mR(0.22)) * (1 + mR(0.24)) - 1;
+  check('Cash: cashTwr chains every calendar month, aheadOfCash = twr − cashTwr, cashComplete false, pCash on rows', Math.abs(C.stats.cashTwr - expCash) < 1e-12 && Math.abs(C.stats.aheadOfCash - (C.stats.twr - expCash)) < 1e-12 && C.stats.cashComplete === false && C.stats.cashFallbackMonths.join() === '2026-04' && Math.abs(C.stats.rows[2].pCash - expCash) < 1e-12, JSON.stringify({ cashTwr: C.stats.cashTwr, ahead: C.stats.aheadOfCash }));
+  const C2 = PE.run({ settings: st, marks: { ...mkC, '2026-04': { ...mkC['2026-04'], cashRate: 0.2 } }, assets: {}, tx: [] }, { type: 'Since Inception' }, { today: '2026-05-10', live: false });
+  check('Cash: every month with a cashRate → cashComplete true', C2.stats.cashComplete === true && C2.stats.cashFallbackMonths.length === 0);
+  // the live month uses market.rates.policy (the current CBE rate) instead of the fallback
+  const C3 = PE.run({ settings: { ...st, cash: 1100 }, marks: { '2026-01': mkC['2026-01'] }, assets: {}, tx: [], market: { rates: { policy: { rate: 0.19, date: '2026-02', source: 'test' } } } }, { type: 'Since Inception' }, { today: '2026-02-10' });
+  const liveRow = C3.months.find((r) => r.month === '2026-02');
+  check('Cash: the live month takes market.rates.policy.rate (19%) and is not a fallback', liveRow.live && Math.abs(liveRow.cashRet - mR(0.19)) < 1e-15 && !liveRow.cashFallback && C3.stats.cashComplete === true, `${liveRow.cashRet}`);
+  const mkN8 = (rate) => { const m = {}; for (let i = 0; i < 8; i++) m[PE.addMonths('2026-01', i)] = { cash: 0, securities: 1000 * (1 + 0.02 * (i + 1)) * (1 + 0.01 * (i % 2)), benchReturn: 0.01 * ((i % 3) - 1) + 0.002 * i, ...(rate != null ? { cashRate: rate } : {}) }; return m; };
+  const sh0 = PE.run({ settings: st, marks: mkN8(), assets: {}, tx: [] }, { type: 'Since Inception' }, { today: '2027-01-10', live: false }).stats, sh5 = PE.run({ settings: st, marks: mkN8(0.05), assets: {}, tx: [] }, { type: 'Since Inception' }, { today: '2027-01-10', live: false }).stats;
+  check('Cash: Sharpe and Sortino keep settings.riskFree (a 5% cashRate changes cashTwr only)', sh0.sharpe != null && sh0.sharpe === sh5.sharpe && sh0.sortino === sh5.sortino && sh0.cashTwr !== sh5.cashTwr, `${sh0.sharpe}`);
+  // 12.2 Jensen's alpha = ((avg − rfM) − beta (avgBench − rfM)) × 12; null with fewer than 6 benchmark months
+  const SJ = PE.run({ settings: st, marks: mkN8(), assets: {}, tx: [] }, { type: 'Since Inception' }, { today: '2027-01-10', live: false }).stats;
+  const rets = SJ.rows.map((r) => r.ret), bs = SJ.rows.map((r) => r.bench), avg = rets.reduce((a, x) => a + x, 0) / 8, avgB = bs.reduce((a, x) => a + x, 0) / 8, rfM = mR(0.24);
+  const cov = rets.reduce((a, x, i) => a + (x - avg) * (bs[i] - avgB), 0) / 7, vb = bs.reduce((a, x) => a + (x - avgB) ** 2, 0) / 7;
+  check("Jensen's alpha: ((avg − rfM) − β(avgBench − rfM)) × 12", Math.abs(SJ.jensen - ((avg - rfM) - (cov / vb) * (avgB - rfM)) * 12) < 1e-12 && Math.abs(SJ.beta - cov / vb) < 1e-12, `${SJ.jensen}`);
+  const SJ5 = PE.run({ settings: st, marks: Object.fromEntries(Object.entries(mkN8()).slice(0, 5)), assets: {}, tx: [] }, { type: 'Since Inception' }, { today: '2027-01-10', live: false }).stats;
+  check("Jensen's alpha is null when beta is null (5 months)", SJ5.beta === null && SJ5.jensen === null);
+  // 12.3 index with dividends (estimate) from data.bench.divYield
+  const RB = PE.run({ settings: st, marks: mkN8(), assets: {}, tx: [], bench: { divYield: 0.05, divYieldAsOf: '2026-09-27' } }, { type: 'Since Inception' }, { today: '2027-01-10', live: false }).stats;
+  check('benchDivYield passes through; benchTrEstimate = (1 + benchTwr) × 1.05^(8/12) − 1', RB.benchDivYield === 0.05 && RB.benchDivYieldAsOf === '2026-09-27' && Math.abs(RB.benchTrEstimate - ((1 + RB.benchTwr) * Math.pow(1.05, 8 / 12) - 1)) < 1e-12, `${RB.benchTrEstimate}`);
+  check('Without data.bench.divYield both are null', SJ.benchDivYield === null && SJ.benchTrEstimate === null);
+  // 12.4 trading costs
+  const ctx = [
+    { id: 'k1', d: '2026-01-05', t: 'Deposit', amt: 5000 },
+    { id: 'k2', d: '2026-01-06', t: 'Buy', a: 'X', q: 100, p: 10, amt: -1002.5 },
+    { id: 'k3', d: '2026-01-20', t: 'Sell', a: 'X', q: 100, p: 12, amt: 1197.004 },
+    { id: 'k4', d: '2026-01-21', t: 'Buy', a: 'thndrsavings', acc: 'MF', q: 500, p: 1, amt: -501 },
+    { id: 'k5', d: '2026-01-22', t: 'Buy', a: 'Y', q: 10, amt: -100 },
+    { id: 'k6', d: '2026-01-23', t: 'Buy', a: 'Z', q: 10, p: 10, amt: -99.2 },
+  ];
+  const LC = PE.runLedger(ctx), byId = (id) => LC.find((t) => t.id === id);
+  check('Costs: Buy |amt| − p×q = 2.50; Sell p×q − amt = 2.996 → 3.00 (2 dp)', byId('k2').cost === 2.5 && byId('k3').cost === 3, `${byId('k2').cost} ${byId('k3').cost}`);
+  check('Costs: fund row (acc MF) and a row without a price carry no cost; a negative cost clamps to 0', byId('k4').cost === undefined && byId('k5').cost === undefined && byId('k6').cost === 0 && byId('k1').cost === undefined && Math.abs(PE.tradeCostRaw(byId('k6')) + 0.8) < 1e-9);
+  const RC = PE.run({ settings: { ...st, openingValue: 0 }, marks: { '2026-01': { cash: 3000, securities: 2000 } }, assets: {}, tx: ctx }, { type: 'Since Inception' }, { today: '2026-02-10', live: false });
+  const jan = RC.months[0], S = RC.stats;
+  check('Costs: month tradingCost 5.50, tradedValue 1000 + 1200 + 100, costPct = 5.5 / 2300', jan.tradingCost === 5.5 && jan.tradedValue === 2300 && S.tradingCost === 5.5 && S.tradedValue === 2300 && Math.abs(S.costPct - 5.5 / 2300) < 1e-15, JSON.stringify({ tc: jan.tradingCost, tv: jan.tradedValue }));
+  check('Costs: retGross adds the month\'s cost back to the month-end value (Dietz denominator), twrGross chains it', Math.abs(jan.retGross - (jan.value + 5.5 - jan.opening - jan.netFlow) / (jan.opening + jan.weightedFlow)) < 1e-15 && Math.abs(S.twrGross - jan.retGross) < 1e-15 && S.twrGross > S.twr, `${jan.ret} → ${jan.retGross}`);
+  // 12.5 daily-linked TWR
+  const Dd = { rows: [{ d: '2025-12-31', ret: null }, { d: '2026-01-04', ret: 0.01 }, { d: '2026-01-05', ret: -0.02 }, { d: '2026-01-31', ret: null }, { d: '2026-02-02', ret: 0.03 }, { d: '2026-03-01', ret: 0.5 }].map((r) => ({ ...r, value: 1, benchRet: 0 })) };
+  const dt = PA.dailyTwr(Dd, { from: '2026-01', to: '2026-02' });
+  check('dailyTwr: product of the sessions in the range (base = last session before it), same as dailyStats', Math.abs(dt.twr - (1.01 * 0.98 * 1.03 - 1)) < 1e-15 && dt.from === '2025-12-31' && dt.to === '2026-02-02' && dt.n === 3 && dt.twr === PA.dailyStats(Dd, { from: '2026-01', to: '2026-02' }).twr, JSON.stringify(dt));
+  check('dailyTwr: null without a series or with no session in range', PA.dailyTwr(null, { from: '2026-01', to: '2026-01' }) === null && PA.dailyTwr(Dd, { from: '2027-01', to: '2027-02' }) === null && PA.dailyTwr === PE.dailyTwr);
+  const mkD = { '2026-01': { cash: 0, securities: 1010 }, '2026-02': { cash: 0, securities: 1030 } };
+  const noD = PE.run({ settings: st, marks: mkD, assets: {}, tx: [] }, { type: 'Since Inception' }, { today: '2026-03-10', live: false }).stats;
+  const wD = PE.run({ settings: st, marks: mkD, assets: {}, tx: [] }, { type: 'Since Inception' }, { today: '2026-03-10', live: false, daily: Dd }).stats;
+  const wDd = PE.run({ settings: { ...st, returnMethod: 'daily' }, marks: mkD, assets: {}, tx: [] }, { type: 'Since Inception' }, { today: '2026-03-10', live: false, daily: Dd }).stats;
+  const nDd = PE.run({ settings: { ...st, returnMethod: 'daily' }, marks: mkD, assets: {}, tx: [] }, { type: 'Since Inception' }, { today: '2026-03-10', live: false }).stats;
+  check("run(): twrDaily null without opts.daily; with it = dailyTwr; returnMethod 'dietz' by default", noD.twrDaily === null && noD.returnMethod === 'dietz' && noD.headlineTwr === noD.twr && wD.twrDaily === dt.twr && wD.returnMethod === 'dietz' && wD.headlineTwr === wD.twr);
+  check("run(): settings.returnMethod 'daily' → headlineTwr = twrDaily, monthly twr unchanged; falls back to dietz with no series", wDd.returnMethod === 'daily' && wDd.headlineTwr === dt.twr && wDd.twr === noD.twr && nDd.returnMethod === 'dietz' && nDd.headlineTwr === nDd.twr);
+  const RW = PE.withDaily(PE.run({ settings: st, marks: mkD, assets: {}, tx: [] }, { type: 'Since Inception' }, { today: '2026-03-10', live: false }), Dd);
+  check('withDaily(R, D) attaches the same figure after the run', RW.stats.twrDaily === dt.twr && RW.stats.twrDailyN === 3);
+  // 12.6 provenance
+  const ptx = [
+    { id: 'p1', d: '2026-01-05', t: 'Deposit', amt: 100, src: 'stmt-2026-01' }, { id: 'p2', d: '2026-01-06', t: 'Buy', a: 'X', q: 1, p: 10, amt: -10, src: 'invoice-abc' },
+    { id: 'p3', d: '2026-01-07', t: 'Fee', amt: -1, src: 'manual' }, { id: 'p4', d: '2026-01-08', t: 'Rebate', amt: 1 }, { id: 'p5', d: '2026-01-09', t: 'Rebate', amt: 1, src: 'E-STATEMENT_Jan' },
+    { id: 'p6', d: '2026-02-03', t: 'Fee', amt: -1 }, { id: 'p7', d: '2026-01-10', t: 'Rebate', amt: 1, src: 'statement' },
+  ];
+  const PV = PE.run({ settings: st, marks: { '2026-01': { cash: 0, securities: 1000, source: 'statement' }, '2026-02': { cash: 0, securities: 1000, source: 'price-estimate' } }, assets: {}, tx: ptx }, { type: 'Since Inception' }, { today: '2026-03-10', live: false }).provenance;
+  check('Provenance: byMonth counts statement/invoice/typed/manual; unverified = typed+manual rows in statement months only', JSON.stringify(PV.byMonth['2026-01']) === JSON.stringify({ statement: 2, invoice: 1, typed: 2, manual: 1, total: 6 }) && PV.byMonth['2026-02'].typed === 1 && PV.unverified.join() === 'p3,p4,p5', JSON.stringify(PV));
+}
+// 12.7 real exports: trading costs, daily-linked TWR, engine2 identities
+if (fs.existsSync(fixK) && fs.existsSync(fixY)) {
+  const today = '2026-09-27';
+  const loadX = (dir) => {
+    const J = (f) => { const x = JSON.parse(fs.readFileSync(f)); return x.data || x; };
+    const D = (...p) => path.join(dir, ...p);
+    const s = J(D('portfolio', 'settings.json')), mk0 = J(D('portfolio', 'marks.json')).months, assets = J(D('portfolio', 'assets.json')).items;
+    const tx = fs.readdirSync(D('ledger')).filter((f) => /^y\d{4}\.json$/.test(f)).sort().flatMap((f) => J(D('ledger', f)).rows || []);
+    const history = {}; fs.readdirSync(D('history')).forEach((f) => { history[f.replace('.json', '')] = J(D('history', f)); });
+    const market = J(D('market', 'latest.json')), bench = J(D('bench', 'egx30.json'));
+    const pb = PA.priceBook(history), L0 = PE.runLedger(tx), mk = PA.estimateMarks(s, mk0, L0, assets, pb, today);
+    const pricer = PA.makePricer(assets, L0, pb), fallback = (n) => { const p = pricer(n, today); return p ? { p: p.p, d: pb.last } : null; };
+    const daily = PA.daily(s, L0, assets, pb, mk, today);
+    const R = PE.run({ settings: s, marks: mk, assets, tx, market, bench }, { type: 'Since Inception' }, { today, fallback, daily });
+    return { s, mk0, mk, assets, tx, pb, bench, daily, R, L0 };
+  };
+  for (const [who, dir] of [['Khaled', fixK], ['Yassin', fixY]]) {
+    const X = loadX(dir), R = X.R, S = R.stats;
+    const costed = R.ledger.filter((t) => t.cost != null), neg = R.ledger.filter((t) => { const c = PE.tradeCostRaw(t); return c != null && c < -1; });
+    const big = costed.filter((t) => t.p * t.q > 1000).map((t) => t.cost / (t.p * t.q));
+    check(`${who}: trading costs are small and positive (0.05–0.6% of each trade over 1,000 EGP; costPct 0.1–0.5%), none negative beyond 1 EGP`, neg.length === 0 && costed.every((t) => t.cost >= 0) && big.every((x) => x > 0.0005 && x < 0.006) && S.costPct > 0.001 && S.costPct < 0.005 && S.twrGross > S.twr,
+      `${S.tradingCost.toFixed(2)} EGP = ${(S.costPct * 100).toFixed(3)}% of ${S.tradedValue.toFixed(0)}; twrGross ${(S.twrGross * 100).toFixed(2)}% vs ${(S.twr * 100).toFixed(2)}%`);
+    check(`${who}: fund rows (acc MF) carry no cost`, R.ledger.filter((t) => t.acc === 'MF').every((t) => t.cost === undefined));
+    check(`${who}: twrDaily = dailyStats(D, range).twr, provenance counts every row`, S.twrDaily != null && S.twrDaily === PA.dailyStats(X.daily, R.range).twr && Object.values(R.provenance.byMonth).reduce((a, b) => a + b.total, 0) === X.tx.length, `${(S.twrDaily * 100).toFixed(3)}% over ${S.twrDailyN} sessions ${S.twrDailyFrom}→${S.twrDailyTo}`);
+    // attribution: every month's effects sum to R − B and the Carino-linked total to the period's active return
+    const A = PA.attribution(R.months, R.range, R.ledger, X.assets, X.pb, X.bench, today);
+    const worst = Math.max(...A.months.map((m) => Math.abs(m.alloc + m.sel + m.trading + m.replication - (m.R - m.B))));
+    check(`${who}: attribution effects sum to R − B every month and Carino-linked to TWR − benchmark TWR (1e-9)`, worst < 1e-9 && Math.abs(A.alloc + A.sel + A.trading + A.replication - A.active) < 1e-9 && Math.abs(A.active - S.alpha) < 1e-9 && A.months.length === S.n, `worst month ${worst.toExponential(2)} · linked ${(A.alloc + A.sel + A.trading + A.replication - A.active).toExponential(2)}`);
+    // price-estimate marks: holdingsAt(eom) at closes + ledger cash through eom (independent share walk × pricer)
+    const pricer = PA.makePricer(X.assets, R.ledger, X.pb);
+    const modelAt = (m) => {
+      const e = PE.eom(m), sh = {};
+      X.tx.filter((t) => t.d <= e && t.a && ['Buy', 'Sell', 'Bonus'].includes(t.t)).forEach((t) => { sh[t.a] = (sh[t.a] || 0) + (t.t === 'Sell' ? -1 : 1) * (t.q || 0); });
+      const sec = Object.keys(sh).filter((n) => sh[n] > 0.5).reduce((a, n) => a + sh[n] * pricer(n, e).p, 0);
+      return { sec, cash: X.tx.filter((t) => t.d <= e).reduce((a, t) => a + (t.amt || 0), 0), hAt: PA.holdingsAt(R.ledger, X.assets, X.pb, e).mv };
+    };
+    const est = Object.keys(X.mk0).filter((m) => X.mk0[m].source === 'price-estimate');
+    const off = est.filter((m) => { const md = modelAt(m); return Math.abs(md.sec - X.mk0[m].securities) > 0.01 || Math.abs(md.hAt - md.sec) > 1e-6 || Math.abs(md.cash - X.mk0[m].cash) > 0.05; });
+    check(`${who}: stored price-estimate marks = holdings × closes (to the cent) + ledger cash (within 5 piastres) — ${est.length} months`, est.length > 0 && off.length === 0, off.join(', ') || est.map((m) => PE.fmtMonth(m)).join(' '));
+    // marks the model generates now (estimateMarks on provisional copies) equal holdingsAt + ledger cash exactly
+    const prov = {}; Object.keys(X.mk0).forEach((m) => { prov[m] = m < '2026-09' ? { ...X.mk0[m], provisional: true, source: 'typed' } : X.mk0[m]; });
+    const gen = PA.estimateMarks(X.s, prov, R.ledger, X.assets, X.pb, today), gm = Object.keys(gen).filter((m) => gen[m].source === 'price-estimate');
+    const offG = gm.filter((m) => { const md = modelAt(m); return Math.abs(gen[m].securities - md.sec) > 1e-6 || Math.abs(gen[m].cash - md.cash) > 1e-6; });
+    check(`${who}: estimateMarks rows (${gm.length} months) = holdingsAt(eom) × closes + ledger cash (1e-6)`, gm.length >= 13 && offG.length === 0, offG.join(', ') || 'all match');
+  }
+  // Excel workbook: the ideas rows and columns
+  const T = path.join(SP, 'fix4', 'tmp', 'engine'), cp = require('child_process');
+  try {
+    fs.mkdirSync(T, { recursive: true });
+    const ov = path.join(T, 'overlay-ideas'); fs.mkdirSync(ov, { recursive: true });
+    const J0 = (f) => { const x = JSON.parse(fs.readFileSync(f)); return x.data || x; };
+    const mO = J0(path.join(fixK, 'portfolio', 'marks.json')); Object.keys(mO.months).forEach((m) => { if (m <= '2026-08') mO.months[m].cashRate = 0.22; });
+    fs.writeFileSync(path.join(ov, 'marks.json'), JSON.stringify(mO));
+    cp.execFileSync(process.execPath, ['excel.js', '--data', fixK, '--month', '2026-08', '--out', path.join(T, 'xl_ideas.json')], { cwd: path.join(SP, 'tools'), stdio: 'pipe' });
+    cp.execFileSync(process.execPath, ['excel.js', '--data', fixK, '--overlay', ov, '--month', '2026-08', '--out', path.join(T, 'xl_ideas_cbe.json')], { cwd: path.join(SP, 'tools'), stdio: 'pipe' });
+    cp.execFileSync('python3', ['excel.py', path.join(T, 'xl_ideas.json'), path.join(T, 'ideas.xlsx')], { cwd: path.join(SP, 'tools'), stdio: 'pipe' });
+    cp.execFileSync('python3', ['excel.py', path.join(T, 'xl_ideas_cbe.json'), path.join(T, 'ideas_cbe.xlsx')], { cwd: path.join(SP, 'tools'), stdio: 'pipe' });
+    const py = `
+import json, sys
+from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter as L
+T = sys.argv[1]
+v = load_workbook(T + '/ideas.xlsx', data_only=True); f = load_workbook(T + '/ideas.xlsx'); c = load_workbook(T + '/ideas_cbe.xlsx', data_only=True)
+summ = {r[0].value: r[1].value for r in v['Summary'].iter_rows(min_row=1) if r[0].value}
+summC = {r[0].value: r[1].value for r in c['Summary'].iter_rows(min_row=1) if r[0].value}
+m = v['Monthly']; hdr = [x.value for x in m[3]]
+fm = f['Monthly (formulas)']; fh = [x.value for x in fm[3]]
+forms = sorted({(x.column_letter, str(x.value)) for row in fm.iter_rows(min_row=5, max_row=5) for x in row if x.data_type == 'f'})
+col = lambda name: [m.cell(r, hdr.index(name) + 1).value for r in range(4, m.max_row + 1)]
+print(json.dumps({'summ': {k: summ.get(k) for k in summ if isinstance(k, str)}, 'summC': [k for k in summC if str(k).startswith('Cash benchmark')], 'hdr': hdr, 'fh': fh, 'forms': forms,
+  'letters': {L(i + 1): h for i, h in enumerate(fh)}, 'cash': col('Cash return'), 'cost': col('Trading costs'), 'marksHdr': [x.value for x in c['Marks & inputs'][3]]}))
+`;
+    const Q = JSON.parse(cp.execFileSync('python3', ['-c', py, T], { encoding: 'utf8' }));
+    const X = JSON.parse(fs.readFileSync(path.join(T, 'xl_ideas.json')));
+    const want = ["Ahead of cash", "Jensen's alpha (annual)", 'Index dividend yield (estimate)', 'Index return with dividends (estimate)', 'Trading costs (EGP)', 'Trading costs as % of value traded', 'Return before trading costs'];
+    const cashKey = Object.keys(Q.summ).find((k) => k.startsWith('Cash benchmark (CBE policy rate'));
+    check('Workbook: Summary has the eight ideas rows (cash, ahead of cash, Jensen, index yield and TR, costs, cost %, before costs)', cashKey && want.every((k) => k in Q.summ) && typeof Q.summ["Jensen's alpha (annual)"] === 'number' && Math.abs(Q.summ['Trading costs (EGP)'] - X.summary['Trading costs (EGP)']) < 1e-9 && Q.summ['Index return with dividends (estimate)'] === '—', cashKey);
+    check("Workbook: cash row says when the settings rate stood in for the CBE rate; with cashRate on every month it is the plain label", /settings rate 24\.63% for 13 of 13 months/.test(cashKey) && Q.summC.join() === 'Cash benchmark (CBE policy rate) over the period' && Q.marksHdr.includes('CBE policy rate (annual)'), `${cashKey} | ${Q.summC.join()}`);
+    const L = Q.letters;
+    const lettersOk = L.B === 'Opening value' && L.C === 'Deposits' && L.D === 'Withdrawals' && L.E === 'Net flow' && L.F === 'Day-weighted flow' && L.H === 'Cash' && L.I === 'Securities' && L.J === 'Month-end value' && L.K === 'Return' && L.L === 'Benchmark' && L.M === 'Alpha' && L.N === 'Cumulative' && L.O === 'Cumulative benchmark' && L.P === 'Drawdown' && L.V === 'Cash return' && L.X === 'Trading costs';
+    const formsOk = JSON.stringify(Q.forms) === JSON.stringify([['E', '=C5-D5'], ['J', '=H5+I5'], ['K', '=(J5-B5-E5)/(B5+F5)'], ['M', '=K5-L5'], ['N', '=(1+K5)*(1+N4)-1'], ['O', '=(1+L5)*(1+O4)-1'], ['P', '=(1+N5)/MAX(1,1+MAX($N$4:N5))-1']]);
+    check('Workbook: Monthly gains Cash return (V) and Trading costs (X) on both sheets; every formula letter still points at its column', lettersOk && formsOk && JSON.stringify(Q.hdr) === JSON.stringify(Q.fh), JSON.stringify(Q.forms));
+    const Mv = X.monthly;
+    check('Workbook: Cash return and Trading costs columns hold the engine\'s monthly figures', Q.cash.length === Mv.length && Q.cash.every((x, i) => Math.abs(x - Mv[i].cashRet) < 1e-12) && Q.cost.every((x, i) => Math.abs(x - Mv[i].tradingCost) < 1e-9) && Math.abs(Q.cost.reduce((a, x) => a + x, 0) - X.summary['Trading costs (EGP)']) < 1e-6, `Aug-26 cost ${Q.cost[Q.cost.length - 1]}`);
+  } catch (e) { check('Workbook ideas rows and columns', false, String(e.stderr || e.message).slice(0, 400)); }
+}
+
 console.log(fail ? `FAIL ${fail}` : 'ALL PASS');
 process.exit(fail ? 1 : 0);

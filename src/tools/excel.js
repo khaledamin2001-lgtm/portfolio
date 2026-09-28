@@ -32,7 +32,7 @@ const ledger = PE.runLedger(tx);
 marks = PA.estimateMarks(settings, marks, ledger, assets, pb, PE.cairoToday());
 const pricer = PA.makePricer(assets, ledger, pb);
 const fallback = (name) => { const p = pricer(name, today); return p ? { p: p.p, d: pb.last } : null; };
-const R = PE.run({ settings, marks, assets, tx, market }, { type: 'Since Inception', asOf: M }, { today, fallback, live: false });
+const R = PE.run({ settings, marks, assets, tx, market, bench }, { type: 'Since Inception', asOf: M }, { today, fallback, live: false });
 const st = R.stats;
 const H = PA.holdingsAt(R.ledger, assets, pb, PE.eom(M));
 const row = R.months.find((r) => r.month === M) || {};
@@ -48,6 +48,8 @@ const closed = R.pos.trips.filter((r) => r.lastSell <= cutoff);
 const statementValue = row.value ?? total;
 // the real return falls back to the months that have CPI: say which month it runs to
 const realPartial = st.realTwr == null && st.realTwrPartial != null && st.realThrough;
+// the cash benchmark uses the settings' risk-free rate for months with no recorded CBE rate: say so
+const cashLabel = st.cashTwr != null && !st.cashComplete ? `Cash benchmark (CBE policy rate; settings rate ${(settings.riskFree * 100).toFixed(2)}% for ${st.cashFallbackMonths.length} of ${st.n} months) over the period` : null;
 
 const out = {
   month: M, name: settings.name, inception: settings.inception, generated: PE.cairoToday(), benchmark: 'EGX30 Capped',
@@ -57,17 +59,20 @@ const out = {
     'Month return': row.ret, 'Benchmark month return': row.bench, 'Month alpha': row.alpha,
     'Since inception TWR': st.twr, 'Since inception benchmark': st.benchTwr, 'Alpha since inception': st.alpha, 'Annualized TWR': st.annualized,
     'Money-weighted return (XIRR, annual)': st.xirr, 'Return in USD': st.usdTwr, 'Real return (after CPI)': st.realTwr ?? st.realTwrPartial,
+    'Cash benchmark (CBE policy rate) over the period': st.cashTwr, 'Ahead of cash': st.aheadOfCash,
+    'Index dividend yield (estimate)': st.benchDivYield, 'Index return with dividends (estimate)': st.benchTrEstimate, 'Return before trading costs': st.twrGross,
     'Monthly volatility': st.vol, 'Annualized volatility': st.vol * Math.sqrt(12), 'Sharpe ratio': st.sharpe, 'Sortino ratio': st.sortino, 'Calmar ratio': st.calmar,
-    'Beta vs benchmark': st.beta, 'Correlation': st.correl, 'Tracking error (annual)': st.trackingError, 'Upside capture': st.upCapture, 'Downside capture': st.downCapture,
+    'Beta vs benchmark': st.beta, "Jensen's alpha (annual)": st.jensen, 'Correlation': st.correl, 'Tracking error (annual)': st.trackingError, 'Upside capture': st.upCapture, 'Downside capture': st.downCapture,
     'Max drawdown (month-end)': st.maxDD, 'Positive months': st.posMonths, 'Months in period': st.monthsElapsed ?? st.n, 'Months beating benchmark': st.beat,
     'Deposits since inception (EGP)': st.deposits, 'Withdrawals since inception (EGP)': st.withdrawals, 'Investment gain since inception (EGP)': st.netGain,
-    'Dividends received since inception (EGP)': st.dividends, 'Realized trading P/L (EGP)': st.realized, 'Risk-free rate used': settings.riskFree, 'Opening value before inception (EGP)': settings.openingValue,
+    'Dividends received since inception (EGP)': st.dividends, 'Realized trading P/L (EGP)': st.realized,
+    'Trading costs (EGP)': st.tradingCost, 'Trading costs as % of value traded': st.costPct, 'Risk-free rate used': settings.riskFree, 'Opening value before inception (EGP)': settings.openingValue,
   },
-  labels: realPartial ? { 'Real return (after CPI)': `Real return (after CPI, through ${PE.fmtMonth(st.realThrough)})` } : {},
+  labels: { ...(realPartial ? { 'Real return (after CPI)': `Real return (after CPI, through ${PE.fmtMonth(st.realThrough)})` } : {}), ...(cashLabel ? { 'Cash benchmark (CBE policy rate) over the period': cashLabel } : {}) },
   trailing: tr.map((t) => ({ period: t.label, portfolio: t.p, benchmark: t.b, difference: t.a })),
   attribution: A ? { active: A.active, allocation: A.alloc, selection: A.sel, trading: A.trading, tradingNote: A.tradingNote, replication: A.replication, sectors: A.sectors.map((s) => ({ sector: s.sector, wp: s.wp, wb: s.wb, rp: s.rp, rb: s.rb, alloc: s.alloc, sel: s.sel, total: s.total })) } : null,
   monthly: R.months.filter((r) => r.has && r.month <= M).map((r) => ({ month: r.month, opening: r.opening, deposits: r.deposits, withdrawals: r.withdrawals, netFlow: r.netFlow, weightedFlow: r.weightedFlow, dividends: r.dividends, cash: r.cash, securities: r.securities, value: r.value,
-    ret: r.ret, retSimple: r.retSimple, bench: r.bench, alpha: r.alpha, cum: r.pCum, cumBench: r.pBench, dd: r.dd, benchClose: r.benchClose, usdegp: r.usdegp, cpi: r.cpi, usdRet: r.usdRet, realRet: r.realRet, trades: r.trades, source: r.estimate ? 'estimate (awaiting statement)' : r.source || 'typed' })),
+    ret: r.ret, retSimple: r.retSimple, bench: r.bench, alpha: r.alpha, cum: r.pCum, cumBench: r.pBench, dd: r.dd, benchClose: r.benchClose, usdegp: r.usdegp, cpi: r.cpi, usdRet: r.usdRet, realRet: r.realRet, cashRet: r.cashRet, trades: r.trades, tradingCost: r.tradingCost, source: r.estimate ? 'estimate (awaiting statement)' : r.source || 'typed' })),
   holdings: H.rows.filter((h) => h.shares > 0.5).map((h) => ({ symbol: h.symbol, name: h.name, sector: h.sector, shares: h.shares, avgCost: h.shares ? h.cost / h.shares : null, price: h.price, priceSource: h.src, mv: h.mv, cost: h.cost, unreal: h.mv != null ? h.mv - h.cost : null, ret: h.cost ? (h.mv - h.cost) / h.cost : null, weight: total ? (h.mv || 0) / total : 0,
     dividends: R.ledger.filter((t) => t.t === 'Dividend' && t.a && (t.a === h.name || t.a === h.symbol)).reduce((s, t) => s + (t.amt || 0), 0) })).sort((a, b) => (b.mv || 0) - (a.mv || 0)),
   holdingsCash: cash, holdingsTotal: total,

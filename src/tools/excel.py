@@ -53,12 +53,15 @@ put(ws, 1, 1, d["name"]).font = T
 ws["A2"] = f"Month-end report · {lbl(d['month'])} · benchmark {d['benchmark']} · EGP · inception {lbl(d['inception'])} · generated {d['generated']}"; ws["A2"].font = S
 r = 4
 groups = [("Value", ["Portfolio value (EGP)", "Cash (EGP)", "Securities (EGP)", "Difference: statement value vs closing prices (EGP)"]),
-          ("Returns", ["Month return", "Benchmark month return", "Month alpha", "Since inception TWR", "Since inception benchmark", "Alpha since inception", "Annualized TWR", "Money-weighted return (XIRR, annual)", "Return in USD", "Real return (after CPI)"]),
-          ("Risk", ["Monthly volatility", "Annualized volatility", "Sharpe ratio", "Sortino ratio", "Calmar ratio", "Beta vs benchmark", "Correlation", "Tracking error (annual)", "Upside capture", "Downside capture", "Max drawdown (month-end)", "Positive months", "Months in period", "Months beating benchmark"]),
-          ("Capital", ["Opening value before inception (EGP)", "Deposits since inception (EGP)", "Withdrawals since inception (EGP)", "Investment gain since inception (EGP)", "Dividends received since inception (EGP)", "Realized trading P/L (EGP)", "Risk-free rate used"])]
+          ("Returns", ["Month return", "Benchmark month return", "Month alpha", "Since inception TWR", "Since inception benchmark", "Alpha since inception", "Annualized TWR", "Money-weighted return (XIRR, annual)", "Return in USD", "Real return (after CPI)",
+                       "Cash benchmark (CBE policy rate) over the period", "Ahead of cash", "Index dividend yield (estimate)", "Index return with dividends (estimate)", "Return before trading costs"]),
+          ("Risk", ["Monthly volatility", "Annualized volatility", "Sharpe ratio", "Sortino ratio", "Calmar ratio", "Beta vs benchmark", "Jensen's alpha (annual)", "Correlation", "Tracking error (annual)", "Upside capture", "Downside capture", "Max drawdown (month-end)", "Positive months", "Months in period", "Months beating benchmark"]),
+          ("Capital", ["Opening value before inception (EGP)", "Deposits since inception (EGP)", "Withdrawals since inception (EGP)", "Investment gain since inception (EGP)", "Dividends received since inception (EGP)", "Realized trading P/L (EGP)", "Trading costs (EGP)", "Trading costs as % of value traded", "Risk-free rate used"])]
 # returns are signed with 2 decimals (as on the Monthly sheet); unsigned quantities (rates, volatility, capture ratios) plain 0.0%
-ret_keys = {"Month return", "Benchmark month return", "Month alpha", "Since inception TWR", "Since inception benchmark", "Alpha since inception", "Annualized TWR", "Money-weighted return (XIRR, annual)", "Return in USD", "Real return (after CPI)", "Max drawdown (month-end)"}
-unsigned_keys = {"Monthly volatility", "Annualized volatility", "Tracking error (annual)", "Upside capture", "Downside capture", "Risk-free rate used"}
+ret_keys = {"Month return", "Benchmark month return", "Month alpha", "Since inception TWR", "Since inception benchmark", "Alpha since inception", "Annualized TWR", "Money-weighted return (XIRR, annual)", "Return in USD", "Real return (after CPI)", "Max drawdown (month-end)",
+            "Cash benchmark (CBE policy rate) over the period", "Ahead of cash", "Index return with dividends (estimate)", "Return before trading costs", "Jensen's alpha (annual)"}
+unsigned_keys = {"Monthly volatility", "Annualized volatility", "Tracking error (annual)", "Upside capture", "Downside capture", "Risk-free rate used", "Index dividend yield (estimate)"}
+small_pct_keys = {"Trading costs as % of value traded"}  # ~0.1-0.5%: two decimals
 labels = d.get("labels") or {}
 for g, keys in groups:
     put(ws, r, 1, g.upper()).font = Font(bold=True, size=9, color="6F7D78"); r += 1
@@ -66,7 +69,7 @@ for g, keys in groups:
         v = d["summary"].get(k)
         put(ws, r, 1, labels.get(k, k)).border = bottom
         c = put(ws, r, 2, v if v is not None else "—"); c.border = bottom; c.alignment = Alignment(horizontal="right")
-        c.number_format = PCT2 if k in ret_keys else PCTU if k in unsigned_keys else EGP if "(EGP)" in k else NUM if isinstance(v, float) else "0"
+        c.number_format = PCT2 if k in ret_keys else PCTU if k in unsigned_keys else "0.00%" if k in small_pct_keys else EGP if "(EGP)" in k else NUM if isinstance(v, float) else "0"
         r += 1
     r += 1
 put(ws, r, 1, "TRAILING RETURNS").font = Font(bold=True, size=9, color="6F7D78"); r += 1
@@ -82,14 +85,15 @@ ws.column_dimensions["A"].width = 42; ws.column_dimensions["B"].width = 18; ws.c
 
 # ---------- Monthly (values) ----------
 # Columns: A Month, B Opening, C Deposits, D Withdrawals, E Net flow, F Day-weighted flow, G Dividends, H Cash, I Securities,
-#          J Month-end value, K Return, L Benchmark, M Alpha, N Cumulative, O Cumulative benchmark, P Drawdown, Q..W inputs/source
-hdr = ["Month", "Opening value", "Deposits", "Withdrawals", "Net flow", "Day-weighted flow", "Dividends", "Cash", "Securities", "Month-end value", "Return", "Benchmark", "Alpha", "Cumulative", "Cumulative benchmark", "Drawdown", "EGX30 Capped close", "USD/EGP", "CPI MoM", "USD return", "Real return", "Trades", "Month-end source"]
-fm = [None, EGP, EGP, EGP, EGP, EGP2, EGP, EGP2, EGP2, EGP2, PCT2, PCT2, PCT2, PCT, PCT, PCT, "#,##0.0", "0.00", PCT2, PCT, PCT, "0", None]
-mwidths = [9, 14, 12, 12, 12, 13, 11, 13, 14, 15, 10, 11, 10, 11, 12, 10, 13, 9, 9, 10, 10, 7, 22]
+#          J Month-end value, K Return, L Benchmark, M Alpha, N Cumulative, O Cumulative benchmark, P Drawdown, Q close, R USD/EGP, S CPI,
+#          T USD return, U Real return, V Cash return (CBE policy rate), W Trades, X Trading costs, Y source
+hdr = ["Month", "Opening value", "Deposits", "Withdrawals", "Net flow", "Day-weighted flow", "Dividends", "Cash", "Securities", "Month-end value", "Return", "Benchmark", "Alpha", "Cumulative", "Cumulative benchmark", "Drawdown", "EGX30 Capped close", "USD/EGP", "CPI MoM", "USD return", "Real return", "Cash return", "Trades", "Trading costs", "Month-end source"]
+fm = [None, EGP, EGP, EGP, EGP, EGP2, EGP, EGP2, EGP2, EGP2, PCT2, PCT2, PCT2, PCT, PCT, PCT, "#,##0.0", "0.00", PCT2, PCT, PCT, PCT2, "0", EGP2, None]
+mwidths = [9, 14, 12, 12, 12, 13, 11, 13, 14, 15, 10, 11, 10, 11, 12, 10, 13, 9, 9, 10, 10, 10, 7, 12, 22]
 rows = [[lbl(m["month"]), m["opening"], m["deposits"], m["withdrawals"], m["netFlow"], m.get("weightedFlow", m["deposits"] - m["withdrawals"]), m["dividends"], m["cash"], m["securities"], m["value"],
-         m["ret"], m["bench"], m["alpha"], m["cum"], m["cumBench"], m["dd"], m["benchClose"], m["usdegp"], m["cpi"], m["usdRet"], m["realRet"], m["trades"], m["source"]] for m in d["monthly"]]
+         m["ret"], m["bench"], m["alpha"], m["cum"], m["cumBench"], m["dd"], m["benchClose"], m["usdegp"], m["cpi"], m["usdRet"], m["realRet"], m.get("cashRet"), m["trades"], m.get("tradingCost"), m["source"]] for m in d["monthly"]]
 sheet("Monthly", hdr, rows, fm, mwidths,
-      note="Return = Modified Dietz: (month-end value − opening − net flow) ÷ (opening + day-weighted net flow), where each deposit or withdrawal is weighted by the share of the month it was invested (a flow on the 1st counts fully); months are chain-linked. All figures are the page's values; the last sheet, 'Monthly (formulas)', repeats this table with live formulas.")
+      note="Return = Modified Dietz: (month-end value − opening − net flow) ÷ (opening + day-weighted net flow), where each deposit or withdrawal is weighted by the share of the month it was invested (a flow on the 1st counts fully); months are chain-linked. Cash return = the CBE policy rate for the month ((1 + annual rate)^(1/12) − 1; the settings' risk-free rate where no CBE rate is recorded). Trading costs = net amount vs price × shares on stock trades. All figures are the page's values; the last sheet, 'Monthly (formulas)', repeats this table with live formulas.")
 
 # ---------- Holdings ----------
 diff = d["summary"].get("Difference: statement value vs closing prices (EGP)") or 0
@@ -145,6 +149,7 @@ if A:
 mcols = [("Month", lambda m: lbl(m["month"]), None, 9), ("Cash", lambda m: m.get("cash"), EGP2, 14), ("Securities", lambda m: m.get("securities"), EGP2, 15),
          ("EGX30 Capped close", lambda m: m.get("benchClose"), "#,##0.0", 14), ("EGX30 Capped % (typed)", lambda m: m.get("benchReturn"), PCT2, 12),
          ("USD/EGP", lambda m: m.get("usdegp"), "0.00", 9), ("CPI MoM", lambda m: m.get("cpi"), PCT2, 9), ("Month-end source", lambda m: m.get("source", "typed"), None, 15)]
+if any(isinstance(m.get("cashRate"), (int, float)) for m in d["marks"]): mcols.append(("CBE policy rate (annual)", lambda m: m.get("cashRate"), "0.00%", 12))
 for key, title in (("cpiSource", "CPI source"), ("usdegpSource", "USD/EGP source")):
     if any(m.get(key) for m in d["marks"]): mcols.append((title, (lambda k: lambda m: m.get(k, ""))(key), None, 30))
 mcols.append(("Note", lambda m: m.get("note", ""), None, 30))
@@ -172,7 +177,7 @@ for i, m in enumerate(d["monthly"]):
     R = 4 + i  # note row, blank, header, then data
     rows.append([lbl(m["month"]), m["opening"], m["deposits"], m["withdrawals"], f"=C{R}-D{R}", m.get("weightedFlow", m["deposits"] - m["withdrawals"]), m["dividends"], m["cash"], m["securities"], f"=H{R}+I{R}",
                  f"=(J{R}-B{R}-E{R})/(B{R}+F{R})", m["bench"], f"=K{R}-L{R}", f"=(1+K{R})*{'(1+N' + str(R - 1) + ')' if i else '1'}-1", f"=(1+L{R})*{'(1+O' + str(R - 1) + ')' if i else '1'}-1",
-                 f"=(1+N{R})/MAX(1,1+MAX($N$4:N{R}))-1", m["benchClose"], m["usdegp"], m["cpi"], m["usdRet"], m["realRet"], m["trades"], m["source"]])
+                 f"=(1+N{R})/MAX(1,1+MAX($N$4:N{R}))-1", m["benchClose"], m["usdegp"], m["cpi"], m["usdRet"], m["realRet"], m.get("cashRet"), m["trades"], m.get("tradingCost"), m["source"]])
 sheet("Monthly (formulas)", hdr, rows, fm, mwidths, formulas=True,
       note="Recalculates in Excel/Numbers/Sheets; phone previews show the Monthly sheet. Columns E, J, K, M, N, O, P are live formulas (Modified Dietz, chain-linked); the rest are the page's figures.")
 
