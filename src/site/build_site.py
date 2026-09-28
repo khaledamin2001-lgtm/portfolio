@@ -10,8 +10,16 @@ page = page.replace('readOnly:false,', 'readOnly:true,')
 hook = "async function refreshNow(btn){"
 assert page.count(hook) == 1, 'page layout changed: refreshNow not found'
 page = page.replace(hook, hook + " if(window.pdRefreshPrices) return window.pdRefreshPrices(btn, toast);")
+hook = "function toast(msg, kind){"   # lock.js shows its notices (live prices unavailable) through the page's own toast
+assert page.count(hook) == 1, 'page layout changed: toast() not found'
+page = page.replace(hook, "window.pdToast = (m, k) => toast(m, k);\n" + hook)
+# Content-Security-Policy: the page loads only itself, Google Fonts and the TradingView scanner (pdf.js is never loaded on the site:
+# it is only fetched by the Claude page's statement reader). Inline scripts/styles are the whole app, hence 'unsafe-inline'.
+CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+       "font-src https://fonts.gstatic.com; connect-src 'self' https://scanner.tradingview.com; img-src 'self' data: blob:; base-uri 'none'; form-action 'none'")
 css, js = open('lock.css').read(), open('lock.js').read()
 head = '''<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="''' + CSP + '''">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#0B6E5F"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
@@ -24,7 +32,7 @@ head = '''<!doctype html><html lang="en"><head><meta charset="utf-8">
 </style></head><body class="pd-locked">
 <div id="lock" role="dialog" aria-modal="true" aria-label="Unlock portfolio"></div>
 <script>''' + js + '</script>\n'
-bar = '''<div id="pd-bar" data-testid="live-bar"><span><strong id="pd-who"></strong> · <span id="pd-updated">Loading…</span></span><span>Prices live from TradingView · edits and statement imports happen on the Claude page</span><span class="pd-actions"><button type="button" id="pd-switch" hidden onclick="pdSwitch()" data-testid="live-switch-bar">Switch portfolio</button><button type="button" onclick="pdLock()" data-testid="live-lock">Lock</button></span></div>
+bar = '''<div id="pd-bar" data-testid="live-bar"><span><strong id="pd-who"></strong> · <span id="pd-updated">Loading…</span></span><span><span id="pd-prices" data-testid="live-prices-status">Prices from the last daily update</span> · edits and statement imports happen on the Claude page</span><span class="pd-actions"><button type="button" id="pd-switch" hidden onclick="pdSwitch()" data-testid="live-switch-bar">Switch portfolio</button><button type="button" onclick="pdLock()" data-testid="live-lock">Lock</button></span></div>
 </body></html>'''
 open(os.path.join(REPO, 'index.html'), 'w').write(head + page + bar)
 json.dump(PORTFOLIOS, open(os.path.join(REPO, 'portfolios.json'), 'w'))

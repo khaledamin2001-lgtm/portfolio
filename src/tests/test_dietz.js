@@ -164,7 +164,7 @@ if (fs.existsSync(fixK) && fs.existsSync(fixY)) {
   check('Khaled: every closed name\'s trips add up to its row (realized and dividends)', offRows.length === 0, offRows.map((r) => r.name).join(', ') || 'all match');
   check('Khaled: S.realized unchanged between modes', sN.realized === sT.realized, `${sT.realized}`);
   // 9d. workbook cut-off (tools/excel.js run as a child process)
-  const xlOut = path.join(SP, 'fix2', 'tmp', 'engine', 'xl_test.json');
+  const xlOut = path.join(SP, 'fix3', 'tmp', 'engine', 'xl_test.json');
   try {
     fs.mkdirSync(path.dirname(xlOut), { recursive: true });
     require('child_process').execFileSync(process.execPath, ['excel.js', '--data', fixK, '--month', '2026-08', '--out', xlOut], { cwd: path.join(SP, 'tools'), stdio: 'pipe' });
@@ -179,6 +179,116 @@ if (fs.existsSync(fixK) && fs.existsSync(fixY)) {
   check('Yassin: broker cash check warns (source is the workbook, not a statement)', cY.status === 'warn' && /not from a Thndr statement \(workbook/.test(cY.detail), cY.detail);
   check('Khaled: broker cash check stays ok (Thndr statement)', cK.status === 'ok' && /from Thndr statement/.test(cK.detail), cK.detail);
 } else console.log('SKIP fix/export-* checks (not found)');
+
+// 10. polish round: missing benchmark months, small samples, attribution across a gap, calendar-month trailing windows
+{
+  const st = { ...settings, openingValue: 1000 };
+  const mkN = (n, benchOf) => { const m = {}; for (let i = 0; i < n; i++) { const b = benchOf ? benchOf(i) : 0.01 * ((i % 3) - 1); m[PE.addMonths('2026-01', i)] = { cash: 0, securities: 1000 * (1 + 0.02 * (i + 1)) * (1 + 0.01 * (i % 2)), ...(b != null ? { benchReturn: b } : {}) }; } return m; };
+  const runN = (marks) => PE.run({ settings: st, marks, assets: {}, tx: [] }, { type: 'Since Inception' }, { today: '2028-01-10', live: false }).stats;
+  // 10.1 a month with no benchmark return: benchTwr/alpha null (not chained as 0%), pctBeat over the months that have one
+  const S1 = runN(mkN(8, (i) => (i === 4 ? null : 0.001)));
+  const b1 = S1.rows.filter((r) => r.bench != null);
+  check('Missing benchmark month: benchTwr and alpha null, benchComplete false, pBench null from that month on', S1.benchTwr === null && S1.alpha === null && S1.benchComplete === false && S1.rows[3].pBench != null && S1.rows[4].pBench === null && S1.rows[7].pBench === null, JSON.stringify({ benchTwr: S1.benchTwr, alpha: S1.alpha, pBench: S1.rows.map((r) => r.pBench) }));
+  check('Missing benchmark month: pctBeat = beat ÷ 7 months with a benchmark (not ÷ 8)', b1.length === 7 && S1.benchMonths === 7 && Math.abs(S1.pctBeat - S1.beat / 7) < 1e-12 && S1.beat === 7, `${S1.beat}/${S1.benchMonths} = ${S1.pctBeat}`);
+  const S1c = runN(mkN(8, () => 0.001));
+  check('Complete benchmark: benchTwr chains every month, alpha = twr − benchTwr', S1c.benchComplete && Math.abs(S1c.benchTwr - (Math.pow(1.001, 8) - 1)) < 1e-12 && Math.abs(S1c.alpha - (S1c.twr - S1c.benchTwr)) < 1e-12, `${S1c.benchTwr}`);
+  // 10.2 small samples: ratios need 6 returns; smallSample below 12; the risk label needs 3
+  const S5 = runN(mkN(5)), S6 = runN(mkN(6)), S12 = runN(mkN(12)), S2 = runN(mkN(2)), S3 = runN(mkN(3));
+  const ratios = (x) => [x.sharpe, x.sortino, x.beta, x.correl, x.trackingError, x.upCapture, x.downCapture];
+  check('5 returns: Sharpe, Sortino, beta, correlation, tracking error and capture ratios are all null', S5.n === 5 && ratios(S5).every((v) => v === null) && S5.smallSample === true, JSON.stringify(ratios(S5)));
+  check('6 returns: ratios computed, still smallSample', S6.n === 6 && ratios(S6).every((v) => v != null && isFinite(v)) && S6.smallSample === true, JSON.stringify(ratios(S6).map((v) => v && +v.toFixed(3))));
+  check('12 returns: smallSample false', S12.n === 12 && S12.smallSample === false && S12.sharpe != null);
+  check("Risk label: 'n/a' with 2 returns, rated with 3", S2.risk === 'n/a' && S3.risk !== 'n/a' && ['Low', 'Moderate', 'High'].includes(S3.risk), `${S2.risk} / ${S3.risk}`);
+  const S6b = runN(mkN(7, (i) => (i < 2 ? null : 0.001)));
+  check('Benchmark ratios need 6 months WITH a benchmark (7 returns, 5 with one → beta null, Sharpe computed)', S6b.n === 7 && S6b.benchMonths === 5 && S6b.beta === null && S6b.correl === null && S6b.trackingError === null && S6b.upCapture === null && S6b.sharpe != null, JSON.stringify({ beta: S6b.beta, sharpe: S6b.sharpe }));
+  // 10.4 trailing windows are calendar months; a spanning row counts only if it starts inside the window
+  const mkT = { '2026-01': { cash: 0, securities: 1010, benchReturn: 0.01 }, '2026-02': { cash: 0, securities: 1030, benchReturn: 0.01 }, '2026-03': { benchReturn: 0.01 }, '2026-04': { cash: 0, securities: 1050, benchReturn: 0.01 }, '2026-05': { cash: 0, securities: 1100, benchReturn: 0.01 }, '2026-06': { cash: 0, securities: 1080, benchReturn: 0.01 } };
+  const GT = PE.run({ settings: st, marks: mkT, assets: {}, tx: [] }, { type: 'Since Inception' }, { today: '2026-07-10', live: false });
+  const T6 = PA.trailing(GT.months, '2026-06'), T5 = PA.trailing(GT.months, '2026-05'), T4 = PA.trailing(GT.months, '2026-04');
+  const tv = (T, l) => T.find((t) => t.label === l);
+  const rr = (m) => GT.months.find((r) => r.month === m).ret;
+  check('Trailing 3M to Jun-26 is null: Apr-26 spans Mar–Apr and Mar is before the window', tv(T6, '3M').p === null && tv(T6, '3M').n === 0, JSON.stringify(tv(T6, '3M')));
+  check('Trailing 3M to May-26 = Mar–Apr span × May, n = 3 calendar months', Math.abs(tv(T5, '3M').p - ((1 + rr('2026-04')) * (1 + rr('2026-05')) - 1)) < 1e-12 && tv(T5, '3M').n === 3, JSON.stringify(tv(T5, '3M')));
+  check('Trailing 6M/YTD/Since inception to Jun-26 cover 6 calendar months from 5 returns; 1Y null (before inception)', tv(T6, '6M').n === 6 && tv(T6, 'YTD').n === 6 && tv(T6, 'Since inception').n === 6 && Math.abs(tv(T6, '6M').p - (1080 / 1000 - 1)) < 1e-12 && tv(T6, '1Y').p === null, JSON.stringify([tv(T6, '6M'), tv(T6, '1Y')].map((t) => [t.p, t.n])));
+  check('Trailing 1M to Apr-26 (a two-month span) is null; 1M to Jun-26 is Jun alone', tv(T4, '1M').p === null && Math.abs(tv(T6, '1M').p - rr('2026-06')) < 1e-12 && tv(T6, '1M').n === 1);
+  check('Trailing benchmark over a covered window chains the span rows (3M to May: 1.01² × 1.01 = 3 months)', Math.abs(tv(T5, '3M').b - ((1 + GT.months.find((r) => r.month === '2026-04').bench) * 1.01 - 1)) < 1e-12 && Math.abs(tv(T5, '3M').b - (Math.pow(1.01, 3) - 1)) < 1e-12, `${tv(T5, '3M').b}`);
+}
+// 10.3 + 10.4 on real data (fix/export-khaled): attribution across a gap covers the span; trailing 1Y = 12 calendar months
+if (fs.existsSync(fixK)) {
+  const J = (f) => { const x = JSON.parse(fs.readFileSync(f)); return x.data || x; };
+  const D = (...p) => path.join(fixK, ...p), today = '2026-09-27';
+  const s = J(D('portfolio', 'settings.json')), mk0 = J(D('portfolio', 'marks.json')).months, assets = J(D('portfolio', 'assets.json')).items;
+  const tx = fs.readdirSync(D('ledger')).filter((f) => /^y\d{4}\.json$/.test(f)).sort().flatMap((f) => J(D('ledger', f)).rows || []);
+  const history = {}; fs.readdirSync(D('history')).forEach((f) => { history[f.replace('.json', '')] = J(D('history', f)); });
+  const market = J(D('market', 'latest.json')), bench = J(D('bench', 'egx30.json'));
+  const pb = PA.priceBook(history), mk = PA.estimateMarks(s, mk0, PE.runLedger(tx), assets, pb, today);
+  const run = (marks) => PE.run({ settings: s, marks, assets, tx, market }, { type: 'Since Inception' }, { today });
+  const RF = run(mk), gap = { ...mk }; delete gap['2026-07']; const RG = run(gap);
+  const AF = PA.attribution(RF.months, { from: '2026-07', to: '2026-08' }, RF.ledger, assets, pb, bench, today);
+  const AG = PA.attribution(RG.months, { from: '2026-07', to: '2026-08' }, RG.ledger, assets, pb, bench, today);
+  const g = AG.months[0], aug = RG.months.find((r) => r.month === '2026-08');
+  check('Attribution across a gap: the Aug-26 row (spans 2) starts at the last session of Jun-26 with Jun-26 holdings', AG.months.length === 1 && g.spans === 2 && g.d0 === pb.lastDayOnOrBefore('2026-06-30') && g.d0 > '2026-06-20' && Math.abs(g.startValue - AF.months[0].startValue) < 1e-6, `d0 ${g.d0} d1 ${g.d1} startValue ${g.startValue}`);
+  check('Attribution across a gap: R and B are the span figures and the index model gap stays small (|B* − B| < 1 pp)', Math.abs(g.R - aug.ret) < 1e-12 && Math.abs(g.B - aug.bench) < 1e-12 && Math.abs(g.replication) < 0.01, `R ${g.R} B ${g.B} B* ${g.Bs} gap ${g.replication}`);
+  check('Attribution across a gap: B* over the span within 0.2 pp of the full data chained over Jul and Aug', Math.abs(g.Bs - (AF.months.reduce((a, m) => a * (1 + m.Bs), 1) - 1)) < 0.002 && Math.abs(AG.alloc + AG.sel + AG.trading + AG.replication - AG.active) < 1e-9, `${g.Bs}`);
+  check('Attribution result carries tradingNote', AF.tradingNote === PA.TRADING_NOTE && /dividends, rebates and fees/.test(AF.tradingNote));
+  const TK = PA.trailing(RF.months, '2026-08');
+  check('Khaled trailing to Aug-26: 1Y from Sep-25 over 12 months, since inception 13 months annualized', TK.find((t) => t.label === '1Y').n === 12 && TK.find((t) => t.label === '1Y').from === '2025-09' && TK.find((t) => t.label === 'Since inception').n === 13 && TK.find((t) => t.label === 'Since inception').ann != null, TK.map((t) => `${t.label} ${t.n}`).join(', '));
+  check('Khaled since inception: 14 returns, not a small sample, pctBeat over months with a benchmark', RF.stats.n === 14 && RF.stats.smallSample === false && RF.stats.benchMonths === 14 && Math.abs(RF.stats.pctBeat - RF.stats.beat / 14) < 1e-12, `${RF.stats.beat}/${RF.stats.benchMonths}`);
+}
+
+// 11. Excel workbook (tools/excel.js + excel.py) for Aug-26: Monthly holds values, the formulas moved to the last sheet
+if (fs.existsSync(fixK)) {
+  const T = path.join(SP, 'fix3', 'tmp', 'engine'), cp = require('child_process');
+  const J0 = (f) => { const x = JSON.parse(fs.readFileSync(f)); return x.data || x; };
+  try {
+    fs.mkdirSync(T, { recursive: true });
+    cp.execFileSync(process.execPath, ['excel.js', '--data', fixK, '--month', '2026-08', '--out', path.join(T, 'xl.json')], { cwd: path.join(SP, 'tools'), stdio: 'pipe' });
+    // formula-injection probe: the same data with hostile text in a ledger note, an asset name and a closed trade
+    const X = JSON.parse(fs.readFileSync(path.join(T, 'xl.json')));
+    X.ledger[0].note = '=HYPERLINK("http://x","y")'; X.ledger[1].asset = '@SUM(A1)'; X.ledger[2].note = '-5 fee'; X.ledger[3].note = '+20';
+    X.marks[0].cpiSource = 'CAPMAS';
+    // partial CPI: an overlay whose Aug-26 mark has no CPI makes excel.js fall back to the real return through Jul-26
+    const ov = path.join(T, 'overlay-nocpi'); fs.mkdirSync(ov, { recursive: true });
+    const mOv = J0(path.join(fixK, 'portfolio', 'marks.json')); delete mOv.months['2026-08'].cpi; fs.writeFileSync(path.join(ov, 'marks.json'), JSON.stringify(mOv));
+    cp.execFileSync(process.execPath, ['excel.js', '--data', fixK, '--overlay', ov, '--month', '2026-08', '--out', path.join(T, 'xl_nocpi.json')], { cwd: path.join(SP, 'tools'), stdio: 'pipe' });
+    X.labels = JSON.parse(fs.readFileSync(path.join(T, 'xl_nocpi.json'))).labels;
+    X.summary['Real return (after CPI)'] = JSON.parse(fs.readFileSync(path.join(T, 'xl_nocpi.json'))).summary['Real return (after CPI)'];
+    fs.writeFileSync(path.join(T, 'xl_inj.json'), JSON.stringify(X));
+    cp.execFileSync('python3', ['excel.py', path.join(T, 'xl.json'), path.join(T, 'test.xlsx')], { cwd: path.join(SP, 'tools'), stdio: 'pipe' });
+    cp.execFileSync('python3', ['excel.py', path.join(T, 'xl_inj.json'), path.join(T, 'test_inj.xlsx')], { cwd: path.join(SP, 'tools'), stdio: 'pipe' });
+    const py = `
+import json, sys
+from openpyxl import load_workbook
+T = sys.argv[1]
+v = load_workbook(T + '/test.xlsx', data_only=True); f = load_workbook(T + '/test.xlsx'); i = load_workbook(T + '/test_inj.xlsx')
+m = v['Monthly']; hdr = [c.value for c in m[3]]; K = hdr.index('Return') + 1
+rets = [m.cell(r, K).value for r in range(4, m.max_row + 1)]
+fm = f['Monthly (formulas)']
+led = i['Ledger']; lh = [c.value for c in led[3]]
+cells = [led.cell(4, lh.index('Note') + 1), led.cell(5, lh.index('Asset') + 1), led.cell(6, lh.index('Note') + 1), led.cell(7, lh.index('Note') + 1)]
+summ = {r[0].value: r[1] for r in v['Summary'].iter_rows(min_row=1) if r[0].value}
+summI = {r[0].value: r[1] for r in i['Summary'].iter_rows(min_row=1) if r[0].value}
+closed = [r[0].value for r in v['Closed trades'].iter_rows(min_row=4)]
+print(json.dumps({
+  'sheets': v.sheetnames, 'rets': rets, 'monthlyFormulaCells': sum(1 for row in f['Monthly'].iter_rows() for c in row if c.data_type == 'f'),
+  'fK4': fm['K4'].value, 'fK4type': fm['K4'].data_type, 'fNote': fm['A1'].value,
+  'inj': [[c.value, c.data_type] for c in cells],
+  'diff': summ['Difference: statement value vs closing prices (EGP)'].value, 'holdNote': v['Holdings']['A1'].value,
+  'fmt': {k: summ[k].number_format for k in ['Month return', 'Risk-free rate used', 'Upside capture', 'Annualized volatility', 'Tracking error (annual)', 'Max drawdown (month-end)']},
+  'realLabel': [k for k in summI if str(k).startswith('Real return')], 'marksHdr': [c.value for c in v['Marks & inputs'][3]], 'marksHdrI': [c.value for c in i['Marks & inputs'][3]],
+  'closed': [c for c in closed if c and ('TMG Holding' in c)]}))
+`;
+    const Q = JSON.parse(cp.execFileSync('python3', ['-c', py, T], { encoding: 'utf8' }));
+    check('Workbook: Monthly Return cells hold numbers when read with data_only=True (13 months, no formulas on the sheet)', Q.rets.length === 13 && Q.rets.every((x) => typeof x === 'number') && Q.monthlyFormulaCells === 0, Q.rets.map((x) => (x * 100).toFixed(2)).join(' '));
+    check("Workbook: last sheet 'Monthly (formulas)' keeps the live formulas and the phone-preview note", Q.sheets[Q.sheets.length - 1] === 'Monthly (formulas)' && Q.fK4 === '=(J4-B4-E4)/(B4+F4)' && Q.fK4type === 'f' && /phone previews show the Monthly sheet/.test(Q.fNote), Q.sheets.join(', '));
+    check('Workbook: text starting with = @ - + is stored as text, never a formula', Q.inj.every(([v, t]) => t === 's') && Q.inj[0][0] === '=HYPERLINK("http://x","y")' && Q.inj[1][0] === '@SUM(A1)', JSON.stringify(Q.inj));
+    check('Workbook: Summary shows the statement-vs-closes difference (~1,087 EGP) and Holdings explains it', Math.abs(Q.diff - 1086.66) < 1 && /1,087 EGP lower/.test(Q.holdNote), `${Q.diff}`);
+    check('Workbook: unsigned figures use 0.0%, returns the signed 2-decimal format', Q.fmt['Month return'] === '+0.00%;-0.00%;0.00%' && Q.fmt['Max drawdown (month-end)'] === '+0.00%;-0.00%;0.00%' && ['Risk-free rate used', 'Upside capture', 'Annualized volatility', 'Tracking error (annual)'].every((k) => Q.fmt[k] === '0.0%'), JSON.stringify(Q.fmt));
+    check("Workbook: partial real return is labelled 'through <Mon-YY>'", Q.realLabel.join() === 'Real return (after CPI, through Jul-26)', Q.realLabel.join());
+    check('Workbook: Marks & inputs drops empty source columns and keeps one that has data', !Q.marksHdr.includes('CPI source') && !Q.marksHdr.includes('USD/EGP source') && Q.marksHdrI.includes('CPI source') && !Q.marksHdrI.includes('USD/EGP source'), `${Q.marksHdr.join('|')}`);
+    check("Workbook: Closed trades numbers repeat trips ('TMG Holding (2)', 'TMG Holding (1)')", Q.closed.join() === 'TMG Holding (2),TMG Holding (1)', Q.closed.join());
+  } catch (e) { check('Workbook Aug-26 build and openpyxl read-back', false, String(e.stderr || e.message).slice(0, 400)); }
+}
 
 console.log(fail ? `FAIL ${fail}` : 'ALL PASS');
 process.exit(fail ? 1 : 0);

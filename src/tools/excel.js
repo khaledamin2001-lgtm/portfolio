@@ -44,11 +44,16 @@ const inc = PA.income(R.ledger, assets, R.pos, market, today);
 const A = bench ? PA.attribution(R.months, R.range, R.ledger, assets, pb, bench, today) : null;
 // one row per closed round trip (a stock bought, sold out and bought again is two rows, `trip` 1 and 2); cash-like funds included here
 const closed = R.pos.trips.filter((r) => r.lastSell <= cutoff);
+// Summary value = the month's mark (Thndr statement); Holdings total = the same shares at closing prices + cash. The gap is shown.
+const statementValue = row.value ?? total;
+// the real return falls back to the months that have CPI: say which month it runs to
+const realPartial = st.realTwr == null && st.realTwrPartial != null && st.realThrough;
 
 const out = {
   month: M, name: settings.name, inception: settings.inception, generated: PE.cairoToday(), benchmark: 'EGX30 Capped',
   summary: {
-    'Portfolio value (EGP)': row.value ?? total, 'Cash (EGP)': cash, 'Securities (EGP)': row.securities ?? H.mv,
+    'Portfolio value (EGP)': statementValue, 'Cash (EGP)': cash, 'Securities (EGP)': row.securities ?? H.mv,
+    'Difference: statement value vs closing prices (EGP)': Math.round((statementValue - total) * 100) / 100,
     'Month return': row.ret, 'Benchmark month return': row.bench, 'Month alpha': row.alpha,
     'Since inception TWR': st.twr, 'Since inception benchmark': st.benchTwr, 'Alpha since inception': st.alpha, 'Annualized TWR': st.annualized,
     'Money-weighted return (XIRR, annual)': st.xirr, 'Return in USD': st.usdTwr, 'Real return (after CPI)': st.realTwr ?? st.realTwrPartial,
@@ -58,8 +63,9 @@ const out = {
     'Deposits since inception (EGP)': st.deposits, 'Withdrawals since inception (EGP)': st.withdrawals, 'Investment gain since inception (EGP)': st.netGain,
     'Dividends received since inception (EGP)': st.dividends, 'Realized trading P/L (EGP)': st.realized, 'Risk-free rate used': settings.riskFree, 'Opening value before inception (EGP)': settings.openingValue,
   },
+  labels: realPartial ? { 'Real return (after CPI)': `Real return (after CPI, through ${PE.fmtMonth(st.realThrough)})` } : {},
   trailing: tr.map((t) => ({ period: t.label, portfolio: t.p, benchmark: t.b, difference: t.a })),
-  attribution: A ? { active: A.active, allocation: A.alloc, selection: A.sel, trading: A.trading, replication: A.replication, sectors: A.sectors.map((s) => ({ sector: s.sector, wp: s.wp, wb: s.wb, rp: s.rp, rb: s.rb, alloc: s.alloc, sel: s.sel, total: s.total })) } : null,
+  attribution: A ? { active: A.active, allocation: A.alloc, selection: A.sel, trading: A.trading, tradingNote: A.tradingNote, replication: A.replication, sectors: A.sectors.map((s) => ({ sector: s.sector, wp: s.wp, wb: s.wb, rp: s.rp, rb: s.rb, alloc: s.alloc, sel: s.sel, total: s.total })) } : null,
   monthly: R.months.filter((r) => r.has && r.month <= M).map((r) => ({ month: r.month, opening: r.opening, deposits: r.deposits, withdrawals: r.withdrawals, netFlow: r.netFlow, weightedFlow: r.weightedFlow, dividends: r.dividends, cash: r.cash, securities: r.securities, value: r.value,
     ret: r.ret, retSimple: r.retSimple, bench: r.bench, alpha: r.alpha, cum: r.pCum, cumBench: r.pBench, dd: r.dd, benchClose: r.benchClose, usdegp: r.usdegp, cpi: r.cpi, usdRet: r.usdRet, realRet: r.realRet, trades: r.trades, source: r.estimate ? 'estimate (awaiting statement)' : r.source || 'typed' })),
   holdings: H.rows.filter((h) => h.shares > 0.5).map((h) => ({ symbol: h.symbol, name: h.name, sector: h.sector, shares: h.shares, avgCost: h.shares ? h.cost / h.shares : null, price: h.price, priceSource: h.src, mv: h.mv, cost: h.cost, unreal: h.mv != null ? h.mv - h.cost : null, ret: h.cost ? (h.mv - h.cost) / h.cost : null, weight: total ? (h.mv || 0) / total : 0,

@@ -1,4 +1,5 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self' https://scanner.tradingview.com; img-src 'self' data: blob:; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#0B6E5F"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
@@ -18,16 +19,16 @@
 #lock .lk-btn{font:600 16px/1 var(--f-ui,system-ui,sans-serif);padding:14px;border-radius:10px;border:0;background:var(--accent,#0B6E5F);color:var(--accent-ink,#fff);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px}
 #lock .lk-btn.ghost{background:transparent;color:var(--accent,#0B6E5F);border:1px solid var(--rule,#DAE2DE)}
 #lock .lk-btn:disabled{opacity:.6;cursor:default}
-#lock .lk-link{background:none;border:0;color:var(--ink-3,#6F7D78);font-size:13px;text-decoration:underline;cursor:pointer;padding:6px}
+#lock .lk-link{background:none;border:0;color:var(--ink-3,#5F6C67);font-size:13px;text-decoration:underline;cursor:pointer;padding:6px}
 #lock .lk-err{color:var(--neg,#c02f2f);font-size:14px;min-height:1.2em}
-#lock .lk-sep{display:flex;align-items:center;gap:10px;color:var(--ink-3,#6F7D78);font-size:12px;text-transform:uppercase;letter-spacing:.08em}
+#lock .lk-sep{display:flex;align-items:center;gap:10px;color:var(--ink-3,#5F6C67);font-size:12px;text-transform:uppercase;letter-spacing:.08em}
 #lock .lk-sep::before,#lock .lk-sep::after{content:"";flex:1;height:1px;background:var(--rule,#DAE2DE)}
-#lock .lk-foot{font-size:12px;color:var(--ink-3,#6F7D78)}
+#lock .lk-foot{font-size:12px;color:var(--ink-3,#5F6C67)}
 #lock .lk-list{display:flex;flex-direction:column;gap:10px}
 #lock .lk-list .lk-btn{flex-direction:column;gap:3px;padding:16px 14px}
 #lock .lk-list .lk-btn small{font:400 12px/1.2 var(--f-ui,system-ui,sans-serif);opacity:.8}
 #lock .lk-links{display:flex;flex-wrap:wrap;justify-content:center;gap:4px 16px}
-#lock .lk-rules{list-style:none;margin:0;padding:0 4px;text-align:left;font-size:13px;line-height:1.5;color:var(--ink-3,#6F7D78);display:flex;flex-direction:column;gap:2px}
+#lock .lk-rules{list-style:none;margin:0;padding:0 4px;text-align:left;font-size:13px;line-height:1.5;color:var(--ink-3,#5F6C67);display:flex;flex-direction:column;gap:2px}
 #lock .lk-rules li::before{content:"○";display:inline-block;width:1.5em}
 #lock .lk-rules li.ok{color:var(--accent,#0B6E5F)}
 #lock .lk-rules li.ok::before{content:"✓"}
@@ -35,8 +36,9 @@
 #pd-bar .pd-actions{display:flex;gap:8px}
 body.pd-locked{overflow:hidden}
 body.pd-locked>:not(#lock){display:none!important}
-#pd-bar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;max-width:1240px;margin:28px auto 0;padding:14px 16px calc(14px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--rule,#DAE2DE);color:var(--ink-3,#6F7D78);font-size:12px}
+#pd-bar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;max-width:1240px;margin:28px auto 0;padding:14px 16px calc(14px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--rule,#DAE2DE);color:var(--ink-3,#5F6C67);font-size:12px}
 #pd-bar button{font:500 12px/1 var(--f-ui,system-ui,sans-serif);padding:8px 12px;border-radius:8px;border:1px solid var(--rule,#DAE2DE);background:var(--surface,#fff);color:var(--ink-2,#46534E);cursor:pointer}
+@media (max-width:600px){#pd-bar button{min-height:40px}#lock .lk-link{min-height:40px}}
 
 [data-testid=scan-gmail],[data-testid=factsheet-email],[data-testid=post-statement],[data-testid=csv-import],[data-testid=csv-import-input],[data-testid=save-marks],[data-testid=save-assets],[data-testid=save-settings]{display:none!important}
 </style></head><body class="pd-locked">
@@ -60,7 +62,7 @@ body.pd-locked>:not(#lock){display:none!important}
    the browser key and the user chooses a real password. */
 (function(){
   'use strict';
-  const MAX_TRIES = 10, RELOCK_MS = 5 * 60e3, REFRESH_MS = 30 * 60e3, PBKDF2_ITER = 310000;
+  const MAX_TRIES = 10, RELOCK_MS = 5 * 60e3, REFRESH_MS = 30 * 60e3, LIVE_MS = 10 * 60e3, PBKDF2_ITER = 310000;
   const CUR_LS = 'pd.current', BIO_LS = 'pd.bio.v3', OLD_BIO_LS = 'pd.bio.v1', LEGACY_LS = 'pd.device.v1';
   const DEV_AD = 'portfolio-device-v3', BIO_INFO = 'portfolio-bio-v3';
   const enc = new TextEncoder(), dec = new TextDecoder();
@@ -124,7 +126,7 @@ body.pd-locked>:not(#lock){display:none!important}
   }
 
   /* ---------- keys ---------- */
-  let KEYS = null, PK8 = null, DATA_AT = null, lastFetch = 0;
+  let KEYS = null, PK8 = null, DATA_AT = null, lastFetch = 0, fetchTry = 0;
   async function unwrapWithSetupKey(code) {
     const w = KEYS.wrap, clean = code.toUpperCase().replace(/[^A-Z0-9]/g, '');
     const k0 = await crypto.subtle.importKey('raw', enc.encode(clean), 'PBKDF2', false, ['deriveKey']);
@@ -193,7 +195,7 @@ body.pd-locked>:not(#lock){display:none!important}
   window.claude = Object.freeze({ use: async (n) => (n === 'db' ? dbReady : n === 'downloads' ? downloads : null) });
 
   /* ---------- live prices straight from TradingView (15-min delayed; the scanner allows this site's origin) ---------- */
-  let LIVE = null, liveAt = 0;
+  let LIVE = null, liveAt = 0, liveTry = 0;
   const cairoDay = (ts) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date(ts * 1000));
   async function scan(market, body) {
     const r = await fetch('https://scanner.tradingview.com/' + market + '/scan', { method: 'POST', body: JSON.stringify(body) });
@@ -205,30 +207,56 @@ body.pd-locked>:not(#lock){display:none!important}
     const syms = [...new Set(Object.values(items).map((a) => (a.symbol || '').toUpperCase()).filter((s) => s && s !== 'SAVINGS' && s !== 'THNDRGOLD'))].sort();
     const idx = ['EGX30CAPPED', 'EGX30', 'EGX70EWI', 'EGX100EWI'], today = cairoDay(Date.now() / 1000);
     const cols = ['close', 'change', 'time', 'close[1]|1M', 'description', 'dividends_yield_current', 'ex_dividend_date_upcoming', 'dividend_amount_upcoming', 'ex_dividend_date_recent', 'dividend_amount_recent'];
-    // every stock listed on the EGX in one call, plus the indices, plus USD/EGP and gold
-    const [all, eg, gl] = await Promise.all([
-      scan('egypt', { columns: cols, range: [0, 800], symbols: { query: { types: ['stock', 'dr', 'fund'] } } }),
+    // every stock listed on the EGX in one call, plus the indices, plus USD/EGP and gold. Only the stock scan is required: a failed
+    // index or FX/gold call keeps the saved values (each carries its own date), and asOf is the time the stock scan came back.
+    let scanAt = null;
+    const [allR, egR, glR] = await Promise.allSettled([
+      scan('egypt', { columns: cols, range: [0, 800], symbols: { query: { types: ['stock', 'dr', 'fund'] } } }).then((d) => { scanAt = new Date().toISOString(); return d; }),
       scan('egypt', { symbols: { tickers: idx.map((s) => 'EGX:' + s) }, columns: cols }),
       scan('global', { symbols: { tickers: ['FX_IDC:USDEGP', 'OANDA:XAUUSD'] }, columns: ['close', 'change', 'close[1]|1M'] })]);
-    const prev = DOCS['market/latest'] || {}, quotes = {}, index = {}, missing = [];
+    if (allR.status !== 'fulfilled') throw allR.reason;
+    const all = allR.value, eg = egR.status === 'fulfilled' ? egR.value : {}, gl = glR.status === 'fulfilled' ? glR.value : {};
+    if (egR.status !== 'fulfilled') console.warn('index quotes unavailable, keeping the saved ones', egR.reason);
+    if (glR.status !== 'fulfilled') console.warn('USD/EGP and gold unavailable, keeping the saved ones', glR.reason);
+    const prev = DOCS['market/latest'] || {}, quotes = {}, index = {}, missing = [], carried = [];
     const put = (s, d) => { quotes[s] = { price: d[0], chg: +(d[1] || 0).toFixed(4), date: d[2] ? cairoDay(d[2]) : today, prevMonthClose: d[3], name: d[4], dy: d[5] == null ? null : +d[5].toFixed(4),
       exDate: d[6] ? cairoDay(d[6]) : null, divUp: d[7] ?? null, exRecent: d[8] ? cairoDay(d[8]) : null, divRecent: d[9] ?? null }; };
     for (const [t, d] of Object.entries(all)) { if (d && d[0] != null) put(t.replace(/^EGX:/, ''), d); }
     for (const s of syms) { if (!quotes[s]) { if (prev.quotes && prev.quotes[s]) quotes[s] = prev.quotes[s]; else missing.push(s); } }
-    for (const s of idx) { const d = eg['EGX:' + s]; if (d && d[0] != null) index[s] = { close: d[0], chg: +(d[1] || 0).toFixed(4), date: d[2] ? cairoDay(d[2]) : today, prevMonthClose: d[3] }; }
+    for (const s of idx) { const d = eg['EGX:' + s]; if (d && d[0] != null) index[s] = { close: d[0], chg: +(d[1] || 0).toFixed(4), date: d[2] ? cairoDay(d[2]) : today, prevMonthClose: d[3] };
+      else if (prev.index && prev.index[s]) { index[s] = prev.index[s]; if (s === 'EGX30CAPPED') carried.push('EGX30 Capped'); } }
     if (!Object.keys(quotes).length || !index.EGX30CAPPED) throw new Error('TradingView returned no EGX prices');
     const fx = gl['FX_IDC:USDEGP'], xau = gl['OANDA:XAUUSD'];
-    LIVE = { asOf: new Date().toISOString(), source: 'TradingView scanner (15-min delayed), fetched by this browser', quotes, index,
+    if (!fx) carried.push('USD/EGP'); if (!(fx && xau)) carried.push('gold');
+    LIVE = { asOf: scanAt || new Date().toISOString(), source: 'TradingView scanner (15-min delayed), fetched by this browser', quotes, index,
       fx: fx ? { USDEGP: { price: fx[0], chg: +(fx[1] || 0).toFixed(4), prevMonthClose: fx[2], date: today } } : prev.fx || {},
-      gold: fx && xau ? { XAUUSD: xau[0], gram24kEgp: +(xau[0] * fx[0] / 31.1035).toFixed(2), date: today } : prev.gold || {}, missing };
+      gold: fx && xau ? { XAUUSD: xau[0], gram24kEgp: +(xau[0] * fx[0] / 31.1035).toFixed(2), date: today } : prev.gold || {}, missing, carried };
     liveAt = Date.now();
     if (PK8) { DOCS['market/latest'] = LIVE; listeners.forEach(fire); }   // never repopulate a locked page
     return Object.keys(quotes).length;
   }
+  const cairoTime = (iso) => new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Africa/Cairo' });
+  function priceStatus(ok) {
+    whenReady(() => { const el = document.getElementById('pd-prices'); if (!el) return;
+      el.textContent = ok && LIVE ? `Prices as of ${cairoTime(LIVE.asOf)} Cairo (15-min delayed)${LIVE.carried && LIVE.carried.length ? ` · ${LIVE.carried.join(', ')} from the last daily update` : ''}`
+        : 'Prices from the last daily update · live prices unavailable';
+      el.dataset.state = ok ? 'live' : 'saved'; });
+  }
+  // livePrices() plus the footer status; every caller goes through here (rethrows so the Refresh button can report the error)
+  async function updateLive() {
+    liveTry = Date.now();
+    try { const n = await livePrices(); priceStatus(true); return n; } catch (e) { priceStatus(false); throw e; }
+  }
+  // a short notice once the page is actually showing (the lock screen hides the toast); uses the page's own toast when present
+  function notice(msg, tries = 0) {
+    if (!PK8) return;
+    if (!lockEl().hidden) { if (tries < 240) setTimeout(() => notice(msg, tries + 1), 500); return; }
+    if (window.pdToast) window.pdToast(msg);
+  }
   window.pdRefreshPrices = async (btn, toast) => {
     if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
-    try { await refresh(); const n = await livePrices(); const miss = (LIVE && LIVE.missing) || []; const items = Object.values((DOCS['portfolio/assets'] || {}).items || {}); const funds = items.filter((a) => !a.symbol || a.symbol === 'SAVINGS' || a.symbol === 'THNDRGOLD').length;
-      toast && toast(`Refreshed every EGX-listed stock (${n}), EGX30 Capped, USD/EGP and gold as of ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Africa/Cairo' })} Cairo (15-minute delayed).${funds ? ` ${funds} fund${funds > 1 ? 's' : ''} priced from your last trade.` : ''}${miss.length ? ` No TradingView listing for ${miss.join(', ')}.` : ''}`); }
+    try { await refresh(); const n = await updateLive(); const miss = (LIVE && LIVE.missing) || []; const items = Object.values((DOCS['portfolio/assets'] || {}).items || {}); const funds = items.filter((a) => !a.symbol || a.symbol === 'SAVINGS' || a.symbol === 'THNDRGOLD').length;
+      toast && toast(`Refreshed every EGX-listed stock (${n}), EGX30 Capped, USD/EGP and gold as of ${cairoTime(LIVE.asOf)} Cairo (15-minute delayed).${LIVE.carried && LIVE.carried.length ? ` ${LIVE.carried.join(', ')} could not be fetched; the last daily values are kept.` : ''}${funds ? ` ${funds} fund${funds > 1 ? 's' : ''} priced from your last trade.` : ''}${miss.length ? ` No TradingView listing for ${miss.join(', ')}.` : ''}`); }
     catch (e) { console.error(e); toast && toast('Could not reach TradingView: ' + (e.message || e) + '. Showing the last saved prices.', 'error'); }
     finally { const b = document.getElementById('refresh-prices'); if (b) { b.disabled = false; b.textContent = 'Refresh now'; } }
   };
@@ -239,7 +267,8 @@ body.pd-locked>:not(#lock){display:none!important}
     document.title = CUR.name + ' · Stock Market Portfolio Tracker';
     whenReady(() => {   // the bottom bar is the last thing in the document; the data can be ready before it is parsed
       const t = document.getElementById('pd-updated');
-      if (t && DATA_AT) t.textContent = 'Ledger data as of ' + new Date(DATA_AT).toLocaleString('en-US', { timeZone: 'Africa/Cairo', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }) + ' Cairo';
+      if (t && DATA_AT) { const d = new Date(DATA_AT), p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'Africa/Cairo', day: 'numeric', month: 'short', year: 'numeric' }).formatToParts(d).map((x) => [x.type, x.value]));
+        t.textContent = `Ledger data as of ${p.day} ${p.month} ${p.year}, ${cairoTime(DATA_AT)} Cairo`; }
       const w = document.getElementById('pd-who'); if (w) w.textContent = CUR.name;
     });
   }
@@ -463,8 +492,9 @@ body.pd-locked>:not(#lock){display:none!important}
     wireSwitch(); $l('#lk-relock').onclick = () => lock(false);
     $l('#lk-retry').onclick = async () => { const b = $l('#lk-retry'); b.disabled = true; b.textContent = 'Trying…'; if (!PK8) return lock(false); await unlocked(PK8); };
   }
-  async function start() { publish(await fetchData()); dbResolve(db); livePrices().catch((e) => console.warn('live prices unavailable', e)); }
-  async function refresh() { if (!PK8) return; try { const b = await fetchData(); if (b.exportedAt !== DATA_AT) publish(b); } catch (e) { console.warn('refresh failed', e); } }
+  async function start() { publish(await fetchData()); dbResolve(db);
+    updateLive().catch((e) => { console.warn('live prices unavailable', e); notice('Live prices are unavailable right now: showing prices from the last daily update.'); }); }
+  async function refresh() { if (!PK8) return; fetchTry = Date.now(); try { const b = await fetchData(); if (b.exportedAt !== DATA_AT) publish(b); } catch (e) { console.warn('refresh failed', e); } }
   window.pdLock = () => { if (CUR) lock(false); };
   window.pdSwitch = () => chooseScreen();
   window.pdSelect = (id) => { const p = PORTFOLIOS.find((x) => x.id === id); if (p && !(CUR && CUR.id === p.id)) select(p); };
@@ -476,8 +506,23 @@ body.pd-locked>:not(#lock){display:none!important}
     if (!PK8 || !lockEl().hidden) return;
     if (Date.now() - hiddenAt > RELOCK_MS) return lock(true);
     if (Date.now() - lastFetch > REFRESH_MS) refresh();
-    if (Date.now() - liveAt > 10 * 60e3) livePrices().catch(() => {});
+    if (Date.now() - liveAt > LIVE_MS) updateLive().catch(() => {});
   });
+  // EGX session, Sunday to Thursday 10:00-14:45 Cairo (the 14:30 close shows up 15 minutes later on the delayed feed)
+  function egxOpen(t) {
+    const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'Africa/Cairo', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(t)).map((x) => [x.type, x.value]));
+    const hm = (+p.hour % 24) * 60 + +p.minute;
+    return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu'].includes(p.weekday) && hm >= 600 && hm <= 885;
+  }
+  // while the page is visible and unlocked: the data every 30 minutes, live prices every 10 minutes during the session
+  function tick() {
+    if (document.hidden || !PK8 || !lockEl().hidden) return;
+    const now = Date.now();
+    if (now - Math.max(lastFetch, fetchTry) > REFRESH_MS) refresh();
+    if (egxOpen(now) && now - Math.max(liveAt, liveTry) > LIVE_MS) updateLive().catch((e) => console.warn('live prices unavailable', e));
+  }
+  setInterval(tick, 60e3);
+  window.pdTick = tick; window.pdEgxOpen = egxOpen;   // for tests
   (async () => {
     if (!window.crypto || !crypto.subtle || !window.DecompressionStream) return screen('<h1>Browser too old</h1><p>Update your browser (Safari 16.4+, Chrome 80+) to open the portfolio.</p>');
     try { PORTFOLIOS = await (await fetch('portfolios.json', { cache: 'no-store' })).json(); } catch (e) { return screen('<h1>Offline</h1><p>The portfolio could not load. Check your connection and reload.</p>'); }
@@ -489,13 +534,13 @@ body.pd-locked>:not(#lock){display:none!important}
   })();
 })();
 </script>
-<meta name="pd-build" content="aba400b08eca 2026-09-28 07:58">
+<meta name="pd-build" content="da855b50f41d 2026-09-28 08:34">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=Public+Sans:wght@400;500;600;700&family=Spectral:wght@500;600&display=swap">
 <style>
 :root{
-  --bg:#F3F6F4; --surface:#FFFFFF; --surface-2:#EDF2EF; --ink:#0F1A17; --ink-2:#46534E; --ink-3:#6F7D78;
+  --bg:#F3F6F4; --surface:#FFFFFF; --surface-2:#EDF2EF; --ink:#0F1A17; --ink-2:#46534E; --ink-3:#5F6C67;
   --rule:#DAE2DE; --grid:#E5EBE8; --accent:#0B6E5F; --accent-ink:#FFFFFF; --accent-soft:#DCEEE9;
   --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --pos:#137a3a; --neg:#c02f2f; --warn:#8f5a00;
   --pos-bg:#E2F3E7; --neg-bg:#FBE7E7; --warn-bg:#FFF1D2; --input:#FFFFFF; --input-rule:#C9D4CF;
@@ -558,6 +603,8 @@ nav.tabs button[aria-selected="true"]{background:var(--ink);color:var(--bg)}
 @media (max-width:860px){nav.tabs{margin-left:0;width:100%;padding-bottom:8px}}
 /* phones: the seven tabs wrap onto two rows instead of scrolling or clipping */
 @media (max-width:520px){nav.tabs{flex-wrap:wrap;overflow:visible;gap:2px 0;padding-bottom:6px}nav.tabs button{padding:7px 10px;font-size:13px}}
+/* phones: every tap target at least 40px tall */
+@media (max-width:600px){nav.tabs button,.seg button,.btn,.subnav a,.pf-title,button.chip{min-height:40px}.subnav a{display:inline-flex;align-items:center}}
 
 /* tape */
 .tape{display:flex;gap:22px;overflow-x:auto;min-width:0;max-width:100%;padding-block:10px;border-bottom:1px solid var(--rule);scrollbar-width:none;font-size:12.5px}
@@ -579,6 +626,8 @@ select,input[type=text],input[type=number],input[type=date],input[type=month],te
 input[type=number]{font-variant-numeric:tabular-nums}
 .period .label{font:600 22px/1.2 var(--f-display);margin-right:auto}
 .chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:3px 9px;border-radius:999px;background:var(--surface-2);color:var(--ink-2);white-space:nowrap}
+button.chip{border:0;font-family:inherit;cursor:pointer}
+.chip[title],.pill[title]{cursor:help}
 .chip.warn{background:var(--warn-bg);color:var(--warn)} .chip.ok{background:var(--pos-bg);color:var(--pos)} .chip.err{background:var(--neg-bg);color:var(--neg)}
 
 /* layout */
@@ -600,14 +649,18 @@ section.view{display:grid;gap:18px;padding-top:12px}
 .kpi .v small{font:500 13px var(--f-ui);color:var(--ink-3);margin-left:4px}
 .kpi .d{font-size:12.5px;color:var(--ink-2)}
 .kpi.hero{background:var(--accent);color:var(--accent-ink)}
-.kpi.hero .eyebrow,.kpi.hero .d,.kpi.hero .v small{color:color-mix(in srgb,var(--accent-ink) 78%,transparent)}
+.kpi.hero .eyebrow,.kpi.hero .d,.kpi.hero .v small{color:color-mix(in srgb,var(--accent-ink) 88%,transparent)}
 .kpi.hero .pos,.kpi.hero .neg{color:var(--accent-ink)}
 
 /* tables */
 .tbl{overflow-x:auto;margin-inline:-4px;position:relative}
+/* long tables (ledger, closed trades): a vertical scroll box of their own, so the sticky header row stays visible */
+.tbl.tall{max-height:min(70vh,calc(100vh - var(--mast-h,0px) - 16px));overflow:auto}   /* never taller than the space under the sticky masthead */
+.tbl.tall th{box-shadow:inset 0 -1px 0 var(--rule)}
 /* the row label stays put while a wide table is swiped: first column sticky, on the table's own background, with a rule */
 .tbl th:first-child,.tbl td:first-child{position:sticky;left:0;z-index:2;background:var(--surface);border-right:1px solid var(--rule)}
-@media (max-width:520px){.tbl th:first-child,.tbl td:first-child{max-width:140px;white-space:normal;overflow-wrap:anywhere}}
+/* phones: the sticky label column wraps at word breaks ("anywhere" let it shrink to one letter a line) and keeps room for a date */
+@media (max-width:520px){.tbl th:first-child,.tbl td:first-child{min-width:108px;max-width:140px;white-space:normal;overflow-wrap:break-word}}
 input:disabled,select:disabled,textarea:disabled{color:var(--ink-2);-webkit-text-fill-color:var(--ink-2)}
 .tbl th:first-child{z-index:3}
 .tbl tbody tr:hover td:first-child{background:var(--surface-2)}
@@ -623,6 +676,7 @@ td.wrap{white-space:normal;min-width:180px}
 .sym{font:500 12.5px var(--f-mono);letter-spacing:.03em}
 .bar{height:6px;border-radius:3px;background:var(--surface-2);position:relative;min-width:60px}
 .bar i{position:absolute;inset:0 auto 0 0;border-radius:3px;background:var(--s1)}
+.wcell{display:flex;align-items:center;gap:8px}.wcell .bar{flex:1}.wcell .num{min-width:3.4em;text-align:right;font-size:12.5px}
 .pill{font-size:11px;font-weight:600;padding:2px 7px;border-radius:999px;letter-spacing:.03em}
 .pill.win{background:var(--pos-bg);color:var(--pos)} .pill.loss{background:var(--neg-bg);color:var(--neg)}
 .pill.auto{background:var(--accent-soft);color:var(--accent)} .pill.man{background:var(--surface-2);color:var(--ink-2)} .pill.stale{background:var(--warn-bg);color:var(--warn)}
@@ -681,7 +735,7 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
 .prose h3{font:600 15px var(--f-display);color:var(--ink);margin:18px 0 4px}
 .prose p{margin:0 0 8px} .prose code{font:12.5px var(--f-mono);background:var(--surface-2);padding:1px 5px;border-radius:4px}
 
-.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;font-size:13px;z-index:50;box-shadow:var(--shadow);max-width:calc(100% - 32px)}
+.toast{pointer-events:none;position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;font-size:13px;z-index:50;box-shadow:var(--shadow);max-width:calc(100% - 32px)}
 .toast.error{background:var(--neg);color:#fff}
 .empty{padding:48px 20px;text-align:center;color:var(--ink-2)}
 .empty h2{font:600 22px var(--f-display);color:var(--ink);margin-bottom:6px}
@@ -720,7 +774,7 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
   <div class="period" id="period"></div>
   <main id="main"><div class="empty"><h2>Opening your portfolio…</h2><p>Connecting to the portfolio database.</p></div></main>
 </div>
-<div class="toast" id="toast" hidden></div>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
 <script>
 /* Portfolio engine — a line-by-line port of the workbook's ⚙️ Model tab.
@@ -1032,6 +1086,7 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     if (sel.type !== 'Custom' && asOf < to) to = asOf;
     return { from, to, asOf, lastData, valid: from <= to };
   }
+  const MIN_RATIO_N = 6, MIN_FULL_N = 12; // ratio thresholds (periodStats): ratios need 6 returns, below 12 they are indicative
   const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const fmtMonth = (m) => `${MON[+m.slice(5, 7) - 1]}-${m.slice(2, 4)}`;
 
@@ -1039,6 +1094,10 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
   //                    'name' — legacy: one row per stock name (pos.rows), as the workbook counted them.
   // Months with no value are not in S.rows: their return is inside the next valued month (row.spans > 1). n counts the
   // available returns (vol, Sharpe, beta, hit rates); monthsElapsed counts the calendar months of the range (annualization).
+  // A month with no benchmark return is never chained as 0%: benchTwr, alpha and the rows' pBench from that month on are null
+  // (S.benchComplete false), and the benchmark-relative figures use only the months that have one (bp).
+  // Small samples: Sharpe and Sortino need MIN_RATIO_N returns, beta/correlation/tracking error/capture ratios MIN_RATIO_N
+  // months with a benchmark, the risk label 3 returns; S.smallSample (n < 12) lets the page mark ratios "indicative".
   function periodStats(months, range, ledger, settings, pos, opts) {
     const inRange = months.filter((r) => r.month >= range.from && r.month <= range.to);
     const P = inRange.filter((r) => r.has && r.ret != null);
@@ -1050,8 +1109,8 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     const first = P[0], last = P[n - 1];
     let cf = 1, cb = 1, cu = 1, cc = 1, peak = 1;
     P.forEach((r) => {
-      cf *= 1 + r.ret; cb *= 1 + (r.bench ?? 0); cu *= 1 + (r.usdRet ?? 0); cc *= 1 + (r.cpiSpan ?? 0);
-      r.pCum = cf - 1; r.pBench = cb - 1;
+      cf *= 1 + r.ret; cb = cb != null && r.bench != null ? cb * (1 + r.bench) : null; cu *= 1 + (r.usdRet ?? 0); cc *= 1 + (r.cpiSpan ?? 0);
+      r.pCum = cf - 1; r.pBench = cb != null ? cb - 1 : null;
       peak = Math.max(peak, cf); r.dd = cf / peak - 1;
     });
     S.rows = P;
@@ -1059,22 +1118,24 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     S.deposits = sum(P.map((r) => r.deposits)); S.withdrawals = sum(P.map((r) => r.withdrawals));
     S.netFlows = S.deposits - S.withdrawals; S.netGain = S.closing - S.opening - S.netFlows;
     S.dividends = sum(P.map((r) => r.dividends)); S.buys = sum(P.map((r) => r.buys)); S.sells = sum(P.map((r) => r.sells)); S.trades = sum(P.map((r) => r.trades));
-    S.twr = cf - 1; S.benchTwr = cb - 1; S.alpha = S.twr - S.benchTwr;
     S.benchComplete = P.every((r) => r.bench != null);
+    S.twr = cf - 1; S.benchTwr = S.benchComplete ? cb - 1 : null; S.alpha = S.benchTwr != null ? S.twr - S.benchTwr : null;
+    S.smallSample = n < MIN_FULL_N;
     const rets = P.map((r) => r.ret);
     S.posMonths = rets.filter((x) => x > 0).length; S.pctPos = S.posMonths / n;
     const best = P.reduce((a, r) => (r.ret > a.ret ? r : a)), worst = P.reduce((a, r) => (r.ret < a.ret ? r : a));
     S.best = { month: best.month, ret: best.ret }; S.worst = { month: worst.month, ret: worst.ret };
     S.avg = mean(rets); S.vol = n > 1 ? stdevS(rets) : 0;
-    S.risk = n < 2 ? 'n/a' : S.vol < settings.volLow ? 'Low' : S.vol < settings.volHigh ? 'Moderate' : 'High';
+    S.risk = n < 3 ? 'n/a' : S.vol < settings.volLow ? 'Low' : S.vol < settings.volHigh ? 'Moderate' : 'High';
     S.annualized = S.monthsElapsed >= 12 ? Math.pow(1 + S.twr, 12 / S.monthsElapsed) - 1 : null;
     const rfM = Math.pow(1 + settings.riskFree, 1 / 12) - 1;
-    S.sharpe = n >= 3 && S.vol ? ((S.avg - rfM) / S.vol) * Math.sqrt(12) : null;
-    const bp = P.filter((r) => r.bench != null);
-    S.beta = bp.length >= 3 ? slope(bp.map((r) => r.ret), bp.map((r) => r.bench)) : null;
-    S.correl = bp.length >= 3 ? correl(bp.map((r) => r.ret), bp.map((r) => r.bench)) : null;
-    S.trackingError = bp.length >= 3 ? stdevS(bp.map((r) => r.alpha)) * Math.sqrt(12) : null;
-    S.beat = bp.filter((r) => r.alpha > 0).length; S.pctBeat = S.beat / n;
+    S.sharpe = n >= MIN_RATIO_N && S.vol ? ((S.avg - rfM) / S.vol) * Math.sqrt(12) : null;
+    const bp = P.filter((r) => r.bench != null), bpOk = bp.length >= MIN_RATIO_N;
+    S.benchMonths = bp.length;
+    S.beta = bpOk ? slope(bp.map((r) => r.ret), bp.map((r) => r.bench)) : null;
+    S.correl = bpOk ? correl(bp.map((r) => r.ret), bp.map((r) => r.bench)) : null;
+    S.trackingError = bpOk ? stdevS(bp.map((r) => r.alpha)) * Math.sqrt(12) : null;
+    S.beat = bp.filter((r) => r.alpha > 0).length; S.pctBeat = bp.length ? S.beat / bp.length : null;
     const mdd = P.reduce((a, r) => (r.dd < a.dd ? r : a));
     S.maxDD = Math.min(0, mdd.dd); S.maxDDMonth = S.maxDD < 0 ? mdd.month : null;
     // USD & real
@@ -1097,12 +1158,12 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     // downside risk and capture ratios (monthly, CFA-style definitions)
     const dd2 = rets.map((x) => Math.min(0, x - rfM) ** 2);
     S.downsideDev = n > 1 ? Math.sqrt(sum(dd2) / n) : 0;
-    S.sortino = n >= 3 && S.downsideDev ? ((S.avg - rfM) / S.downsideDev) * Math.sqrt(12) : null;
+    S.sortino = n >= MIN_RATIO_N && S.downsideDev ? ((S.avg - rfM) / S.downsideDev) * Math.sqrt(12) : null;
     S.calmar = S.annualized != null && S.maxDD < 0 ? S.annualized / -S.maxDD : null;
     const upM = bp.filter((r) => r.bench > 0), dnM = bp.filter((r) => r.bench < 0);
     const chainK = (rows, key) => rows.reduce((a, r) => a * (1 + r[key]), 1) - 1;
-    S.upCapture = upM.length ? chainK(upM, 'ret') / chainK(upM, 'bench') : null;
-    S.downCapture = dnM.length ? chainK(dnM, 'ret') / chainK(dnM, 'bench') : null;
+    S.upCapture = bpOk && upM.length ? chainK(upM, 'ret') / chainK(upM, 'bench') : null;
+    S.downCapture = bpOk && dnM.length ? chainK(dnM, 'ret') / chainK(dnM, 'bench') : null;
     S.upMonths = upM.length; S.downMonths = dnM.length;
     // Money-weighted
     const d0 = eom(addMonths(range.from, -1)), d1 = eom(range.to);
@@ -1240,7 +1301,7 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     };
   }
 
-  const api = { run, runLedger, positions, monthly, periodRange, periodStats, sectors, xirr, eom, addMonths, monthsBetween, fmtMonth, monthOf, dayNum, cairoToday, effectivePrice, TYPES, PERIOD_TYPES, DAY_ORDER, CASH_LIKE, sortLedger };
+  const api = { run, runLedger, positions, monthly, periodRange, periodStats, sectors, xirr, eom, addMonths, monthsBetween, fmtMonth, monthOf, dayNum, cairoToday, effectivePrice, MIN_RATIO_N, MIN_FULL_N, TYPES, PERIOD_TYPES, DAY_ORDER, CASH_LIKE, sortLedger };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.PE = api;
 })(this);
 
@@ -1432,12 +1493,15 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
   }
 
   // ---------- Brinson-Fachler sector attribution, Carino-linked ----------
-  // Monthly: holdings at the prior month-end, buy-and-hold over the month.
+  // Monthly: holdings at the prior month-end, buy-and-hold over the month. A row that spans a gap (spans > 1, the months before
+  // it have no value) is measured from the month-end before its spanFrom, so R, B, Rh and Bs all cover the same span.
   //   allocation_s = (wp − wb)(rb − B*)     selection_s = wp(rp − rb)   (interaction included in selection)
   //   trading      = R − R_h  (effect of trades during the month)     replication = B* − B (model vs real index)
   // Sectors absent from the index use rb = B* (neutral); cash-like sectors use rb = 0 so idle cash shows as allocation.
   // bench.actions (optional): [{s, date, ratio}] — corporate actions; ratio = new shares ÷ old shares, so a member's
   // unadjusted price drops by 1/ratio from `date` and its return over [d0, d1] is p1 × Π ratio(d0 < date ≤ d1) / p0 − 1.
+  // `trading` is R − Rh: everything the buy-and-hold sector returns do not explain (they are price-only)
+  const TRADING_NOTE = 'Trading and other: buys and sells during the month, plus dividends, rebates and fees (sector returns are price-only)';
   const actionFactor = (actions, s, d0, d1) => (actions || []).reduce((f, a) => (a.s === s && a.date > d0 && a.date <= d1 && a.ratio > 0 ? f * a.ratio : f), 1);
   function attribution(months, range, ledger, assets, pb, bench, today) {
     if (!pb.days.length || !bench) return null;
@@ -1445,11 +1509,12 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     const acts = bench.actions || [];
     const out = [];
     P.forEach((r) => {
-      const d0 = pb.lastDayOnOrBefore(eom(addMonths(r.month, -1)));
+      const base = eom(addMonths(r.spans > 1 && r.spanFrom ? r.spanFrom : r.month, -1));
+      const d0 = pb.lastDayOnOrBefore(base);
       const d1 = pb.lastDayOnOrBefore(r.live ? today : eom(r.month));
       if (!d0 || !d1 || d1 <= d0) return;
       const price = makePricer(assets, ledger, pb);
-      const H = holdingsAt(ledger, assets, pb, eom(addMonths(r.month, -1)));
+      const H = holdingsAt(ledger, assets, pb, base);
       const cashW = Math.max(0, H.cash);
       // A month that starts from nothing (the inception month, funded during the month) is kept, not dropped — skipping it
       // would leave the Carino chain one month short of the period's TWR. It is treated as 100% cash at 0%: no stock
@@ -1473,7 +1538,7 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
         const sel = x.wp ? x.wp * (rp - rb) : 0;
         return { sector: s, wp: x.wp, wb: x.wb, rp, rb: x.wb ? rb : null, alloc, sel };
       });
-      out.push({ month: r.month, live: !!r.live, d0, d1, R: r.ret, B: r.bench, Rh, Bs, trading: r.ret - Rh, replication: Bs - r.bench, sectors: rows,
+      out.push({ month: r.month, spans: r.spans || 1, spanFrom: r.spanFrom || r.month, live: !!r.live, d0, d1, R: r.ret, B: r.bench, Rh, Bs, trading: r.ret - Rh, replication: Bs - r.bench, sectors: rows,
         alloc: sum(rows.map((x) => x.alloc)), sel: sum(rows.map((x) => x.sel)), startValue: total, marksOpening: r.opening });
     });
     if (!out.length) return null;
@@ -1493,7 +1558,7 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     const secRows = Object.values(sectors).map((x) => ({ ...x, rp: x.nP ? x.rp - 1 : null, rb: x.nB ? x.rb - 1 : null, total: x.alloc + x.sel })).sort((a, b) => b.total - a.total);
     return {
       months: out, R, B, active: R - B,
-      alloc: L((m) => m.alloc), sel: L((m) => m.sel), trading: L((m) => m.trading), replication: L((m) => m.replication),
+      alloc: L((m) => m.alloc), sel: L((m) => m.sel), trading: L((m) => m.trading), replication: L((m) => m.replication), tradingNote: TRADING_NOTE,
       sectors: secRows,
       trackingCheck: Math.sqrt(mean(out.map((m) => m.replication ** 2))),
     };
@@ -1582,17 +1647,24 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
   }
 
   // ---------- factsheet: trailing returns and the calendar grid ----------
+  // Windows are calendar months ending at asOf: '3M' = the rows whose month lies in [asOf − 2 months, asOf]. A row that spans a
+  // gap counts when its spanFrom is inside the window too; one that starts before the window makes the result null (its return
+  // cannot be split), as does a window the rows do not fully cover (before inception, or ending in an unvalued month).
+  // n = calendar months covered. YTD starts at January or inception, whichever is later.
   function trailing(months, asOf) {
     const rows = months.filter((r) => r.has && r.ret != null && r.month <= asOf);
     const chain = (list, k) => list.reduce((a, r) => a * (1 + (r[k] ?? 0)), 1) - 1;
-    const win = (n) => { const l = rows.slice(-n); return l.length === n ? l : null; };
+    const inc = months.length ? months[0].month : asOf;
     const y = asOf.slice(0, 4);
-    const res = [['1M', win(1)], ['3M', win(3)], ['6M', win(6)], ['YTD', rows.filter((r) => r.month.startsWith(y))], ['1Y', win(12)], ['Since inception', rows]];
-    return res.map(([label, l]) => {
-      if (!l || !l.length) return { label, p: null, b: null };
+    const res = [['1M', addMonths(asOf, 0)], ['3M', addMonths(asOf, -2)], ['6M', addMonths(asOf, -5)], ['YTD', `${y}-01` > inc ? `${y}-01` : inc], ['1Y', addMonths(asOf, -11)], ['Since inception', inc]];
+    return res.map(([label, from]) => {
+      const l = rows.filter((r) => r.month >= from);
+      const len = PE.monthsBetween(from, asOf) + 1;
+      const covered = sum(l.map((r) => r.spans || 1));
+      if (!l.length || l.some((r) => (r.spanFrom || r.month) < from) || covered !== len) return { label, p: null, b: null, a: null, ann: null, n: 0, from };
       const p = chain(l, 'ret'), b = l.every((r) => r.bench != null) ? chain(l, 'bench') : null;
-      const ann = label === 'Since inception' && l.length >= 12 ? { p: Math.pow(1 + p, 12 / l.length) - 1, b: b != null ? Math.pow(1 + b, 12 / l.length) - 1 : null } : null;
-      return { label, p, b, a: b != null ? p - b : null, ann, n: l.length };
+      const ann = label === 'Since inception' && len >= 12 ? { p: Math.pow(1 + p, 12 / len) - 1, b: b != null ? Math.pow(1 + b, 12 / len) - 1 : null } : null;
+      return { label, p, b, a: b != null ? p - b : null, ann, n: len, from };
     });
   }
   function calendar(months, asOf) {
@@ -1604,7 +1676,7 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
       bytd: Y.b.every((x, i) => x != null || Y.m[i] == null) ? Y.b.reduce((a, x) => (x == null ? a : a * (1 + x)), 1) - 1 : null }));
   }
 
-  const api = { priceBook, makePricer, daily, dailyStats, capWeights, benchWeights, holdingsAt, estimateMarks, attribution, activeWeights, tradeChecks, income, trailing, calendar, TRADING_DAYS };
+  const api = { priceBook, makePricer, daily, dailyStats, capWeights, benchWeights, holdingsAt, estimateMarks, attribution, activeWeights, tradeChecks, income, trailing, calendar, TRADING_DAYS, TRADING_NOTE };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.PA = api;
 })(this);
 
@@ -2021,8 +2093,20 @@ function pct(x, dp=1, signed=true){ if(x==null||!isFinite(x)) return '—'; cons
 const sgn = (x) => x==null ? '' : x>0 ? 'pos' : x<0 ? 'neg' : '';
 const num = (x, dp=2) => x==null||!isFinite(x) ? '—' : nf(dp).format(x);
 const short = (x) => { if(x==null) return '—'; const a=Math.abs(x); const s = a>=1e6? (a/1e6).toFixed(a>=1e7?1:2)+'M' : a>=1e3? (a/1e3).toFixed(a>=1e5?0:1)+'k' : a.toFixed(0); return (x<0?'−':'')+s; };
-const M = (m) => PE.fmtMonth(m);
-const dfmt = (d) => { if(!d) return '—'; const [y,m,dd]=d.split('-'); return `${+dd} ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+m-1]} ${y.slice(2)}`; };
+// One date style everywhere: months "Sep 2026" (Ms = "Sep-26" only for chart axes), days "27 Sep 2026", times "8:38 PM Cairo".
+const MON3 = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const M = (m) => { if(!m) return '—'; const [y,mm]=String(m).split('-'); return `${MON3[+mm-1]} ${y}`; };
+const Ms = (m) => PE.fmtMonth(m);
+const dfmt = (d) => { if(!d) return '—'; const [y,m,dd]=d.split('-'); return `${+dd} ${MON3[+m-1]} ${y}`; };
+const cairoAt = (iso) => { const t=new Date(iso); if(isNaN(t)) return '—'; return `${dfmt(new Intl.DateTimeFormat('en-CA',{timeZone:'Africa/Cairo'}).format(t))}, ${t.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit',hour12:true,timeZone:'Africa/Cairo'})} Cairo`; };
+// Engine-written text (period labels, check details) says "Sep-26" and "2026-09-27": rewrite it in the page's style.
+const prose = (s) => String(s??'').replace(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-(\d{2})\b/g,'$1 20$2').replace(/\b\d{4}-\d{2}-\d{2}\b/g,(x)=>dfmt(x));
+const plabel = (s) => prose(s).replace(/(\d{4}) to (?=[A-Z])/,'$1 – ');   // "Aug-25 to Sep-26" -> "Aug 2025 – Sep 2026"
+// The benchmark is a price index (no dividends) while the portfolio's return includes the dividends it received.
+const BENCH = 'EGX30 Capped (price index)';
+// Ratios from fewer than 12 monthly returns carry an "indicative" pill (engine flag st.smallSample; n < 12 when the engine has none).
+const smallSample = (st) => !!(st && (st.smallSample ?? (st.n < 12)));
+const IND = ' <span class="pill stale" data-testid="indicative" title="Fewer than 12 monthly returns in this period: read the ratio as a rough guide only">indicative</span>';
 
 // ---------- state ----------
 const S = {
@@ -2035,8 +2119,9 @@ const S = {
 };
 if(location.hash && /^#[a-z]+$/.test(location.hash)) S.tab = location.hash.slice(1);
 
-function toast(msg, kind){ const t=$('#toast'); t.textContent=msg; t.className='toast'+(kind?' '+kind:''); t.hidden=false; clearTimeout(toast._t); toast._t=setTimeout(()=>t.hidden=true, kind==='error'?6000:2800); }
-function errText(e){ const c=e&&e.code; if(c==='invalid_argument') return 'Saving was refused. You may only have view access to this page.'; if(c==='quota_exceeded') return 'The portfolio database is full. Delete old history months under Inputs to free space.'; if(c==='resource_exhausted') return 'Too many saves in a row. Wait a few seconds and try again.'; return 'Could not save: '+(e&&e.message||'unknown error')+'. Try again in a moment.'; }
+window.pdToast = (m, k) => toast(m, k);
+function toast(msg, kind){ const t=$('#toast'); t.textContent=msg; t.className='toast'+(kind?' '+kind:''); t.hidden=false; clearTimeout(toast._t); toast._t=setTimeout(()=>t.hidden=true, Math.max(kind==='error'?6000:2800, 60*String(msg).length)); }
+function errText(e){ const c=e&&e.code; if(c==='invalid_argument') return 'Saving was refused. You may only have view access to this page.'; if(c==='quota_exceeded') return 'The portfolio database is full. Ask Claude to delete old history months to free space.'; if(c==='resource_exhausted') return 'Too many saves in a row. Wait a few seconds and try again.'; return 'Could not save: '+(e&&e.message||'unknown error')+'. Try again in a moment.'; }
 async function save(fn, ok){ try{ await fn(); if(ok) toast(ok); document.querySelectorAll('#main .dirty').forEach(x=>x.classList.remove('dirty')); if(document.activeElement && document.activeElement.blur) document.activeElement.blur(); S.pending=false; renderTab(true); return true; }catch(e){ console.error(e); if(e&&e.code==='invalid_argument') S.readOnly=true; toast(errText(e),'error'); return false; } }
 
 function allTx(){
@@ -2060,6 +2145,7 @@ function recompute(){
     const pricer = PA.makePricer(S.assets, PE.runLedger(allTx()), pb);
     S.fallback = (name) => { const p = pricer(name, today); return p ? { p: p.p, d: pb.last } : null; };
     S.R = PE.run(dataset(true), S.sel, { fallback: S.fallback });
+    if(S.R.stats && S.R.stats.label) S.R.stats.label = plabel(S.R.stats.label);
   }catch(e){ console.error(e); $('#main').innerHTML = `<div class="empty"><h2>The model hit an error</h2><p>${esc(e.message)}</p></div>`; return; }
   $('#pf-name-text').textContent = S.settings.name || 'Portfolio';
   renderTape(); renderPeriod(); renderTab(false);
@@ -2067,7 +2153,7 @@ function recompute(){
 function renderEmpty(){ $('#main').innerHTML = `<div class="empty"><h2>No portfolio data yet</h2><p>The database for this page is empty. Ask Claude to load your workbook into it.</p></div>`; $('#period').innerHTML=''; }
 
 // ---------- tabs ----------
-// Six tabs; the older, finer-grained names still work as links and jump to their section inside the merged tab.
+// Seven tabs; the older, finer-grained names still work as links and jump to their section inside the merged tab.
 const TAB_ALIAS = {attribution:'analysis', risk:'analysis', income:'holdings', trades:'activity', ledger:'activity', statements:'settings', factsheet:'reports', inputs:'settings', checks:'settings'};
 const TAB_VIEWS = {
   overview: [['overview','Overview',()=>vOverview()]],
@@ -2098,6 +2184,7 @@ function renderTab(force){
 }
 // Wide tables on a phone: flag every .tbl that overflows its container so CSS can show a "swipe →" hint; the hint goes once scrolled.
 function markScrollables(){
+  const mast=document.querySelector('.mast'); if(mast) document.documentElement.style.setProperty('--mast-h', mast.offsetHeight+'px');
   document.querySelectorAll('#main .tbl').forEach(el=>{
     const can = el.scrollWidth > el.clientWidth + 40;
     el.classList.toggle('can-scroll', can && !el.dataset.scrolled);
@@ -2110,8 +2197,7 @@ window.addEventListener('resize', ()=>{ clearTimeout(markScrollables._t); markSc
 function feedStatus(){
   const m=S.market; if(!m||!m.asOf) return {cls:'err', text:'No automatic prices yet'};
   const ageH = (Date.now()-Date.parse(m.asOf))/36e5;
-  const when = new Date(m.asOf).toLocaleString('en-US',{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit',hour12:true,timeZone:'Africa/Cairo'});
-  return {cls: ageH<30?'ok': ageH<80?'warn':'err', text:`Prices ${when} Cairo`};
+  return {cls: ageH<30?'ok': ageH<80?'warn':'err', text:`Prices ${cairoAt(m.asOf)}`};
 }
 function renderTape(){
   const m=S.market||{}; const ix=m.index||{};
@@ -2207,9 +2293,10 @@ function vOverview(){
   const R=S.R, st=R.stats; if(!st.n) return `<div class="panel empty"><h2>No data for this selection</h2></div>`;
   const cashNow = R.liveCash ?? R.settings.cash; const total = cashNow + R.pos.mvTotal; const dp=dayPL(); const cs=checkSummary();
   const unreal = R.pos.open.reduce((s,r)=>s+(r.unreal||0),0);
-  const rows=st.rows; const labels=rows.map(r=>M(r.month));
+  const rows=st.rows; const labels=rows.map(r=>Ms(r.month));
   let invested=[]; let cap=st.opening; rows.forEach(r=>{ cap+=r.netFlow; invested.push(cap); });
-  const benchLabel = st.benchComplete ? 'EGX30 Capped' : 'EGX30 Capped (incomplete)';
+  const benchLabel = st.benchComplete===false ? 'EGX30 Capped (price index, incomplete)' : BENCH;
+  const ds=dailyS(), ind=smallSample(st)?IND:'';
   const maxW=Math.max(...R.pos.open.map(r=>r.weight),0.0001);
   const noCpi=rows.filter(r=>r.cpi==null).map(r=>M(r.month));
   return `${statementBanner()}
@@ -2219,14 +2306,14 @@ function vOverview(){
     ${kpi('Money-weighted (XIRR)', `<span class="${sgn(st.xirr)}">${pct(st.xirr)}</span>`, `annualized · period ${pct(st.mwrPeriod)}`)}
     ${kpi('Return in USD', st.usdTwr!=null?`<span class="${sgn(st.usdTwr)}">${pct(st.usdTwr)}</span>`:'—', st.egpVsUsd!=null?`EGP vs USD ${pct(st.egpVsUsd)}`:'Enter USD/EGP marks')}
     ${kpi('Real return', st.realTwr!=null?`<span class="${sgn(st.realTwr)}">${pct(st.realTwr)}</span>`:st.realTwrPartial!=null?`<span class="${sgn(st.realTwrPartial)}">${pct(st.realTwrPartial)}</span>`:'—', st.inflation!=null?`after ${pct(st.inflation,1,false)} Egypt CPI`:st.realTwrPartial!=null?`through ${M(st.realThrough)} · CPI for ${noCpi.join(', ')} pending`:`Needs CPI for ${noCpi.join(', ')}`)}
-    ${kpi('Max drawdown', `<span class="${sgn(st.maxDD)}">${pct(st.maxDD)}</span>`, `Sharpe ${num(st.sharpe)} · vol ${pct(st.vol,1,false)}/mo`)}
+    ${kpi('Max drawdown', `<span class="${sgn(st.maxDD)}">${pct(st.maxDD)}</span>`, `${ds&&ds.maxDD!=null?`<span class="neg">${pct(ds.maxDD)}</span> daily · `:''}Sharpe ${num(st.sharpe)}${st.sharpe!=null?ind:''} · vol ${pct(st.vol,1,false)}/mo`, '', 'month-end')}
   </div>
   ${briefPanel()}
   <div class="grid g2">
     <div class="panel">
       <div class="phead"><div><h2>Growth of 1 EGP</h2><div class="sub">Cumulative time-weighted return, chain-linked monthly</div></div>
         <div class="legend"><span><i style="background:var(--s1)"></i>Portfolio ${pct(st.twr)}</span><span><i style="background:var(--s2)"></i>EGX30 Capped ${pct(st.benchTwr)}</span></div></div>
-      ${chartSlot('ch-growth',{kind:'line',title:'Cumulative return vs EGX30 Capped',labels:[`${M(PE.addMonths(st.rows[0].month,-1))}`].concat(labels),series:[{name:'Portfolio',color:C.s1(),values:[0].concat(rows.map(r=>r.pCum))},{name:'EGX30 Capped',color:C.s2(),values:[0].concat(rows.map(r=>r.pBench))}],yFmt:pctAxis,minZero:false},260)}
+      ${chartSlot('ch-growth',{kind:'line',title:'Cumulative return vs EGX30 Capped',labels:[`${Ms(PE.addMonths(st.rows[0].month,-1))}`].concat(labels),series:[{name:'Portfolio',color:C.s1(),values:[0].concat(rows.map(r=>r.pCum))},{name:'EGX30 Capped',color:C.s2(),values:[0].concat(rows.map(r=>r.pBench))}],yFmt:pctAxis,minZero:false},260)}
     </div>
     <div class="panel">
       <div class="phead"><div><h2>Value vs capital invested</h2><div class="sub">Month-end value against opening value plus net deposits</div></div>
@@ -2238,9 +2325,9 @@ function vOverview(){
     <div class="panel">
       <div class="phead"><div><h2>Largest holdings</h2><div class="sub">Live market value · ${R.pos.open.length} open positions</div></div><button class="btn sm" data-go="holdings" id="go-holdings">All holdings</button></div>
       <div class="tbl"><table><thead><tr><th>Symbol</th><th class="n">Value</th><th class="n">Unrealized</th><th class="n">Return</th><th>Weight</th></tr></thead><tbody>
-      ${R.pos.open.slice().sort((a,b)=>(b.mv||0)-(a.mv||0)).slice(0,6).map(r=>`<tr><td><span class="sym">${esc(r.symbol||r.name)}</span></td><td class="n">${egp(r.mv)}</td><td class="n ${sgn(r.unreal)}">${egp(r.unreal)}</td><td class="n ${sgn(r.unreal)}">${pct(r.openCost?r.unreal/r.openCost:null)}</td><td><div class="bar" title="${pct(r.weight,1,false)}"><i style="width:${(r.weight/maxW*100).toFixed(1)}%"></i></div></td></tr>`).join('')}
+      ${R.pos.open.slice().sort((a,b)=>(b.mv||0)-(a.mv||0)).slice(0,6).map(r=>`<tr><td><span class="sym">${esc(r.symbol||r.name)}</span></td><td class="n">${egp(r.mv)}</td><td class="n ${sgn(r.unreal)}">${egp(r.unreal)}</td><td class="n ${sgn(r.unreal)}">${pct(r.openCost?r.unreal/r.openCost:null)}</td><td><div class="wcell"><div class="bar"><i style="width:${(r.weight/maxW*100).toFixed(1)}%"></i></div><span class="num">${pct(r.weight,1,false)}</span></div></td></tr>`).join('')}
       </tbody></table></div>
-      <div class="row" style="margin-top:12px;justify-content:space-between"><span class="note">Cash ${egp(cashNow)} EGP · Unrealized P/L <span class="${sgn(unreal)}">${egp(unreal)}</span> EGP</span><span class="chip ${cs.cls}" data-go="checks" style="cursor:pointer">${esc(cs.text)}</span></div>
+      <div class="row" style="margin-top:12px;justify-content:space-between"><span class="note">Cash ${egp(cashNow)} EGP · Unrealized P/L <span class="${sgn(unreal)}">${egp(unreal)}</span> EGP</span><button type="button" class="chip ${cs.cls}" data-go="checks" data-testid="checks-chip">${esc(cs.text)}</button></div>
     </div>
     <div class="panel">
       <div class="phead"><div><h2>Sector allocation</h2><div class="sub">Share of holdings value · ${R.sectors.length} sectors</div></div></div>
@@ -2263,9 +2350,10 @@ function vOverview(){
 function briefPanel(){
   const R=S.R, st=R.stats, rows=st.rows, last=rows[rows.length-1]; const cash=R.liveCash??R.settings.cash; const total=cash+R.pos.mvTotal;
   const c=contributors(); const s=[];
-  s.push(`<b>${esc(st.label)}</b>: the portfolio returned <b class="${sgn(st.twr)}">${pct(st.twr)}</b> against <b>${pct(st.benchTwr)}</b> for EGX30 Capped, ${st.alpha>=0?'ahead of the index by':'behind the index by'} <b class="${sgn(st.alpha)}">${pct(Math.abs(st.alpha),1,false)}</b>${st.n>1?`, with ${st.posMonths} of ${st.n} months positive and a worst month of ${pct(st.worst.ret)} (${M(st.worst.month)})`:''}.`);
+  const vsIdx = st.benchTwr!=null&&st.alpha!=null ? ` against <b>${pct(st.benchTwr)}</b> for EGX30 Capped, ${st.alpha>=0?'ahead of the index by':'behind the index by'} <b class="${sgn(st.alpha)}">${pct(Math.abs(st.alpha),1,false)}</b>` : ' (the EGX30 Capped return is incomplete for this period, so there is no index comparison)';
+  s.push(`<b>${esc(st.label)}</b>: the portfolio returned <b class="${sgn(st.twr)}">${pct(st.twr)}</b>${vsIdx}${st.n>1?`, with ${st.posMonths} of ${st.n} months positive and a worst month of ${pct(st.worst.ret)} (${M(st.worst.month)})`:''}.`);
   // the latest-month sentence only when the period is longer than that month (a one-month period already said it above)
-  if(rows.length>1) s.push(`${M(last.month)}${last.live?' so far':''}: <b class="${sgn(last.ret)}">${pct(last.ret)}</b> vs ${pct(last.bench)} for the index.`);
+  if(rows.length>1) s.push(`${M(last.month)}${last.live?' so far':''}: <b class="${sgn(last.ret)}">${pct(last.ret)}</b>${last.bench!=null?` vs ${pct(last.bench)} for the index`:''}.`);
   s.push(`Today the portfolio is worth <b>${egp(total)} EGP</b>, of which ${egp(cash)} EGP is cash, across ${R.pos.open.length} positions; the largest is ${esc(R.conc.largest)} at ${pct(R.conc.largestWeight,1,false)}.`);
   if(c.length) s.push(`Since inception the biggest contributors are ${c.slice(0,3).map(x=>`${esc(x.sym)} +${egp(x.total)}`).join(', ')}${c.some(x=>x.total<0)?`; the biggest detractor is ${esc(c[c.length-1].sym)} −${egp(Math.abs(c[c.length-1].total))}`:''} (EGP, realized + unrealized + dividends).`);
   s.push(...moneyWeightedSentences(R));
@@ -2322,7 +2410,7 @@ function vHoldings(){
       const toT = r.target&&r.price? r.target/r.price-1 : null, toS = r.stop&&r.price? r.stop/r.price-1:null;
       return `<tr><td><span class="sym">${esc(r.symbol||'—')}</span><div class="muted" style="font-size:11.5px;line-height:1.3;max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${esc(r.name)}">${esc(r.name)}</div></td><td class="ink2">${esc(r.sector)}</td><td class="n">${num(r.open,r.open%1?2:0)}</td><td class="n">${num(r.avgCost,3)}</td><td class="n">${num(r.price,2)}</td><td class="n ${sgn(r.chg)}">${r.chg!=null?pct(r.chg/100,2):'—'}</td><td class="n ${sgn(r.chg)}">${r.chg!=null&&r.mv?egp(r.mv-r.mv/(1+r.chg/100)):'—'}</td><td>${src}</td><td class="n">${egp(r.mv)}</td><td class="n ${sgn(r.unreal)}">${egp(r.unreal)}</td><td class="n ${sgn(r.unreal)}">${pct(r.openCost?r.unreal/r.openCost:null)}</td><td class="n">${egp(r.divs)}</td><td class="n ${sgn(r.total)}">${egp(r.total)}</td><td class="n">${pct(r.weight,1,false)}</td><td class="n">${r.target?num(r.target)+` <span class="muted">${pct(toT,0)}</span>`:'—'}</td><td class="n">${r.stop?num(r.stop)+` <span class="muted">${pct(toS,0)}</span>`:'—'}</td><td class="n">${r.holdDays}d</td></tr>`; }).join('')}
     </tbody><tfoot><tr><td colspan="8">Total holdings</td><td class="n">${egp(R.pos.mvTotal)}</td><td class="n ${sgn(unreal)}">${egp(unreal)}</td><td class="n ${sgn(unreal)}">${pct(cost?unreal/cost:null)}</td><td class="n">${egp(R.pos.open.reduce((s,r)=>s+r.divs,0))}</td><td class="n">${egp(R.pos.open.reduce((s,r)=>s+r.total,0))}</td><td class="n">100.0%</td><td colspan="3"></td></tr></tfoot></table></div>
-    <p class="note" style="margin:10px 0 0">Total P/L = realized on shares already sold + unrealized + dividends, since first buy. Stocks at the latest EGX close; funds without a quote at their last traded NAV (gold funds move with the 24K gold price). Set targets and stops under Inputs → Assets & prices.</p>
+    <p class="note" style="margin:10px 0 0">Total P/L = realized on shares already sold + unrealized + dividends, since first buy. Stocks at the latest EGX close; funds without a quote at their last traded NAV (gold funds move with the 24K gold price). Set targets and stops under Settings → Inputs & settings (Assets & prices).</p>
   </div>
   <div class="grid g2">
     <div class="panel"><div class="phead"><div><h2>Sector allocation</h2><div class="sub">Share of holdings value</div></div></div>${sectorBars()}</div>
@@ -2332,19 +2420,20 @@ function vHoldings(){
       <dt>Largest sector${c.largestSector?' ('+esc(c.largestSector.sector)+')':''}</dt><dd>${c.largestSector?pct(c.largestSector.weight,1,false):'—'}</dd>
       <dt>Herfindahl index (HHI)</dt><dd>${num(c.hhi,3)}</dd>
       <dt>Positions with a stop loss</dt><dd>${c.withStop} of ${c.openCount}</dd><dt>Loss if every stop is hit</dt><dd class="${c.lossIfStops?'neg':''}">${c.lossIfStops?egp(-c.lossIfStops):'—'}</dd></dl>
-      ${c.withStop<c.openCount?`<p class="note" style="margin:10px 0 0">${c.openCount-c.withStop} positions have no stop loss. Add them under Inputs to measure downside.</p>`:''}</div>
+      ${c.withStop<c.openCount?`<p class="note" style="margin:10px 0 0">${c.openCount-c.withStop} positions have no stop loss. Add them under Settings → Inputs & settings to measure downside.</p>`:''}</div>
   </div>`;
 }
 
 // ---------- Performance ----------
 function vPerformance(){
   const R=S.R, st=R.stats; if(!st.n) return `<div class="panel empty"><h2>No data for this selection</h2></div>`;
-  const rows=st.rows, labels=rows.map(r=>M(r.month));
+  const rows=st.rows, labels=rows.map(r=>Ms(r.month));
+  const ds=dailyS(), ind=smallSample(st)?IND:'';
   return `
   ${trailingStrip()}
   <div class="grid g3">
     <div class="panel"><div class="eyebrow">Returns</div><dl class="kv">
-      <dt>Portfolio TWR</dt><dd class="${sgn(st.twr)}">${pct(st.twr)}</dd><dt>EGX30 Capped TWR</dt><dd class="${sgn(st.benchTwr)}">${pct(st.benchTwr)}</dd>
+      <dt>Portfolio TWR</dt><dd class="${sgn(st.twr)}">${pct(st.twr)}</dd><dt>${BENCH} TWR</dt><dd class="${sgn(st.benchTwr)}">${pct(st.benchTwr)}</dd>
       <dt>Alpha vs benchmark</dt><dd class="${sgn(st.alpha)}">${pct(st.alpha)}</dd><dt>Annualized TWR</dt><dd>${st.annualized!=null?pct(st.annualized):'n/a (<12 mo)'}</dd>
       <dt>Average monthly return</dt><dd>${pct(st.avg,2)}</dd><dt>Money-weighted (XIRR, annual)</dt><dd>${pct(st.xirr)}</dd><dt>Money-weighted (period)</dt><dd>${pct(st.mwrPeriod)}</dd>
       <dt>Return in USD</dt><dd>${st.usdTwr!=null?pct(st.usdTwr):'—'}</dd><dt>EGP change vs USD</dt><dd>${st.egpVsUsd!=null?pct(st.egpVsUsd):'—'}</dd>
@@ -2357,19 +2446,19 @@ function vPerformance(){
     <div class="panel"><div class="eyebrow">Risk & consistency</div><dl class="kv">
       <dt>Monthly volatility</dt><dd>${pct(st.vol,1,false)} <span class="pill ${st.risk==='High'?'loss':st.risk==='Low'?'win':'stale'}">${st.risk}</span></dd>
       <dt>Annualized volatility</dt><dd>${pct(st.vol*Math.sqrt(12),1,false)}</dd>
-      <dt>Sharpe ratio (annual)</dt><dd>${st.sharpe!=null?num(st.sharpe):'n/a'}</dd>
+      <dt>Sharpe ratio (annual)</dt><dd>${st.sharpe!=null?num(st.sharpe)+ind:'n/a'}</dd>
       <dt>Risk-free (3M T-bill)</dt><dd>${pct(R.settings.riskFree,2,false)}</dd>
-      <dt>Beta vs EGX30 Capped</dt><dd>${st.beta!=null?num(st.beta):'n/a'}</dd><dt>Correlation</dt><dd>${st.correl!=null?num(st.correl):'n/a'}</dd>
-      <dt>Tracking error (annual)</dt><dd>${st.trackingError!=null?pct(st.trackingError,1,false):'n/a'}</dd>
-      <dt>Information ratio</dt><dd>${st.trackingError&&st.n>=3?num((st.avg-rets(st,'bench'))*12/st.trackingError):'n/a'}</dd>
-      <dt>Sortino ratio (annual)</dt><dd>${st.sortino!=null?num(st.sortino):'n/a'}</dd><dt>Calmar ratio</dt><dd>${st.calmar!=null?num(st.calmar):'n/a (<12 mo)'}</dd>
-      <dt>Upside capture</dt><dd>${st.upCapture!=null?pct(st.upCapture,0,false)+` <span class="muted">${st.upMonths} up months</span>`:'n/a'}</dd><dt>Downside capture</dt><dd>${st.downCapture!=null?pct(st.downCapture,0,false)+` <span class="muted">${st.downMonths} down months</span>`:'n/a'}</dd>
-      <dt>Max drawdown</dt><dd class="neg">${pct(st.maxDD)}${st.maxDDMonth?' · '+M(st.maxDDMonth):''}</dd>
+      <dt>Beta vs EGX30 Capped</dt><dd>${st.beta!=null?num(st.beta)+ind:'n/a'}</dd><dt>Correlation</dt><dd>${st.correl!=null?num(st.correl):'n/a'}</dd>
+      <dt>Tracking error (annual)</dt><dd>${st.trackingError!=null?pct(st.trackingError,1,false)+ind:'n/a'}</dd>
+      <dt>Information ratio</dt><dd>${st.trackingError&&st.n>=3?num((st.avg-rets(st,'bench'))*12/st.trackingError)+ind:'n/a'}</dd>
+      <dt>Sortino ratio (annual)</dt><dd>${st.sortino!=null?num(st.sortino)+ind:'n/a'}</dd><dt>Calmar ratio</dt><dd>${st.calmar!=null?num(st.calmar):'n/a (<12 mo)'}</dd>
+      <dt>Upside capture</dt><dd>${st.upCapture!=null?pct(st.upCapture,0,false)+` <span class="muted">${st.upMonths} up months</span>`+ind:'n/a'}</dd><dt>Downside capture</dt><dd>${st.downCapture!=null?pct(st.downCapture,0,false)+` <span class="muted">${st.downMonths} down months</span>`+ind:'n/a'}</dd>
+      <dt>Max drawdown (month-end)</dt><dd class="neg">${pct(st.maxDD)}${st.maxDDMonth?' · '+M(st.maxDDMonth):''}${ds&&ds.maxDD!=null?` <span class="muted">· ${pct(ds.maxDD)} daily</span>`:''}</dd>
       <dt>Positive months</dt><dd>${st.posMonths} of ${st.n}</dd><dt>Months beating benchmark</dt><dd>${st.beat} of ${st.n}</dd></dl></div>
   </div>
   ${dailySection()}
   <div class="grid g2">
-    <div class="panel"><div class="phead"><div><h2>Monthly return vs EGX30 Capped</h2><div class="sub">Each month's time-weighted return</div></div>
+    <div class="panel"><div class="phead"><div><h2>Monthly return vs ${BENCH}</h2><div class="sub">Each month's time-weighted return</div></div>
       <div class="legend"><span><i class="sq" style="background:var(--s1)"></i>Portfolio</span><span><i class="sq" style="background:var(--s2)"></i>EGX30 Capped</span></div></div>
       ${chartSlot('ch-monthly',{kind:'bar',title:'Monthly returns',labels,series:[{name:'Portfolio',color:C.s1(),values:rows.map(r=>r.ret)},{name:'EGX30 Capped',color:C.s2(),values:rows.map(r=>r.bench)}],yFmt:pctAxis},250)}</div>
     <div class="panel"><div class="phead"><div><h2>Monthly alpha</h2><div class="sub">Portfolio minus benchmark · above zero = beat the index</div></div>
@@ -2387,7 +2476,7 @@ function trailingStrip(){ const R=S.R; const tr=PA.trailing(R.months, R.range.to
   return `<div class="panel" data-testid="trailing-returns"><div class="phead"><div><h2>Trailing returns to ${M(R.range.to)}</h2><div class="sub">Time-weighted, chain-linked monthly · periods under one year are not annualized</div></div></div>
     <div class="tbl"><table><thead><tr><th></th>${tr.map(t=>`<th class="n">${esc(t.label)}</th>`).join('')}</tr></thead><tbody>
     <tr><td><b>Portfolio</b></td>${tr.map(t=>`<td class="n ${sgn(t.p)}">${t.p!=null?pct(t.p):'—'}</td>`).join('')}</tr>
-    <tr><td>EGX30 Capped</td>${tr.map(t=>`<td class="n">${t.b!=null?pct(t.b):'—'}</td>`).join('')}</tr>
+    <tr><td>${BENCH}</td>${tr.map(t=>`<td class="n">${t.b!=null?pct(t.b):'—'}</td>`).join('')}</tr>
     <tr><td>Difference</td>${tr.map(t=>`<td class="n ${sgn(t.a)}">${t.a!=null?pct(t.a):'—'}</td>`).join('')}</tr>
     ${tr.some(t=>t.ann)?`<tr><td class="muted">Annualized</td>${tr.map(t=>`<td class="n muted">${t.ann?pct(t.ann.p):''}</td>`).join('')}</tr>`:''}</tbody></table></div></div>`; }
 function rets(st,k){ const v=st.rows.map(r=>r[k]).filter(x=>x!=null); return v.reduce((a,b)=>a+b,0)/Math.max(1,v.length); }
@@ -2417,7 +2506,7 @@ function vTrades(){
     ${kpi('Average hold', num(st.avgHold,0), `best ${short(st.bestTrade)} · worst ${short(st.worstTrade)}`, '', 'days')}
   </div>
   <div class="panel"><div class="phead"><div><h2>${trips?'Round trips closed in the period':'Positions fully exited in the period'}</h2><div class="sub">${trips?'One row per round trip: a position bought, fully sold, and possibly bought again later. Cash-like funds are listed separately.':'A position counts once it is fully sold; P/L covers every lot since the first buy'}</div></div><span class="note">${allClosed} ${trips?'round trips':'closed'} since inception</span></div>
-  <div class="tbl"><table data-testid="closed-trades-table"><thead><tr><th>Position</th><th>Bought</th><th>Sold</th><th class="n">Days held</th><th class="n">Cost</th><th class="n">Proceeds</th><th class="n">Dividends</th><th class="n">P/L</th><th class="n">ROI</th><th>Outcome</th></tr></thead><tbody>
+  <div class="tbl tall"><table data-testid="closed-trades-table"><thead><tr><th>Position</th><th>Bought</th><th>Sold</th><th class="n">Days held</th><th class="n">Cost</th><th class="n">Proceeds</th><th class="n">Dividends</th><th class="n">P/L</th><th class="n">ROI</th><th>Outcome</th></tr></thead><tbody>
   ${rows.length? rows.map(tripRow).join('') : `<tr><td colspan="10" class="muted">No ${trips?'round trip was closed':'positions were fully exited'} in this period.</td></tr>`}
   </tbody></table></div>
   ${cashN||cashRows.length?`<details style="margin-top:12px" data-testid="closed-cashlike"><summary class="eyebrow" style="cursor:pointer;padding:6px 0">Cash-like funds · ${cashN} round trip${cashN===1?'':'s'} not counted in the trade statistics</summary>
@@ -2460,7 +2549,7 @@ function vLedger(){
       <select id="lf-type" data-testid="ledger-type-filter"><option value="">All types</option>${PE.TYPES.map(t=>`<option ${f.type===t?'selected':''}>${t}</option>`).join('')}</select>
       <select id="lf-year" data-testid="ledger-year-filter"><option value="">All years</option>${years.map(y=>`<option ${f.year===y?'selected':''}>${y}</option>`).join('')}</select>
       <span class="note">${rows.length} matching${rows.length>shown.length?`, showing latest ${shown.length}`:''}</span></div>
-    <div class="tbl"><table data-testid="ledger-table"><thead><tr><th>Date</th><th>Type</th><th>Asset</th><th class="n">Shares</th><th class="n">Price</th><th class="n">Amount</th><th class="n">Cost basis sold</th><th class="n">Realized</th><th>Account</th><th></th></tr></thead><tbody>
+    <div class="tbl tall"><table data-testid="ledger-table"><thead><tr><th>Date</th><th>Type</th><th>Asset</th><th class="n">Shares</th><th class="n">Price</th><th class="n">Amount</th><th class="n">Cost basis sold</th><th class="n">Realized</th><th>Account</th><th></th></tr></thead><tbody>
     ${shown.map(t=>{ const lr = S.R.ledger.find(x=>x.id===t.id); const basis=lr&&t.t==='Sell'?lr.basis:null;
       return `<tr><td>${dfmt(t.d)}</td><td>${esc(t.t)}</td><td>${esc(t.a||'')}</td><td class="n">${t.q!=null?num(t.q,t.q%1?4:0):''}</td><td class="n">${t.p!=null?num(t.p,t.p%1?4:2):''}</td><td class="n ${sgn(t.amt)}">${egp(t.amt,2)}</td><td class="n">${basis!=null?egp(basis,2):''}</td><td class="n ${basis!=null?sgn(t.amt-basis):''}">${basis!=null?egp(t.amt-basis,2):''}</td><td class="muted">${esc(t.acc||'')}</td><td>${S.readOnly?'':`<button class="btn sm danger" data-del="${esc(t.id)}" data-testid="delete-tx">Delete</button>`}</td></tr>`; }).join('')}
     </tbody></table></div></div>`;
@@ -2543,7 +2632,8 @@ function vInputs(){
       <td class="n">${q?`${num(q.price)} <span class="muted">${dfmt(q.date)}</span>`:'<span class="muted">—</span>'}</td>
       <td class="in-cell"><input type="number" step="any" data-a="${esc(a.name)}" data-f="price" value="${a.price??''}" id="as-${i}-price"></td><td class="in-cell"><input class="txt" style="min-width:120px" type="date" data-a="${esc(a.name)}" data-f="priceDate" value="${esc(a.priceDate||'')}" id="as-${i}-pd"></td>
       <td class="in-cell"><input type="number" step="any" data-a="${esc(a.name)}" data-f="target" value="${a.target??''}" id="as-${i}-target"></td><td class="in-cell"><input type="number" step="any" data-a="${esc(a.name)}" data-f="stop" value="${a.stop??''}" id="as-${i}-stop"></td>
-      <td>${held?`<span class="pill auto">${num(held.open,0)} sh</span>`:''}</td></tr>`; }; const isHeld=(a)=>R.pos.open.some(r=>r.name===a.name); const heldA=assets.filter(isHeld), closedA=assets.filter(a=>!isHeld(a)); const tbl=(rows,off,tid)=>`<div class="tbl ${ro?'':'grid-in'}"><table data-testid="${tid}"><thead><tr><th>Asset (exact ledger name)</th><th>Symbol</th><th>Sector</th><th class="n">Auto price</th><th class="n">Manual price</th><th>Manual date</th><th class="n">Target</th><th class="n">Stop loss</th><th>Held</th></tr></thead><tbody>${rows.map((a,i)=>assetRow(a,i+off)).join('')}</tbody></table></div>`; return tbl(heldA,0,'assets-table')+(closedA.length?`<details style="margin-top:12px" data-testid="assets-closed"><summary class="eyebrow" style="cursor:pointer;padding:6px 0">Closed positions · ${closedA.length} assets not currently held</summary>${tbl(closedA,heldA.length,'assets-table-closed')}</details>`:''); })()}
+      <td>${held?`<span class="pill auto">${num(held.open,0)} sh</span>`:''}</td></tr>`; }; const isHeld=(a)=>R.pos.open.some(r=>r.name===a.name); const heldA=assets.filter(isHeld), closedA=assets.filter(a=>!isHeld(a)&&a.watch!==true), watchA=assets.filter(a=>!isHeld(a)&&a.watch===true); const tbl=(rows,off,tid)=>`<div class="tbl ${ro?'':'grid-in'}"><table data-testid="${tid}"><thead><tr><th>Asset (exact ledger name)</th><th>Symbol</th><th>Sector</th><th class="n">Auto price</th><th class="n">Manual price</th><th>Manual date</th><th class="n">Target</th><th class="n">Stop loss</th><th>Held</th></tr></thead><tbody>${rows.map((a,i)=>assetRow(a,i+off)).join('')}</tbody></table></div>`; return tbl(heldA,0,'assets-table')+(closedA.length?`<details style="margin-top:12px" data-testid="assets-closed"><summary class="eyebrow" style="cursor:pointer;padding:6px 0">Closed positions · ${closedA.length} assets not currently held</summary>${tbl(closedA,heldA.length,'assets-table-closed')}</details>`:'')
+      +(watchA.length?`<details style="margin-top:4px" data-testid="assets-watch"><summary class="eyebrow" style="cursor:pointer;padding:6px 0">Watch list (index members) · ${watchA.length}</summary><p class="note" style="margin:0 0 8px">EGX30 Capped members kept for the index model and attribution; never part of the portfolio.</p>${tbl(watchA,heldA.length+closedA.length,'assets-table-watch')}</details>`:''); })()}
     <form class="form" id="asset-form" style="margin-top:14px" data-testid="add-asset-form" ${S.readOnly?'hidden':''}>
       <label style="grid-column:span 2">New asset name<input type="text" id="na-name" required class="inp" placeholder="As written in the Thndr statement"></label>
       <label>Symbol<input type="text" id="na-sym" class="inp" placeholder="e.g. COMI"></label>
@@ -2587,13 +2677,13 @@ function extraChecks(){
   else out.push({label:'Month-ends sourced from Thndr statements', status: typed.length||!stm.length?'warn':'ok', detail: `${stm.length} from statements` + (rec.length?` · ${rec.map(r=>M(r.month)).join(', ')} rebuilt from the next statement`:'') + (est.length?` · ${est.length} closing-price estimates (${est.map(r=>M(r.month)).join(', ')}; no holdings list on those statements)`:'') + (typed.length?` · typed by hand: ${typed.map(r=>M(r.month)).join(', ')}`:'')});
   // account lock: statements and invoices are only accepted for this account; the Unified Code is definitive, the holder name is a fallback
   const acct=(S.settings&&S.settings.account)||{}; const code=String(acct.unifiedCode||'').trim(), holder=String(acct.holder||'').trim();
-  out.push({label:'Thndr account lock', status: code?'ok':holder?'warn':'error', detail: code?`Unified Code recorded${holder?` · holder ${holder}`:''}`:holder?'Unified Code unknown until the first statement is posted; documents are matched by holder name only':'No account holder or Unified Code set: no statement or invoice can be matched to this portfolio. Set the holder under Settings.'});
+  out.push({label:'Thndr account lock', status: code?'ok':holder?'warn':'error', detail: code?`Unified Code recorded${holder?` · holder ${holder}`:''}`:holder?'Unified Code unknown until the first statement is posted; documents are matched by holder name only':'No account holder or Unified Code set: no statement or invoice can be matched to this portfolio. Set the holder under Settings → Inputs & settings.'});
   try{ PA.tradeChecks(S.R.ledger, S.assets, pbook(), S.bench && S.bench.actions).forEach(c=>out.push(c)); }catch(e){ console.error(e); }
   return out;
 }
 function vChecks(){
   const R=S.R; const m=S.market;
-  const allChecks = R.checks.concat(extraChecks());
+  const allChecks = R.checks.concat(extraChecks()).map(c=>({...c, label:prose(c.label), detail:prose(c.detail)}));
   const hist=Object.keys(S.history).sort();
   return `
   <div class="grid g2">
@@ -2609,9 +2699,9 @@ function vChecks(){
   <div class="panel"><div class="phead"><div><h2>Methodology</h2><div class="sub">How every figure on this page is calculated</div></div></div><div class="prose">
     <h3>Time-weighted return (TWR)</h3><p>Monthly return is Modified Dietz: <code>(closing value − opening value − net deposits) ÷ (opening value + day-weighted net deposits)</code>. A deposit on the 1st counts fully for the month, one on the 16th about half. Months are then chain-linked (time-weighted): <code>TWR = Π(1 + r) − 1</code>. TWR removes the effect of your deposit timing and is the right figure to compare against the index.</p>
     <h3>Money-weighted return (XIRR)</h3><p>The internal rate of return of your actual cash flows: the opening value on the day before the period, every deposit and withdrawal on its date, and the closing value at period end. It rewards or penalises the timing of your deposits. Actual/365 day count, same as Excel's XIRR.</p>
-    <h3>Benchmark</h3><p>EGX30 Capped, the index most comparable to a retail EGX portfolio because no single stock can dominate it. A month's return comes from consecutive month-end closes when both exist, otherwise from the typed %. Alpha is the simple difference of returns.</p>
+    <h3>Benchmark</h3><p>EGX30 Capped, the index most comparable to a retail EGX portfolio because no single stock can dominate it. It is a price index: it leaves dividends out, while your return includes the dividends you received, so the comparison flatters the portfolio a little. A month's return comes from consecutive month-end closes when both exist, otherwise from the typed %; when a month in the period has neither, the index return and alpha are left blank rather than counted as 0%. Alpha is the simple difference of returns.</p>
     <h3>Cost basis and P/L</h3><p>Weighted-average cost, in ledger order. A sale's cost basis is <code>average cost × shares sold</code>; realized P/L is proceeds minus that basis. Amounts are net of Thndr commissions, as on the statement. Dividends are credited to the stock that paid them.</p>
-    <h3>Risk</h3><p>Volatility is the sample standard deviation of monthly returns. Sharpe uses the monthly equivalent of the 3-month T-bill yield and is annualized by √12. Beta is the slope of portfolio on benchmark monthly returns; tracking error is the annualized standard deviation of monthly alpha; information ratio is annualized mean alpha over tracking error. Sortino replaces volatility with downside deviation (returns below the risk-free rate); Calmar is annualized TWR ÷ max drawdown. Upside/downside capture compare the portfolio's compounded return with the index's in the months the index rose or fell. Drawdown is measured on the cumulative return within the selected period. HHI is the sum of squared position weights; 1 ÷ HHI gives the effective number of equal-sized positions.</p>
+    <h3>Risk</h3><p>Volatility is the sample standard deviation of monthly returns. Sharpe uses the monthly equivalent of the 3-month T-bill yield and is annualized by √12. Beta is the slope of portfolio on benchmark monthly returns; tracking error is the annualized standard deviation of monthly alpha; information ratio is annualized mean alpha over tracking error. Sortino replaces volatility with downside deviation (returns below the risk-free rate); Calmar is annualized TWR ÷ max drawdown. Upside/downside capture compare the portfolio's compounded return with the index's in the months the index rose or fell. Max drawdown in the tiles is measured on month-end values; the daily series under Performance also shows the deeper low inside a month. Ratios worked out from fewer than 12 monthly returns are marked indicative. HHI is the sum of squared position weights; 1 ÷ HHI gives the effective number of equal-sized positions.</p>
     <h3>USD and real returns</h3><p>USD return converts each month at consecutive month-end USD/EGP rates: the CBE mid rate where you entered it, otherwise the market close filled automatically. Real return deflates by Egypt urban CPI (CAPMAS), month on month, filled automatically once published around the 10th.</p>
     <h3>Current month</h3><p>Until the monthly statement arrives, the current month uses live prices and cash = the latest statement's closing balance plus every ledger movement booked after it (trades from Thndr invoices, for example). It is labelled Live. Once a month closes and its statement has not been posted yet, the month-end is estimated from the ledger (cash) and the last closing prices of the month (holdings, funds at their last traded NAV), labelled Estimate and flagged in the checks; the statement figures replace the estimate when it is posted. Nothing is saved to the marks until then.</p>
     <h3>Conventions</h3><p>All money in EGP. Negative money values are shown in parentheses; returns carry a sign. Inputs you type appear in blue, following the spreadsheet colour convention for hard-coded values.</p>
@@ -2639,8 +2729,9 @@ document.addEventListener('click', e=>{
   const menu = $('#pf-menu'); if(!menu) return;
   if(e.target.closest('#pf-name')){ renderSwitch(); menu.hidden = !menu.hidden; $('#pf-name').setAttribute('aria-expanded', String(!menu.hidden)); return; }
   const b = e.target.closest('#pf-menu [data-pid]'); if(b){ menu.hidden = true; if(window.pdSelect) window.pdSelect(b.dataset.pid); return; }
-  if(!e.target.closest('#pf-menu')) menu.hidden = true;
+  if(!e.target.closest('#pf-menu')){ menu.hidden = true; $('#pf-name').setAttribute('aria-expanded','false'); }
 });
+document.addEventListener('keydown', e=>{ if(e.key!=='Escape') return; const menu=$('#pf-menu'); if(!menu || menu.hidden) return; menu.hidden=true; const b=$('#pf-name'); if(b){ b.setAttribute('aria-expanded','false'); b.focus(); } });
 let pbMemo = { h: null, pb: null };
 function pbook(){ if(pbMemo.h !== S.history){ pbMemo = { h: S.history, pb: PA.priceBook(S.history) }; } return pbMemo.pb; }
 const AN = { key: null, v: {} };
@@ -2665,7 +2756,7 @@ function dailySection(){
   const rows = ds.rows; const labels = rows.map(r=>dshort(r.d));
   const off = D.recon.filter(r=>Math.abs(r.pct)>0.01);
   return `
-  <div class="panel"><div class="phead"><div><h2>Daily growth vs EGX30 Capped</h2><div class="sub">Valued every EGX session from the ledger and closing prices · ${ds.n} sessions</div></div>
+  <div class="panel"><div class="phead"><div><h2>Daily growth vs ${BENCH}</h2><div class="sub">Valued every EGX session from the ledger and closing prices · ${ds.n} sessions</div></div>
     <div class="legend"><span><i style="background:var(--s1)"></i>Portfolio ${pct(ds.twr)}</span><span><i style="background:var(--s2)"></i>EGX30 Capped ${pct(ds.bench)}</span></div></div>
     ${chartSlot('ch-daily',{kind:'line',title:'Daily cumulative return',labels,series:[{name:'Portfolio',color:C.s1(),values:rows.map(r=>r.cum)},{name:'EGX30 Capped',color:C.s2(),values:rows.map(r=>r.bcum)}],yFmt:pctAxis,minZero:false,tipLabel:i=>dfmt(rows[i].d),tipExtra:i=>`<div>Value <b>${egp(rows[i].value)} EGP</b></div>`},270)}
     ${chartSlot('ch-uw',{kind:'line',title:'Underwater chart',labels,series:[{name:'Drawdown',color:C.neg(),values:rows.map(r=>r.dd),area:true}],yFmt:pctAxis,tipLabel:i=>dfmt(rows[i].d)},150)}
@@ -2677,7 +2768,7 @@ function dailySection(){
     <div class="tbl"><table data-testid="recon-table"><thead><tr><th>Month</th><th>Last session</th><th class="n">From prices</th><th class="n">Your mark</th><th class="n">Difference</th><th class="n">%</th></tr></thead><tbody>
     ${D.recon.map(r=>`<tr><td>${M(r.month)}</td><td>${dfmt(r.day)}</td><td class="n">${egp(r.model)}</td><td class="n">${egp(r.marks)}</td><td class="n ${Math.abs(r.pct)>0.01?'neg':''}">${egp(r.diff)}</td><td class="n">${Math.abs(r.pct)>0.01?`<span class="pill stale">${pct(r.pct,2)}</span>`:pct(r.pct,2)}</td></tr>`).join('')}
     </tbody></table></div>
-    <p class="note" style="margin:10px 0 0">Large gaps usually mean the month-end mark was typed as a round number. The Statements tab can replace it with the exact figure from the Thndr positions snapshot.</p></div>`;
+    <p class="note" style="margin:10px 0 0">Large gaps usually mean the month-end mark was typed as a round number. Posting the Thndr statement (Settings → Statements &amp; imports) replaces it with the exact figure from the positions snapshot.</p></div>`;
 }
 
 // ---------- Attribution ----------
@@ -2685,20 +2776,23 @@ function vAttribution(){
   const A = attrA(), AW = activeA();
   if(!S.bench) return `<div class="panel empty"><h2>Index data not loaded yet</h2></div>`;
   if(!A) return `<div class="panel empty"><h2>No attribution for this selection</h2><p>Attribution needs month-end closes for the months in the period.</p></div>`;
-  const effects=[{label:'Sector allocation',v:A.alloc},{label:'Stock selection',v:A.sel},{label:'Trading during the month',v:A.trading},{label:'Index model gap',v:A.replication},{label:'Active return',v:A.active,bold:true}];
-  const labels=A.months.map(m=>M(m.month));
+  // engine note on what the Trading residual holds (dividends, rebates and fees as well as intra-month trades); older engines have none
+  const tNote = A.tradingNote || (typeof PA.TRADING_NOTE==='string' ? PA.TRADING_NOTE : null);
+  const effects=[{label:'Sector allocation',v:A.alloc},{label:'Stock selection',v:A.sel},{label:tNote?'Trading and other':'Trading during the month',v:A.trading},{label:'Index model gap',v:A.replication},{label:'Active return',v:A.active,bold:true}];
+  const labels=A.months.map(m=>Ms(m.month));
   const rms=A.trackingCheck;
   return `
   <div class="kpis">
     ${kpi('Active return', `<span class="${sgn(A.active)}">${pct(A.active)}</span>`, `Portfolio ${pct(A.R)} vs EGX30 Capped ${pct(A.B)}`,'hero')}
     ${kpi('Sector allocation', `<span class="${sgn(A.alloc)}">${pct(A.alloc,2)}</span>`, 'being in the right sectors')}
     ${kpi('Stock selection', `<span class="${sgn(A.sel)}">${pct(A.sel,2)}</span>`, 'picking better stocks within sectors')}
-    ${kpi('Trading during the month', `<span class="${sgn(A.trading)}">${pct(A.trading,2)}</span>`, 'buys and sells after month start')}
+    ${kpi(tNote?'Trading and other':'Trading during the month', `<span class="${sgn(A.trading)}">${pct(A.trading,2)}</span>`, tNote?esc(tNote.replace(/^Trading and other:\s*/,'')):'buys and sells after month start')}
     ${kpi('Index model gap', `<span class="${sgn(A.replication)}">${pct(A.replication,2)}</span>`, `model vs real index · ${pct(rms,2,false)}/mo RMS`)}
   </div>
   <div class="grid g2">
     <div class="panel"><div class="phead"><div><h2>Where the active return came from</h2><div class="sub">${esc(S.R.stats.label)} · Brinson-Fachler, linked across months</div></div></div>
       ${hbars(effects, v=>pct(v,2))}
+      ${tNote?`<p class="note" style="margin:10px 0 0" data-testid="attribution-trading-note">${esc(tNote)}.</p>`:''}
       <p class="note" style="margin:12px 0 0">The four effects add up exactly to the active return. Allocation and selection assume you held the prior month-end positions all month; everything your trades changed inside the month lands in trading.</p></div>
     <div class="panel"><div class="phead"><div><h2>Sector bets today</h2><div class="sub">Your weight minus EGX30 Capped weight · ${AW?dfmt(AW.date):''}</div></div></div>
       ${AW?hbars(AW.rows.filter(r=>Math.abs(r.active)>0.001).map(r=>({label:r.sector,v:r.active})), v=>(v>=0?'+':'−')+(Math.abs(v)*100).toFixed(1)+' pp'):'<p class="muted">—</p>'}</div>
@@ -2743,7 +2837,7 @@ function vIncome(){
   </div>
   <div class="panel"><div class="phead"><div><h2>Income by month</h2><div class="sub">Cash credited to the account</div></div>
     <div class="legend"><span><i class="sq" style="background:var(--s1)"></i>Dividends</span><span><i class="sq" style="background:var(--s2)"></i>Rebates</span></div></div>
-    ${chartSlot('ch-income',{kind:'bar',title:'Monthly income',labels:months.map(x=>M(x.m)),series:[{name:'Dividends',color:C.s1(),values:months.map(x=>x.div)},{name:'Rebates',color:C.s2(),values:months.map(x=>x.reb)}],yFmt:egpAxis,tipExtra:i=>`<div>Fees <b>${egp(months[i].fee)} EGP</b></div>`},230)}</div>
+    ${chartSlot('ch-income',{kind:'bar',title:'Monthly income',labels:months.map(x=>Ms(x.m)),series:[{name:'Dividends',color:C.s1(),values:months.map(x=>x.div)},{name:'Rebates',color:C.s2(),values:months.map(x=>x.reb)}],yFmt:egpAxis,tipExtra:i=>`<div>Fees <b>${egp(months[i].fee)} EGP</b></div>`},230)}</div>
   <div class="grid g2">
     <div class="panel"><div class="phead"><div><h2>Dividends by stock</h2><div class="sub">Every dividend received, including stocks you have sold</div></div></div>
       <div class="tbl"><table data-testid="dividends-table"><thead><tr><th>Stock</th><th class="n">Payments</th><th class="n">Total</th><th class="n">Last 12 months</th><th>Last paid</th></tr></thead><tbody>
@@ -2791,10 +2885,11 @@ function factsheetData(m){
   const Ay = PA.attribution(R.months, {from:(y+'-01')>S.settings.inception?y+'-01':S.settings.inception,to:m}, R.ledger, S.assets, pb, S.bench, S.R.today);
   const inc = (from,to)=>{ const s={div:0,reb:0,fee:0}; R.ledger.forEach(t=>{ if(t.d>=from&&t.d<=to){ if(t.t==='Dividend')s.div+=t.amt; if(t.t==='Rebate')s.reb+=t.amt; if(t.t==='Fee')s.fee+=t.amt; } }); return s; };
   const row = R.months.find(r=>r.month===m);
-  return { m, R, st:R.stats, row, live, tr, cal, top, sectors, A1, Ay, value: row?row.value:tot, incM: inc(m+'-01',PE.eom(m)), incY: inc(y+'-01',PE.eom(m)) };
+  let ddDaily = null; try{ const ds = PA.dailyStats(dailyA(), R.range); ddDaily = ds ? ds.maxDD : null; }catch(e){ console.error(e); }
+  return { m, R, st:R.stats, row, live, tr, cal, top, sectors, A1, Ay, ddDaily, value: row?row.value:tot, incM: inc(m+'-01',PE.eom(m)), incY: inc(y+'-01',PE.eom(m)) };
 }
 function factsheetHTML(F){
-  const ink='#0F1A17', ink2='#46534E', ink3='#6F7D78', rule='#DAE2DE', acc='#0B6E5F', pos='#137a3a', neg='#c02f2f', bg2='#EDF2EF';
+  const ink='#0F1A17', ink2='#46534E', ink3='#5F6C67', rule='#DAE2DE', acc='#0B6E5F', pos='#137a3a', neg='#c02f2f', bg2='#EDF2EF';
   const col=(x)=>x==null?ink3:x>0?pos:x<0?neg:ink; const P=(x,dp=1)=>`<span style="color:${col(x)}">${pct(x,dp)}</span>`;
   const th=(t,al='right')=>`<th style="text-align:${al};font:600 10px Arial,sans-serif;letter-spacing:.06em;text-transform:uppercase;color:${ink3};padding:6px 8px;border-bottom:1px solid ${rule}">${t}</th>`;
   const td=(t,al='right',extra='')=>`<td style="text-align:${al};padding:6px 8px;border-bottom:1px solid ${bg2};font:13px Arial,sans-serif;color:${ink};${extra}">${t}</td>`;
@@ -2802,29 +2897,31 @@ function factsheetHTML(F){
   const st=F.st, set=S.settings;
   const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   const fact=(l,v,sub)=>`<td style="padding:10px 12px;border:1px solid ${rule};vertical-align:top;width:16.6%"><div style="font:600 10px Arial;letter-spacing:.06em;text-transform:uppercase;color:${ink3}">${l}</div><div style="font:600 19px Georgia,serif;color:${ink};margin-top:4px">${v}</div>${sub?`<div style="font:11px Arial;color:${ink2};margin-top:2px">${sub}</div>`:''}</td>`;
+  const small = smallSample(st), ind = small ? ` <span style="font:600 9px Arial;letter-spacing:.04em;text-transform:uppercase;color:${ink3}">indicative</span>` : '';
+  const incM = +String(set.inception||'').slice(5,7), incY = String(set.inception||'').slice(0,4);   // a first calendar year that starts after January is partial
   const eff = (A)=> A ? `${P(A.active,2)} = allocation ${P(A.alloc,2)} + selection ${P(A.sel,2)} + trading ${P(A.trading,2)} + model gap ${P(A.replication,2)}` : '—';
   return `<div style="max-width:760px;margin:0 auto;background:#fff;color:${ink};font:13px Arial,sans-serif;padding:28px 30px;border:1px solid ${rule}">
   <table role="presentation" width="100%" style="border-collapse:collapse"><tr><td style="border-bottom:3px solid ${acc};padding-bottom:10px">
     <div style="font:600 11px Arial;letter-spacing:.1em;text-transform:uppercase;color:${acc}">Monthly factsheet · ${M(F.m)}${F.live?' (month to date)':''}</div>
     <div style="font:600 24px Georgia,serif;color:${ink};margin-top:4px">${esc(set.name)}</div>
-    <div style="font:12px Arial;color:${ink2};margin-top:2px">Egyptian equities via Thndr · Benchmark EGX30 Capped · Reporting currency EGP · Inception ${M(set.inception)}</div></td></tr></table>
+    <div style="font:12px Arial;color:${ink2};margin-top:2px">Egyptian equities via Thndr · Benchmark ${BENCH} · Reporting currency EGP · Inception ${M(set.inception)}</div></td></tr></table>
   <table role="presentation" width="100%" style="border-collapse:collapse;margin-top:16px"><tr>
     ${fact('Portfolio value', egp(F.value), 'EGP, month-end')}
     ${fact('Month return', P(F.row&&F.row.ret), `Index ${pct(F.row&&F.row.bench)}`)}
     ${fact('Year to date', P(F.tr[3].p), `Index ${pct(F.tr[3].b)}`)}
     ${fact('Since inception', P(st.twr), st.annualized!=null?`${pct(st.annualized)} a year`:`Index ${pct(st.benchTwr)}`)}
-    ${fact('Max drawdown', P(st.maxDD), 'month-end basis')}
-    ${fact('Sharpe ratio', num(st.sharpe), `vol ${pct(st.vol*Math.sqrt(12),1,false)} a year`)}
+    ${fact('Max drawdown', P(st.maxDD), `month-end${F.ddDaily!=null?` · ${pct(F.ddDaily)} daily`:''}`)}
+    ${fact('Sharpe ratio', num(st.sharpe)+(st.sharpe!=null?ind:''), `annualized · vol ${pct(st.vol*Math.sqrt(12),1,false)} a year`)}
   </tr></table>
   ${h2('Performance')}
   <table role="presentation" width="100%" style="border-collapse:collapse"><tr>${th('','left')}${F.tr.map(t=>th(t.label)).join('')}</tr>
     <tr>${td('Portfolio','left','font-weight:600')}${F.tr.map(t=>td(t.p!=null?P(t.p):'—')).join('')}</tr>
-    <tr>${td('EGX30 Capped','left')}${F.tr.map(t=>td(t.b!=null?pct(t.b):'—')).join('')}</tr>
+    <tr>${td(BENCH,'left')}${F.tr.map(t=>td(t.b!=null?pct(t.b):'—')).join('')}</tr>
     <tr>${td('Difference','left')}${F.tr.map(t=>td(t.a!=null?P(t.a):'—')).join('')}</tr></table>
-  <div style="font:11px Arial;color:${ink3};margin-top:4px">Time-weighted: Modified Dietz monthly returns (deposits weighted by the days they were invested), chain-linked, net of commissions. Periods under one year are not annualized.</div>
+  <div style="font:11px Arial;color:${ink3};margin-top:4px">Time-weighted: Modified Dietz monthly returns (deposits weighted by the days they were invested), chain-linked, net of commissions. Periods under one year are not annualized. The benchmark is a price index: it excludes dividends, the portfolio's return includes them.</div>
   ${h2('Monthly returns')}
   <table role="presentation" width="100%" style="border-collapse:collapse;font-size:12px"><tr>${th('Year','left')}${MON.map(x=>th(x)).join('')}${th('Year')}${th('Index')}</tr>
-    ${F.cal.map(Y=>`<tr>${td(Y.year,'left','font-weight:600')}${Y.m.map(v=>td(v==null?'':P(v),'right','font-size:12px;padding:6px 4px')).join('')}${td(P(Y.ytd),'right','font-weight:600')}${td(Y.bytd!=null?pct(Y.bytd):'—')}</tr>`).join('')}</table>
+    ${F.cal.map(Y=>`<tr>${td(`${Y.year}${String(Y.year)===incY&&incM>1?`<div style="font:400 10px Arial;color:${ink3}">(from ${MON3[incM-1]})</div>`:''}`,'left','font-weight:600')}${Y.m.map(v=>td(v==null?'':P(v),'right','font-size:12px;padding:6px 4px')).join('')}${td(P(Y.ytd),'right','font-weight:600')}${td(Y.bytd!=null?pct(Y.bytd):'—')}</tr>`).join('')}</table>
   <table role="presentation" width="100%" style="border-collapse:collapse;margin-top:6px"><tr><td style="vertical-align:top;width:52%;padding-right:14px">
     ${h2('Top holdings')}
     <table role="presentation" width="100%" style="border-collapse:collapse">${`<tr>${th('Holding','left')}${th('Sector','left')}${th('Weight')}</tr>`}
@@ -2839,7 +2936,8 @@ function factsheetHTML(F){
   <table role="presentation" width="100%" style="border-collapse:collapse;margin-top:6px"><tr><td style="vertical-align:top;width:52%;padding-right:14px">
     ${h2('Risk')}
     <table role="presentation" width="100%" style="border-collapse:collapse">
-    ${[['Volatility (annualized)',pct(st.vol*Math.sqrt(12),1,false)],['Beta vs EGX30 Capped',num(st.beta)],['Tracking error',st.trackingError!=null?pct(st.trackingError,1,false):'—'],['Sortino ratio',num(st.sortino)],['Upside / downside capture',st.upCapture!=null&&st.downCapture!=null?`${pct(st.upCapture,0,false)} / ${pct(st.downCapture,0,false)}`:'—'],['Money-weighted return (XIRR)',pct(st.xirr)],['Return in USD',st.usdTwr!=null?pct(st.usdTwr):'—'],['Positive months',`${st.posMonths} of ${st.n}`]].map(([a,b])=>`<tr>${td(a,'left',`color:${ink2}`)}${td(b)}</tr>`).join('')}</table>
+    ${[['Volatility','annualized',pct(st.vol*Math.sqrt(12),1,false)],['Beta vs EGX30 Capped','monthly returns',st.beta!=null?num(st.beta)+ind:'—'],['Tracking error','annualized',st.trackingError!=null?pct(st.trackingError,1,false)+ind:'—'],['Sortino ratio','annualized',st.sortino!=null?num(st.sortino)+ind:'—'],['Upside / downside capture','cumulative',st.upCapture!=null&&st.downCapture!=null?`${pct(st.upCapture,0,false)} / ${pct(st.downCapture,0,false)}${ind}`:'—'],['Money-weighted return (XIRR)','annualized',pct(st.xirr)],['Return in USD','cumulative',st.usdTwr!=null?pct(st.usdTwr):'—'],['Positive months','since inception',`${st.posMonths} of ${st.n}`]].map(([a,basis,b])=>`<tr>${td(`${a} <span style="color:${ink3};font-size:11px">· ${basis}</span>`,'left',`color:${ink2}`)}${td(b)}</tr>`).join('')}</table>
+    <div style="font:11px Arial;color:${ink3};margin-top:4px" data-testid="factsheet-riskfree">Risk-free rate used: ${pct(set.riskFree,2,false)} a year (3-month T-bill). Cumulative figures run from ${M(set.inception)} to ${M(F.m)}.</div>
   </td><td style="vertical-align:top;padding-left:14px">
     ${h2('Income · EGP')}
     <table role="presentation" width="100%" style="border-collapse:collapse"><tr>${th('','left')}${th(M(F.m))}${th('YTD')}</tr>
@@ -2870,13 +2968,13 @@ function vFactsheet(){
     <div class="row"><label class="ink2" style="font-size:12px">Month <select id="fs-month" data-testid="factsheet-month">${months.map(m=>`<option value="${m}" ${m===S.fsMonth?'selected':''}>${M(m)}${S.R.months.find(r=>r.month===m).live?' (live)':''}</option>`).join('')}</select></label>
     <button class="btn" id="fs-dl" data-testid="factsheet-download">Download HTML</button>
     ${window.pdDownloadExport?`<button class="btn" id="fs-xlsx" data-testid="factsheet-excel" data-month="${S.fsMonth}">Download Excel</button>`:''}
-    <button class="btn primary" id="fs-email" data-testid="factsheet-email" ${email?'':'disabled'} title="${email?'Send to '+esc(email):'Set an email address under Inputs → Settings'}">Email to me</button></div></div>
-    <p class="note" style="margin:0 0 14px" data-testid="factsheet-note">${S.readOnly?`${S.sync&&email?`Emailed to <span class="mono">${esc(email)}</span> automatically after each monthly statement is posted. `:''}Download it here any time.`:email?`Sends from your Gmail to <span class="mono">${esc(email)}</span>. Posting a monthly statement offers to send it automatically.`:'Add an email address under Inputs → Settings to send factsheets.'}</p>
+    <button class="btn primary" id="fs-email" data-testid="factsheet-email" ${email?'':'disabled'} title="${email?'Send to '+esc(email):'Set an email address under Settings → Inputs &amp; settings'}">Email to me</button></div></div>
+    <p class="note" style="margin:0 0 14px" data-testid="factsheet-note">${S.readOnly?`${S.sync&&email?`Emailed to <span class="mono">${esc(email)}</span> automatically after each monthly statement is posted. `:''}Download it here any time.`:email?`Sends from your Gmail to <span class="mono">${esc(email)}</span>. Posting a monthly statement offers to send it automatically.`:'Add an email address under Settings → Inputs &amp; settings to send factsheets.'}</p>
     <div style="overflow-x:auto;background:var(--surface-2);border-radius:10px;padding:14px 8px" data-testid="factsheet-preview">${factsheetHTML(F)}</div></div>`;
 }
 async function emailFactsheet(m, quiet){
   const mcp = await window.claude?.use?.('mcp'); const to = S.settings.factsheetEmail;
-  if(!mcp || !to){ if(!quiet) toast('Email is not available here. Set an address under Inputs and allow Gmail when asked.','error'); return false; }
+  if(!mcp || !to){ if(!quiet) toast('Email is not available here. Set an address under Settings → Inputs & settings and allow Gmail when asked.','error'); return false; }
   const F = factsheetData(m);
   const html = `<!doctype html><html><body style="margin:0;padding:16px;background:#EDF2EF">${factsheetHTML(F)}</body></html>`;
   const text = `${S.settings.name} — ${M(m)}\nValue ${egp(F.value)} EGP\nMonth ${pct(F.row&&F.row.ret)} vs EGX30 Capped ${pct(F.row&&F.row.bench)}\nYTD ${pct(F.tr[3].p)} · Since inception ${pct(F.st.twr)}`;
@@ -2946,12 +3044,12 @@ function vStatements(){
 function heldEmails(){ const seen=(S.sync&&S.sync.seen)||{}; return Object.keys(seen).filter(id=>seen[id]&&seen[id].status==='hold').map(id=>({id, ...seen[id]})).sort((a,b)=>String(b.date||b.at||'').localeCompare(String(a.date||a.at||''))); }
 function toolShaLine(sy){ const t=sy&&sy.toolSha; if(!t) return '';
   const parts = typeof t==='string' ? [String(t).slice(0,8)] : ['sync','statement','engine','engine2'].filter(k=>t[k]).map(k=>`${k}.js ${esc(String(t[k]).slice(0,8))}`).concat(Object.keys(t).filter(k=>!['sync','statement','engine','engine2','at'].includes(k)&&typeof t[k]==='string'&&/^[0-9a-f]{6,}$/i.test(t[k])).map(k=>`${esc(k)} ${esc(t[k].slice(0,8))}`));
-  return parts.length?`<div class="note" style="margin-top:6px" data-testid="sync-tool-sha">Sync tools: ${parts.join(' · ')}${t.at?` · as of ${esc(String(t.at).slice(0,16).replace('T',' '))} UTC`:''}</div>`:''; }
+  return parts.length?`<div class="note" style="margin-top:6px" data-testid="sync-tool-sha">Sync tools: ${parts.join(' · ')}${t.at?` · as of ${esc(cairoAt(t.at))}`:''}</div>`:''; }
 function syncHistory(){
   const imp=S.imports||{}, sy=S.sync||null; const months=Object.keys(imp).sort().reverse();
   const seen=Object.values((sy&&sy.seen)||{}).sort((a,b)=>(b.date||'').localeCompare(a.date||'')).slice(0,8);
   const held=heldEmails();
-  const when=(iso)=>iso?new Date(iso).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit',hour12:true,timeZone:'Africa/Cairo'})+' Cairo':'—';
+  const when=(iso)=>iso?cairoAt(iso):'—';
   const stLabel={applied:['win','Applied'],unchanged:['auto','Already in ledger'],hold:['loss','Needs review'],skip:['man','Skipped'],ignored:['man','Ignored']};
   return `<div class="panel" data-testid="sync-history"><div class="phead"><div><h2>${sy?'Automatic import history':'Import history'}</h2><div class="sub">${sy?`Last inbox check ${when(sy.lastRun)} · runs daily at 6:17 PM and 10:17 PM Cairo`:'Statements posted by hand from this page; no inbox job runs for this portfolio'}</div>${sy?toolShaLine(sy):''}</div></div>
     <div class="grid g2"><div><h3 class="eyebrow" style="margin:0 0 8px">Months posted from monthly statements</h3>
@@ -3056,7 +3154,7 @@ function holdingRisk(){
     const sym=r.symbol; const b=sym&&pb.has(sym)?betaOf(pb,sym):null;
     let high=null; if(sym&&pb.has(sym)) for(const d of pb.days){ if(d<r.firstBuy) continue; const p=pb.at(sym,d); if(p!=null&&(high==null||p>high)) high=p; }
     if(r.price!=null&&(high==null||r.price>high)) high=r.price;
-    return {sym:sym||r.name, name:r.name, w:r.mv/tot, mv:r.mv, beta:b?b.beta:null, vol:b?b.vol:null, unreal:r.unreal, unrealPct:r.openCost?r.unreal/r.openCost:null, price:r.price, high, fromHigh:high&&r.price!=null?r.price/high-1:null};
+    return {sym:sym||r.name, name:r.name, sector:r.sector, w:r.mv/tot, mv:r.mv, beta:b?b.beta:null, vol:b?b.vol:null, unreal:r.unreal, unrealPct:r.openCost?r.unreal/r.openCost:null, price:r.price, high, fromHigh:high&&r.price!=null?r.price/high-1:null};
   }).sort((a,b)=>b.w-a.w);
 }
 // Down months of the SELECTED period (S.R.stats.rows), so the Analysis tab agrees with Performance for any period.
@@ -3079,14 +3177,14 @@ function vAnalysis(){
   if(!st.n) return `<div class="panel empty"><h2>No data for this selection</h2></div>`;
   // capture ratios, up/down month counts and beta come from the period stats: the same figures Performance shows
   const upN=st.upMonths||0, dnN=st.downMonths||0, upC=st.upCapture??null, dnC=st.downCapture??null;
-  const top3=H.slice(0,3).reduce((s,h)=>s+h.w,0);
+  const top3=H.slice(0,3).reduce((s,h)=>s+h.w,0); const ind=smallSample(st)?IND:'';
   return `
   ${analysisPanel({R,st,dm,H,cash,tot,upN,dnN,upC,dnC,top3})}
   <div class="panel" data-testid="risk-capture"><div class="phead"><div><h2>How you behave when the index moves</h2><div class="sub">${esc(st.label)} · EGX30 Capped had ${upN} up month${upN===1?'':'s'} and ${dnN} down month${dnN===1?'':'s'}</div></div></div>
     <div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr))">
-      ${kpi('In up months you captured', upC!=null?pct(upC,0,false):'—', 'of the index gain · above 100% is good')}
-      ${kpi('In down months you took', dnC!=null?`<span class="${dnC>1?'neg':'pos'}">${pct(dnC,0,false)}</span>`:'—', 'of the index loss · under 100% is better')}
-      ${kpi('Your portfolio beta', num(st.beta), 'monthly, vs EGX30 Capped · 1.0 = moves with the index')}
+      ${kpi('In up months you captured', upC!=null?pct(upC,0,false):'—', 'of the index gain · above 100% is good'+(upC!=null?ind:''))}
+      ${kpi('In down months you took', dnC!=null?`<span class="${dnC>1?'neg':'pos'}">${pct(dnC,0,false)}</span>`:'—', 'of the index loss · under 100% is better'+(dnC!=null?ind:''))}
+      ${kpi('Your portfolio beta', num(st.beta), 'monthly, vs EGX30 Capped · 1.0 = moves with the index'+(st.beta!=null?ind:''))}
       ${kpi('Cash today', pct(tot?Math.max(0,cash)/tot:0,1,false), `${egp(cash)} EGP · top three stocks are ${pct(top3,0,false)} of the portfolio`)}
     </div>
     <p class="note" style="margin-top:10px">${dnC!=null&&dnC>1?`You lose more than the index when it falls. The table below shows which months and which stocks did it.`:dnC!=null?`You lose less than the index when it falls.`:''}</p>
@@ -3115,7 +3213,7 @@ function analysisPanel(c){
   const sym=(h)=>esc(h.sym);
   const single = st.rows.length===1;
   // 1. where you stand (the selected period, same label as the period bar)
-  const stand=[`${single?`In ${M(st.rows[0].month)}${st.rows[0].live?' so far':''}`:`From ${M(st.rows[0].month)} to ${M(st.rows[st.rows.length-1].month)}`} the portfolio ${single?'returned':'has returned'} <b class="${sgn(st.twr)}">${pct(st.twr)}</b> against <b>${pct(st.benchTwr)}</b> for EGX30 Capped, so it is ${st.alpha>=0?'ahead of':'behind'} the index by <b>${pct(Math.abs(st.alpha),1,false)}</b>.`,
+  const stand=[`${single?`In ${M(st.rows[0].month)}${st.rows[0].live?' so far':''}`:`From ${M(st.rows[0].month)} to ${M(st.rows[st.rows.length-1].month)}`} the portfolio ${single?'returned':'has returned'} <b class="${sgn(st.twr)}">${pct(st.twr)}</b>${st.benchTwr!=null&&st.alpha!=null?` against <b>${pct(st.benchTwr)}</b> for EGX30 Capped, so it is ${st.alpha>=0?'ahead of':'behind'} the index by <b>${pct(Math.abs(st.alpha),1,false)}</b>`:'; the EGX30 Capped return is incomplete for this period, so there is no index comparison'}.`,
     upC!=null&&dnC!=null?`In the index's ${upN} up month${upN===1?'':'s'} you captured ${pct(upC,0,false)} of its gains; in its ${dnN} down month${dnN===1?'':'s'} you took ${pct(dnC,0,false)} of its losses. ${dnC>1&&upC<1?'You are paid less on the way up and charged more on the way down, and that gap is most of the shortfall.':dnC<=1&&upC>=1?'You gain more than the index when it rises and lose less when it falls: that is what beating it looks like.':dnC<=1?'You hold up better than the index when it falls; the shortfall comes from lagging it in up months.':'You keep up in rising months but lose more than the index when it falls.'}`
     : upC!=null?`The index only rose in this period (${upN} up month${upN===1?'':'s'}); you captured ${pct(upC,0,false)} of its gains.`
     : dnC!=null?`The index only fell in this period (${dnN} down month${dnN===1?'':'s'}); you took ${pct(dnC,0,false)} of its losses.`:'',
@@ -3131,11 +3229,13 @@ function analysisPanel(c){
   if(over.length) could.push(`<b>Bring each position to ${pct(G.max,0,false)} or less.</b> ${list(over,h=>`${sym(h)} is ${pct(h.w,1,false)} (about ${egp((h.w-G.max)*tot)} EGP over)`)}. Trimming them all raises about ${egp(excess)} EGP and would put cash at ${pct(cashAfter,0,false)}. Sell winners and losers alike; selling only winners to keep funding losers is how losers become the largest positions.`);
   else could.push(`<b>Position sizes are already under ${pct(G.max,0,false)} each.</b> Keep new buys there.`);
   could.push(cashPct<G.cash?`<b>Hold about ${pct(G.cash,0,false)} cash</b> (${egp(G.cash*tot)} EGP at today's size). It softens a fall by roughly a tenth and, more importantly, it is what you buy a dip with instead of selling something at the bottom.`:`<b>Cash is at ${pct(cashPct,0,false)}</b>, which already gives you a cushion and dry powder.`);
-  if(below.length) could.push(`<b>Make one decision on each stock well below its high.</b> ${list(below,h=>`${sym(h)} is ${pct(h.fromHigh,0)} from its high (${h.unreal<0?'−':'+'}${egp(Math.abs(h.unreal))} EGP unrealized)`)}. For each, ask: would I buy it today at this price with fresh money? If yes, keep it at ${pct(G.max,0,false)} or less and write the reason in its note under Settings. If no, sell. Not deciding is what turns a −10% stock into a −20% one.`);
+  if(below.length) could.push(`<b>Make one decision on each stock well below its high.</b> ${list(below,h=>`${sym(h)} is ${pct(h.fromHigh,0)} from its high (${h.unreal<0?'−':'+'}${egp(Math.abs(h.unreal))} EGP unrealized)`)}. For each, ask: would I buy it today at this price with fresh money? If yes, keep it at ${pct(G.max,0,false)} or less and write down your reason for holding it. If no, sell. Not deciding is what turns a −10% stock into a −20% one.`);
   if(hiB.length) could.push(`<b>Size the high-beta ${hiB.length>1?'names':'name'} smaller.</b> ${list(hiB,sym)} can stay, but as ${hiB.length>1?'the smaller positions':'a smaller position'} rather than ${hiB.length>1?'the largest':'one of the largest'}.`);
   could.push(`<b>Three habits for every future buy:</b> buy only with cash, never by selling something else the same day; no buy takes a stock above ${pct(G.max,0,false)}; write the price at which you would be wrong (the stop field on each asset) before you buy, and act the week it is hit.`);
   if(turnover!=null&&turnover>2) could.push(`<b>Trade less.</b> One decision day a week and a calendar rebalance (monthly or quarterly, back to your target sizes) removes most reactive trades.`);
-  could.push(`<b>Add ballast.</b> One or two low-beta dividend payers (telecom, food, utilities) or a slice in the Thndr savings fund so the whole book is not cyclicals and financials.`);
+  // ballast only when nothing defensive is already more than 5% of the portfolio
+  const DEF=new Set(['Food & Beverage','Healthcare & Pharma','Telecom','Utilities','Cash & Savings']);
+  if(!H.some(h=>DEF.has(h.sector)&&h.w>0.05)) could.push(`<b>Add ballast.</b> One or two low-beta dividend payers (telecom, food, utilities) or a slice in the Thndr savings fund so the whole book is not cyclicals and financials.`);
   could.push(`<b>Monthly, ten minutes, after the statement posts:</b> open this tab, read the first paragraph, check cash and the top three, and trim anything that drifted over ${pct(G.max,0,false)}.`);
   const expect = dnC!=null&&dnC>1 ? `Done this way, the down-month capture should drift toward 90–100% within a couple of down months, mostly from sizing. You give up a little in strong up months because ${pct(G.cash,0,false)} sits in cash and the winners are smaller; on your numbers the worst down month alone cost more against the index than a cash buffer costs in a year of average months.` : `The main thing to protect is the down-month record; keep sizes even and cash on hand and it should hold.`;
   return `<div class="panel brief" data-testid="analysis"><div class="phead"><div><h2>What the numbers say</h2><div class="sub" data-testid="analysis-period">${esc(st.label)} · a written review of the portfolio as it stands today · guideline figures used here: ${pct(G.cash,0,false)} cash, ${pct(G.max,0,false)} per stock, ${pct(G.top3,0,false)} for the top three, a decision at ${pct(G.high,0,false)} below a stock's high · these are suggestions, nothing is tracked or enforced</div></div></div>
@@ -3151,6 +3251,7 @@ function analysisPanel(c){
 document.addEventListener('click', async e=>{
   const sc=e.target.closest('[data-sec]'); if(sc){ e.preventDefault(); const el=document.getElementById('sec-'+sc.dataset.sec); if(el){ el.scrollIntoView({behavior:'smooth',block:'start'}); try{ history.replaceState(null,'','#'+sc.dataset.sec); }catch(x){} } return; }
   const go=e.target.closest('[data-go]'); if(go){ setTab(go.dataset.go); return; }
+  const ex=e.target.closest('.chip[title],.pill[title]'); if(ex && ex.title && !ex.closest('button,a')){ toast(ex.title); return; }
   const del=e.target.closest('[data-del]');
   if(del){ if(del.dataset.arm!=='1'){ del.dataset.arm='1'; del.textContent='Confirm delete'; setTimeout(()=>{ if(del.isConnected){ del.dataset.arm=''; del.textContent='Delete'; } },4000); return; }
     const id=del.dataset.del; for(const y of Object.keys(S.ledgerDocs)){ const rows=S.ledgerDocs[y].rows||[]; if(rows.some(r=>r.id===id)){ await save(()=>S.db.doc('ledger/y'+y).set({rows:rows.filter(r=>r.id!==id)}),'Transaction deleted'); break; } } return; }
@@ -3201,7 +3302,7 @@ document.addEventListener('change', e=>{ if(e.target.dataset.pick!=null&&S.stmt.
 document.addEventListener('submit', async e=>{
   e.preventDefault();
   if(e.target.id==='tx-form'){ let t; try{ t=normTx({d:$('#tx-d').value,t:$('#tx-t').value,a:$('#tx-a').value,q:$('#tx-q').value,p:$('#tx-p').value,amt:$('#tx-amt').value,acc:$('#tx-acc').value}); }catch(err){ toast(err.message,'error'); return; }
-    if(t.a && !S.assets[t.a] && (t.t==='Buy')) toast(`"${t.a}" is a new asset. Add its symbol under Inputs so it gets priced.`);
+    if(t.a && !S.assets[t.a] && (t.t==='Buy')) toast(`"${t.a}" is a new asset. Add its symbol under Settings → Inputs & settings so it gets priced.`);
     if(await addTx([t])){ toast(`${t.t} added`); e.target.reset(); } }
   if(e.target.id==='asset-form'){ const name=$('#na-name').value.trim(); if(!name) return; if(S.assets[name]){ toast('That asset already exists','error'); return; }
     const a={name}; const sym=$('#na-sym').value.trim().toUpperCase(); const sec=$('#na-sec').value.trim(); if(sym) a.symbol=sym; if(sec) a.sector=sec;
@@ -3212,7 +3313,9 @@ document.addEventListener('submit', async e=>{
     if(['openingValue','cash','riskFree','fxStart','volLow','volHigh','openThreshold','staleDays'].some(k=>!isFinite(s[k]))){ toast('Every number field needs a value','error'); return; }
     await save(()=>S.db.doc('portfolio/settings').set(s),'Settings saved'); }
 });
-function toCsv(rows){ return rows.map(r=>r.map(v=>{ const s=v==null?'':String(v); return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s; }).join(',')).join('\n'); }
+// A cell starting with = + - @ is read as a formula by Excel and Sheets: a leading ' keeps it text. Plain numbers ("-8905.12") stay numbers.
+function csvCell(v){ let s=v==null?'':String(v); if(/^[=+\-@]/.test(s) && !(typeof v==='number' || /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(s))) s="'"+s; return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s; }
+function toCsv(rows){ return rows.map(r=>r.map(csvCell).join(',')).join('\n'); }
 async function download(filename, data){ const dl=await window.claude?.use?.('downloads'); if(!dl){ toast('Downloads are not available in this view','error'); return; }
   try{ await dl.save({filename, data}); }catch(e){ if(e&&e.code!=='declined') toast('Download failed: '+(e.message||e.code),'error'); } }
 async function refreshNow(btn){ if(window.pdRefreshPrices) return window.pdRefreshPrices(btn, toast); const mcp=await window.claude?.use?.('mcp'); if(!mcp){ toast('Refreshing from the page is not available here. Prices update automatically after each session.','error'); return; }
@@ -3239,5 +3342,5 @@ async function refreshNow(btn){ if(window.pdRefreshPrices) return window.pdRefre
 })();
 })();
 </script>
-<div id="pd-bar" data-testid="live-bar"><span><strong id="pd-who"></strong> · <span id="pd-updated">Loading…</span></span><span>Prices live from TradingView · edits and statement imports happen on the Claude page</span><span class="pd-actions"><button type="button" id="pd-switch" hidden onclick="pdSwitch()" data-testid="live-switch-bar">Switch portfolio</button><button type="button" onclick="pdLock()" data-testid="live-lock">Lock</button></span></div>
+<div id="pd-bar" data-testid="live-bar"><span><strong id="pd-who"></strong> · <span id="pd-updated">Loading…</span></span><span><span id="pd-prices" data-testid="live-prices-status">Prices from the last daily update</span> · edits and statement imports happen on the Claude page</span><span class="pd-actions"><button type="button" id="pd-switch" hidden onclick="pdSwitch()" data-testid="live-switch-bar">Switch portfolio</button><button type="button" onclick="pdLock()" data-testid="live-lock">Lock</button></span></div>
 </body></html>

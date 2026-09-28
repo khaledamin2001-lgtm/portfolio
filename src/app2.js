@@ -19,8 +19,9 @@ document.addEventListener('click', e=>{
   const menu = $('#pf-menu'); if(!menu) return;
   if(e.target.closest('#pf-name')){ renderSwitch(); menu.hidden = !menu.hidden; $('#pf-name').setAttribute('aria-expanded', String(!menu.hidden)); return; }
   const b = e.target.closest('#pf-menu [data-pid]'); if(b){ menu.hidden = true; if(window.pdSelect) window.pdSelect(b.dataset.pid); return; }
-  if(!e.target.closest('#pf-menu')) menu.hidden = true;
+  if(!e.target.closest('#pf-menu')){ menu.hidden = true; $('#pf-name').setAttribute('aria-expanded','false'); }
 });
+document.addEventListener('keydown', e=>{ if(e.key!=='Escape') return; const menu=$('#pf-menu'); if(!menu || menu.hidden) return; menu.hidden=true; const b=$('#pf-name'); if(b){ b.setAttribute('aria-expanded','false'); b.focus(); } });
 let pbMemo = { h: null, pb: null };
 function pbook(){ if(pbMemo.h !== S.history){ pbMemo = { h: S.history, pb: PA.priceBook(S.history) }; } return pbMemo.pb; }
 const AN = { key: null, v: {} };
@@ -45,7 +46,7 @@ function dailySection(){
   const rows = ds.rows; const labels = rows.map(r=>dshort(r.d));
   const off = D.recon.filter(r=>Math.abs(r.pct)>0.01);
   return `
-  <div class="panel"><div class="phead"><div><h2>Daily growth vs EGX30 Capped</h2><div class="sub">Valued every EGX session from the ledger and closing prices · ${ds.n} sessions</div></div>
+  <div class="panel"><div class="phead"><div><h2>Daily growth vs ${BENCH}</h2><div class="sub">Valued every EGX session from the ledger and closing prices · ${ds.n} sessions</div></div>
     <div class="legend"><span><i style="background:var(--s1)"></i>Portfolio ${pct(ds.twr)}</span><span><i style="background:var(--s2)"></i>EGX30 Capped ${pct(ds.bench)}</span></div></div>
     ${chartSlot('ch-daily',{kind:'line',title:'Daily cumulative return',labels,series:[{name:'Portfolio',color:C.s1(),values:rows.map(r=>r.cum)},{name:'EGX30 Capped',color:C.s2(),values:rows.map(r=>r.bcum)}],yFmt:pctAxis,minZero:false,tipLabel:i=>dfmt(rows[i].d),tipExtra:i=>`<div>Value <b>${egp(rows[i].value)} EGP</b></div>`},270)}
     ${chartSlot('ch-uw',{kind:'line',title:'Underwater chart',labels,series:[{name:'Drawdown',color:C.neg(),values:rows.map(r=>r.dd),area:true}],yFmt:pctAxis,tipLabel:i=>dfmt(rows[i].d)},150)}
@@ -57,7 +58,7 @@ function dailySection(){
     <div class="tbl"><table data-testid="recon-table"><thead><tr><th>Month</th><th>Last session</th><th class="n">From prices</th><th class="n">Your mark</th><th class="n">Difference</th><th class="n">%</th></tr></thead><tbody>
     ${D.recon.map(r=>`<tr><td>${M(r.month)}</td><td>${dfmt(r.day)}</td><td class="n">${egp(r.model)}</td><td class="n">${egp(r.marks)}</td><td class="n ${Math.abs(r.pct)>0.01?'neg':''}">${egp(r.diff)}</td><td class="n">${Math.abs(r.pct)>0.01?`<span class="pill stale">${pct(r.pct,2)}</span>`:pct(r.pct,2)}</td></tr>`).join('')}
     </tbody></table></div>
-    <p class="note" style="margin:10px 0 0">Large gaps usually mean the month-end mark was typed as a round number. The Statements tab can replace it with the exact figure from the Thndr positions snapshot.</p></div>`;
+    <p class="note" style="margin:10px 0 0">Large gaps usually mean the month-end mark was typed as a round number. Posting the Thndr statement (Settings → Statements &amp; imports) replaces it with the exact figure from the positions snapshot.</p></div>`;
 }
 
 // ---------- Attribution ----------
@@ -65,20 +66,23 @@ function vAttribution(){
   const A = attrA(), AW = activeA();
   if(!S.bench) return `<div class="panel empty"><h2>Index data not loaded yet</h2></div>`;
   if(!A) return `<div class="panel empty"><h2>No attribution for this selection</h2><p>Attribution needs month-end closes for the months in the period.</p></div>`;
-  const effects=[{label:'Sector allocation',v:A.alloc},{label:'Stock selection',v:A.sel},{label:'Trading during the month',v:A.trading},{label:'Index model gap',v:A.replication},{label:'Active return',v:A.active,bold:true}];
-  const labels=A.months.map(m=>M(m.month));
+  // engine note on what the Trading residual holds (dividends, rebates and fees as well as intra-month trades); older engines have none
+  const tNote = A.tradingNote || (typeof PA.TRADING_NOTE==='string' ? PA.TRADING_NOTE : null);
+  const effects=[{label:'Sector allocation',v:A.alloc},{label:'Stock selection',v:A.sel},{label:tNote?'Trading and other':'Trading during the month',v:A.trading},{label:'Index model gap',v:A.replication},{label:'Active return',v:A.active,bold:true}];
+  const labels=A.months.map(m=>Ms(m.month));
   const rms=A.trackingCheck;
   return `
   <div class="kpis">
     ${kpi('Active return', `<span class="${sgn(A.active)}">${pct(A.active)}</span>`, `Portfolio ${pct(A.R)} vs EGX30 Capped ${pct(A.B)}`,'hero')}
     ${kpi('Sector allocation', `<span class="${sgn(A.alloc)}">${pct(A.alloc,2)}</span>`, 'being in the right sectors')}
     ${kpi('Stock selection', `<span class="${sgn(A.sel)}">${pct(A.sel,2)}</span>`, 'picking better stocks within sectors')}
-    ${kpi('Trading during the month', `<span class="${sgn(A.trading)}">${pct(A.trading,2)}</span>`, 'buys and sells after month start')}
+    ${kpi(tNote?'Trading and other':'Trading during the month', `<span class="${sgn(A.trading)}">${pct(A.trading,2)}</span>`, tNote?esc(tNote.replace(/^Trading and other:\s*/,'')):'buys and sells after month start')}
     ${kpi('Index model gap', `<span class="${sgn(A.replication)}">${pct(A.replication,2)}</span>`, `model vs real index · ${pct(rms,2,false)}/mo RMS`)}
   </div>
   <div class="grid g2">
     <div class="panel"><div class="phead"><div><h2>Where the active return came from</h2><div class="sub">${esc(S.R.stats.label)} · Brinson-Fachler, linked across months</div></div></div>
       ${hbars(effects, v=>pct(v,2))}
+      ${tNote?`<p class="note" style="margin:10px 0 0" data-testid="attribution-trading-note">${esc(tNote)}.</p>`:''}
       <p class="note" style="margin:12px 0 0">The four effects add up exactly to the active return. Allocation and selection assume you held the prior month-end positions all month; everything your trades changed inside the month lands in trading.</p></div>
     <div class="panel"><div class="phead"><div><h2>Sector bets today</h2><div class="sub">Your weight minus EGX30 Capped weight · ${AW?dfmt(AW.date):''}</div></div></div>
       ${AW?hbars(AW.rows.filter(r=>Math.abs(r.active)>0.001).map(r=>({label:r.sector,v:r.active})), v=>(v>=0?'+':'−')+(Math.abs(v)*100).toFixed(1)+' pp'):'<p class="muted">—</p>'}</div>
@@ -123,7 +127,7 @@ function vIncome(){
   </div>
   <div class="panel"><div class="phead"><div><h2>Income by month</h2><div class="sub">Cash credited to the account</div></div>
     <div class="legend"><span><i class="sq" style="background:var(--s1)"></i>Dividends</span><span><i class="sq" style="background:var(--s2)"></i>Rebates</span></div></div>
-    ${chartSlot('ch-income',{kind:'bar',title:'Monthly income',labels:months.map(x=>M(x.m)),series:[{name:'Dividends',color:C.s1(),values:months.map(x=>x.div)},{name:'Rebates',color:C.s2(),values:months.map(x=>x.reb)}],yFmt:egpAxis,tipExtra:i=>`<div>Fees <b>${egp(months[i].fee)} EGP</b></div>`},230)}</div>
+    ${chartSlot('ch-income',{kind:'bar',title:'Monthly income',labels:months.map(x=>Ms(x.m)),series:[{name:'Dividends',color:C.s1(),values:months.map(x=>x.div)},{name:'Rebates',color:C.s2(),values:months.map(x=>x.reb)}],yFmt:egpAxis,tipExtra:i=>`<div>Fees <b>${egp(months[i].fee)} EGP</b></div>`},230)}</div>
   <div class="grid g2">
     <div class="panel"><div class="phead"><div><h2>Dividends by stock</h2><div class="sub">Every dividend received, including stocks you have sold</div></div></div>
       <div class="tbl"><table data-testid="dividends-table"><thead><tr><th>Stock</th><th class="n">Payments</th><th class="n">Total</th><th class="n">Last 12 months</th><th>Last paid</th></tr></thead><tbody>
@@ -171,10 +175,11 @@ function factsheetData(m){
   const Ay = PA.attribution(R.months, {from:(y+'-01')>S.settings.inception?y+'-01':S.settings.inception,to:m}, R.ledger, S.assets, pb, S.bench, S.R.today);
   const inc = (from,to)=>{ const s={div:0,reb:0,fee:0}; R.ledger.forEach(t=>{ if(t.d>=from&&t.d<=to){ if(t.t==='Dividend')s.div+=t.amt; if(t.t==='Rebate')s.reb+=t.amt; if(t.t==='Fee')s.fee+=t.amt; } }); return s; };
   const row = R.months.find(r=>r.month===m);
-  return { m, R, st:R.stats, row, live, tr, cal, top, sectors, A1, Ay, value: row?row.value:tot, incM: inc(m+'-01',PE.eom(m)), incY: inc(y+'-01',PE.eom(m)) };
+  let ddDaily = null; try{ const ds = PA.dailyStats(dailyA(), R.range); ddDaily = ds ? ds.maxDD : null; }catch(e){ console.error(e); }
+  return { m, R, st:R.stats, row, live, tr, cal, top, sectors, A1, Ay, ddDaily, value: row?row.value:tot, incM: inc(m+'-01',PE.eom(m)), incY: inc(y+'-01',PE.eom(m)) };
 }
 function factsheetHTML(F){
-  const ink='#0F1A17', ink2='#46534E', ink3='#6F7D78', rule='#DAE2DE', acc='#0B6E5F', pos='#137a3a', neg='#c02f2f', bg2='#EDF2EF';
+  const ink='#0F1A17', ink2='#46534E', ink3='#5F6C67', rule='#DAE2DE', acc='#0B6E5F', pos='#137a3a', neg='#c02f2f', bg2='#EDF2EF';
   const col=(x)=>x==null?ink3:x>0?pos:x<0?neg:ink; const P=(x,dp=1)=>`<span style="color:${col(x)}">${pct(x,dp)}</span>`;
   const th=(t,al='right')=>`<th style="text-align:${al};font:600 10px Arial,sans-serif;letter-spacing:.06em;text-transform:uppercase;color:${ink3};padding:6px 8px;border-bottom:1px solid ${rule}">${t}</th>`;
   const td=(t,al='right',extra='')=>`<td style="text-align:${al};padding:6px 8px;border-bottom:1px solid ${bg2};font:13px Arial,sans-serif;color:${ink};${extra}">${t}</td>`;
@@ -182,29 +187,31 @@ function factsheetHTML(F){
   const st=F.st, set=S.settings;
   const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   const fact=(l,v,sub)=>`<td style="padding:10px 12px;border:1px solid ${rule};vertical-align:top;width:16.6%"><div style="font:600 10px Arial;letter-spacing:.06em;text-transform:uppercase;color:${ink3}">${l}</div><div style="font:600 19px Georgia,serif;color:${ink};margin-top:4px">${v}</div>${sub?`<div style="font:11px Arial;color:${ink2};margin-top:2px">${sub}</div>`:''}</td>`;
+  const small = smallSample(st), ind = small ? ` <span style="font:600 9px Arial;letter-spacing:.04em;text-transform:uppercase;color:${ink3}">indicative</span>` : '';
+  const incM = +String(set.inception||'').slice(5,7), incY = String(set.inception||'').slice(0,4);   // a first calendar year that starts after January is partial
   const eff = (A)=> A ? `${P(A.active,2)} = allocation ${P(A.alloc,2)} + selection ${P(A.sel,2)} + trading ${P(A.trading,2)} + model gap ${P(A.replication,2)}` : '—';
   return `<div style="max-width:760px;margin:0 auto;background:#fff;color:${ink};font:13px Arial,sans-serif;padding:28px 30px;border:1px solid ${rule}">
   <table role="presentation" width="100%" style="border-collapse:collapse"><tr><td style="border-bottom:3px solid ${acc};padding-bottom:10px">
     <div style="font:600 11px Arial;letter-spacing:.1em;text-transform:uppercase;color:${acc}">Monthly factsheet · ${M(F.m)}${F.live?' (month to date)':''}</div>
     <div style="font:600 24px Georgia,serif;color:${ink};margin-top:4px">${esc(set.name)}</div>
-    <div style="font:12px Arial;color:${ink2};margin-top:2px">Egyptian equities via Thndr · Benchmark EGX30 Capped · Reporting currency EGP · Inception ${M(set.inception)}</div></td></tr></table>
+    <div style="font:12px Arial;color:${ink2};margin-top:2px">Egyptian equities via Thndr · Benchmark ${BENCH} · Reporting currency EGP · Inception ${M(set.inception)}</div></td></tr></table>
   <table role="presentation" width="100%" style="border-collapse:collapse;margin-top:16px"><tr>
     ${fact('Portfolio value', egp(F.value), 'EGP, month-end')}
     ${fact('Month return', P(F.row&&F.row.ret), `Index ${pct(F.row&&F.row.bench)}`)}
     ${fact('Year to date', P(F.tr[3].p), `Index ${pct(F.tr[3].b)}`)}
     ${fact('Since inception', P(st.twr), st.annualized!=null?`${pct(st.annualized)} a year`:`Index ${pct(st.benchTwr)}`)}
-    ${fact('Max drawdown', P(st.maxDD), 'month-end basis')}
-    ${fact('Sharpe ratio', num(st.sharpe), `vol ${pct(st.vol*Math.sqrt(12),1,false)} a year`)}
+    ${fact('Max drawdown', P(st.maxDD), `month-end${F.ddDaily!=null?` · ${pct(F.ddDaily)} daily`:''}`)}
+    ${fact('Sharpe ratio', num(st.sharpe)+(st.sharpe!=null?ind:''), `annualized · vol ${pct(st.vol*Math.sqrt(12),1,false)} a year`)}
   </tr></table>
   ${h2('Performance')}
   <table role="presentation" width="100%" style="border-collapse:collapse"><tr>${th('','left')}${F.tr.map(t=>th(t.label)).join('')}</tr>
     <tr>${td('Portfolio','left','font-weight:600')}${F.tr.map(t=>td(t.p!=null?P(t.p):'—')).join('')}</tr>
-    <tr>${td('EGX30 Capped','left')}${F.tr.map(t=>td(t.b!=null?pct(t.b):'—')).join('')}</tr>
+    <tr>${td(BENCH,'left')}${F.tr.map(t=>td(t.b!=null?pct(t.b):'—')).join('')}</tr>
     <tr>${td('Difference','left')}${F.tr.map(t=>td(t.a!=null?P(t.a):'—')).join('')}</tr></table>
-  <div style="font:11px Arial;color:${ink3};margin-top:4px">Time-weighted: Modified Dietz monthly returns (deposits weighted by the days they were invested), chain-linked, net of commissions. Periods under one year are not annualized.</div>
+  <div style="font:11px Arial;color:${ink3};margin-top:4px">Time-weighted: Modified Dietz monthly returns (deposits weighted by the days they were invested), chain-linked, net of commissions. Periods under one year are not annualized. The benchmark is a price index: it excludes dividends, the portfolio's return includes them.</div>
   ${h2('Monthly returns')}
   <table role="presentation" width="100%" style="border-collapse:collapse;font-size:12px"><tr>${th('Year','left')}${MON.map(x=>th(x)).join('')}${th('Year')}${th('Index')}</tr>
-    ${F.cal.map(Y=>`<tr>${td(Y.year,'left','font-weight:600')}${Y.m.map(v=>td(v==null?'':P(v),'right','font-size:12px;padding:6px 4px')).join('')}${td(P(Y.ytd),'right','font-weight:600')}${td(Y.bytd!=null?pct(Y.bytd):'—')}</tr>`).join('')}</table>
+    ${F.cal.map(Y=>`<tr>${td(`${Y.year}${String(Y.year)===incY&&incM>1?`<div style="font:400 10px Arial;color:${ink3}">(from ${MON3[incM-1]})</div>`:''}`,'left','font-weight:600')}${Y.m.map(v=>td(v==null?'':P(v),'right','font-size:12px;padding:6px 4px')).join('')}${td(P(Y.ytd),'right','font-weight:600')}${td(Y.bytd!=null?pct(Y.bytd):'—')}</tr>`).join('')}</table>
   <table role="presentation" width="100%" style="border-collapse:collapse;margin-top:6px"><tr><td style="vertical-align:top;width:52%;padding-right:14px">
     ${h2('Top holdings')}
     <table role="presentation" width="100%" style="border-collapse:collapse">${`<tr>${th('Holding','left')}${th('Sector','left')}${th('Weight')}</tr>`}
@@ -219,7 +226,8 @@ function factsheetHTML(F){
   <table role="presentation" width="100%" style="border-collapse:collapse;margin-top:6px"><tr><td style="vertical-align:top;width:52%;padding-right:14px">
     ${h2('Risk')}
     <table role="presentation" width="100%" style="border-collapse:collapse">
-    ${[['Volatility (annualized)',pct(st.vol*Math.sqrt(12),1,false)],['Beta vs EGX30 Capped',num(st.beta)],['Tracking error',st.trackingError!=null?pct(st.trackingError,1,false):'—'],['Sortino ratio',num(st.sortino)],['Upside / downside capture',st.upCapture!=null&&st.downCapture!=null?`${pct(st.upCapture,0,false)} / ${pct(st.downCapture,0,false)}`:'—'],['Money-weighted return (XIRR)',pct(st.xirr)],['Return in USD',st.usdTwr!=null?pct(st.usdTwr):'—'],['Positive months',`${st.posMonths} of ${st.n}`]].map(([a,b])=>`<tr>${td(a,'left',`color:${ink2}`)}${td(b)}</tr>`).join('')}</table>
+    ${[['Volatility','annualized',pct(st.vol*Math.sqrt(12),1,false)],['Beta vs EGX30 Capped','monthly returns',st.beta!=null?num(st.beta)+ind:'—'],['Tracking error','annualized',st.trackingError!=null?pct(st.trackingError,1,false)+ind:'—'],['Sortino ratio','annualized',st.sortino!=null?num(st.sortino)+ind:'—'],['Upside / downside capture','cumulative',st.upCapture!=null&&st.downCapture!=null?`${pct(st.upCapture,0,false)} / ${pct(st.downCapture,0,false)}${ind}`:'—'],['Money-weighted return (XIRR)','annualized',pct(st.xirr)],['Return in USD','cumulative',st.usdTwr!=null?pct(st.usdTwr):'—'],['Positive months','since inception',`${st.posMonths} of ${st.n}`]].map(([a,basis,b])=>`<tr>${td(`${a} <span style="color:${ink3};font-size:11px">· ${basis}</span>`,'left',`color:${ink2}`)}${td(b)}</tr>`).join('')}</table>
+    <div style="font:11px Arial;color:${ink3};margin-top:4px" data-testid="factsheet-riskfree">Risk-free rate used: ${pct(set.riskFree,2,false)} a year (3-month T-bill). Cumulative figures run from ${M(set.inception)} to ${M(F.m)}.</div>
   </td><td style="vertical-align:top;padding-left:14px">
     ${h2('Income · EGP')}
     <table role="presentation" width="100%" style="border-collapse:collapse"><tr>${th('','left')}${th(M(F.m))}${th('YTD')}</tr>
@@ -250,13 +258,13 @@ function vFactsheet(){
     <div class="row"><label class="ink2" style="font-size:12px">Month <select id="fs-month" data-testid="factsheet-month">${months.map(m=>`<option value="${m}" ${m===S.fsMonth?'selected':''}>${M(m)}${S.R.months.find(r=>r.month===m).live?' (live)':''}</option>`).join('')}</select></label>
     <button class="btn" id="fs-dl" data-testid="factsheet-download">Download HTML</button>
     ${window.pdDownloadExport?`<button class="btn" id="fs-xlsx" data-testid="factsheet-excel" data-month="${S.fsMonth}">Download Excel</button>`:''}
-    <button class="btn primary" id="fs-email" data-testid="factsheet-email" ${email?'':'disabled'} title="${email?'Send to '+esc(email):'Set an email address under Inputs → Settings'}">Email to me</button></div></div>
-    <p class="note" style="margin:0 0 14px" data-testid="factsheet-note">${S.readOnly?`${S.sync&&email?`Emailed to <span class="mono">${esc(email)}</span> automatically after each monthly statement is posted. `:''}Download it here any time.`:email?`Sends from your Gmail to <span class="mono">${esc(email)}</span>. Posting a monthly statement offers to send it automatically.`:'Add an email address under Inputs → Settings to send factsheets.'}</p>
+    <button class="btn primary" id="fs-email" data-testid="factsheet-email" ${email?'':'disabled'} title="${email?'Send to '+esc(email):'Set an email address under Settings → Inputs &amp; settings'}">Email to me</button></div></div>
+    <p class="note" style="margin:0 0 14px" data-testid="factsheet-note">${S.readOnly?`${S.sync&&email?`Emailed to <span class="mono">${esc(email)}</span> automatically after each monthly statement is posted. `:''}Download it here any time.`:email?`Sends from your Gmail to <span class="mono">${esc(email)}</span>. Posting a monthly statement offers to send it automatically.`:'Add an email address under Settings → Inputs &amp; settings to send factsheets.'}</p>
     <div style="overflow-x:auto;background:var(--surface-2);border-radius:10px;padding:14px 8px" data-testid="factsheet-preview">${factsheetHTML(F)}</div></div>`;
 }
 async function emailFactsheet(m, quiet){
   const mcp = await window.claude?.use?.('mcp'); const to = S.settings.factsheetEmail;
-  if(!mcp || !to){ if(!quiet) toast('Email is not available here. Set an address under Inputs and allow Gmail when asked.','error'); return false; }
+  if(!mcp || !to){ if(!quiet) toast('Email is not available here. Set an address under Settings → Inputs & settings and allow Gmail when asked.','error'); return false; }
   const F = factsheetData(m);
   const html = `<!doctype html><html><body style="margin:0;padding:16px;background:#EDF2EF">${factsheetHTML(F)}</body></html>`;
   const text = `${S.settings.name} — ${M(m)}\nValue ${egp(F.value)} EGP\nMonth ${pct(F.row&&F.row.ret)} vs EGX30 Capped ${pct(F.row&&F.row.bench)}\nYTD ${pct(F.tr[3].p)} · Since inception ${pct(F.st.twr)}`;
@@ -326,12 +334,12 @@ function vStatements(){
 function heldEmails(){ const seen=(S.sync&&S.sync.seen)||{}; return Object.keys(seen).filter(id=>seen[id]&&seen[id].status==='hold').map(id=>({id, ...seen[id]})).sort((a,b)=>String(b.date||b.at||'').localeCompare(String(a.date||a.at||''))); }
 function toolShaLine(sy){ const t=sy&&sy.toolSha; if(!t) return '';
   const parts = typeof t==='string' ? [String(t).slice(0,8)] : ['sync','statement','engine','engine2'].filter(k=>t[k]).map(k=>`${k}.js ${esc(String(t[k]).slice(0,8))}`).concat(Object.keys(t).filter(k=>!['sync','statement','engine','engine2','at'].includes(k)&&typeof t[k]==='string'&&/^[0-9a-f]{6,}$/i.test(t[k])).map(k=>`${esc(k)} ${esc(t[k].slice(0,8))}`));
-  return parts.length?`<div class="note" style="margin-top:6px" data-testid="sync-tool-sha">Sync tools: ${parts.join(' · ')}${t.at?` · as of ${esc(String(t.at).slice(0,16).replace('T',' '))} UTC`:''}</div>`:''; }
+  return parts.length?`<div class="note" style="margin-top:6px" data-testid="sync-tool-sha">Sync tools: ${parts.join(' · ')}${t.at?` · as of ${esc(cairoAt(t.at))}`:''}</div>`:''; }
 function syncHistory(){
   const imp=S.imports||{}, sy=S.sync||null; const months=Object.keys(imp).sort().reverse();
   const seen=Object.values((sy&&sy.seen)||{}).sort((a,b)=>(b.date||'').localeCompare(a.date||'')).slice(0,8);
   const held=heldEmails();
-  const when=(iso)=>iso?new Date(iso).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit',hour12:true,timeZone:'Africa/Cairo'})+' Cairo':'—';
+  const when=(iso)=>iso?cairoAt(iso):'—';
   const stLabel={applied:['win','Applied'],unchanged:['auto','Already in ledger'],hold:['loss','Needs review'],skip:['man','Skipped'],ignored:['man','Ignored']};
   return `<div class="panel" data-testid="sync-history"><div class="phead"><div><h2>${sy?'Automatic import history':'Import history'}</h2><div class="sub">${sy?`Last inbox check ${when(sy.lastRun)} · runs daily at 6:17 PM and 10:17 PM Cairo`:'Statements posted by hand from this page; no inbox job runs for this portfolio'}</div>${sy?toolShaLine(sy):''}</div></div>
     <div class="grid g2"><div><h3 class="eyebrow" style="margin:0 0 8px">Months posted from monthly statements</h3>
@@ -436,7 +444,7 @@ function holdingRisk(){
     const sym=r.symbol; const b=sym&&pb.has(sym)?betaOf(pb,sym):null;
     let high=null; if(sym&&pb.has(sym)) for(const d of pb.days){ if(d<r.firstBuy) continue; const p=pb.at(sym,d); if(p!=null&&(high==null||p>high)) high=p; }
     if(r.price!=null&&(high==null||r.price>high)) high=r.price;
-    return {sym:sym||r.name, name:r.name, w:r.mv/tot, mv:r.mv, beta:b?b.beta:null, vol:b?b.vol:null, unreal:r.unreal, unrealPct:r.openCost?r.unreal/r.openCost:null, price:r.price, high, fromHigh:high&&r.price!=null?r.price/high-1:null};
+    return {sym:sym||r.name, name:r.name, sector:r.sector, w:r.mv/tot, mv:r.mv, beta:b?b.beta:null, vol:b?b.vol:null, unreal:r.unreal, unrealPct:r.openCost?r.unreal/r.openCost:null, price:r.price, high, fromHigh:high&&r.price!=null?r.price/high-1:null};
   }).sort((a,b)=>b.w-a.w);
 }
 // Down months of the SELECTED period (S.R.stats.rows), so the Analysis tab agrees with Performance for any period.
@@ -459,14 +467,14 @@ function vAnalysis(){
   if(!st.n) return `<div class="panel empty"><h2>No data for this selection</h2></div>`;
   // capture ratios, up/down month counts and beta come from the period stats: the same figures Performance shows
   const upN=st.upMonths||0, dnN=st.downMonths||0, upC=st.upCapture??null, dnC=st.downCapture??null;
-  const top3=H.slice(0,3).reduce((s,h)=>s+h.w,0);
+  const top3=H.slice(0,3).reduce((s,h)=>s+h.w,0); const ind=smallSample(st)?IND:'';
   return `
   ${analysisPanel({R,st,dm,H,cash,tot,upN,dnN,upC,dnC,top3})}
   <div class="panel" data-testid="risk-capture"><div class="phead"><div><h2>How you behave when the index moves</h2><div class="sub">${esc(st.label)} · EGX30 Capped had ${upN} up month${upN===1?'':'s'} and ${dnN} down month${dnN===1?'':'s'}</div></div></div>
     <div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr))">
-      ${kpi('In up months you captured', upC!=null?pct(upC,0,false):'—', 'of the index gain · above 100% is good')}
-      ${kpi('In down months you took', dnC!=null?`<span class="${dnC>1?'neg':'pos'}">${pct(dnC,0,false)}</span>`:'—', 'of the index loss · under 100% is better')}
-      ${kpi('Your portfolio beta', num(st.beta), 'monthly, vs EGX30 Capped · 1.0 = moves with the index')}
+      ${kpi('In up months you captured', upC!=null?pct(upC,0,false):'—', 'of the index gain · above 100% is good'+(upC!=null?ind:''))}
+      ${kpi('In down months you took', dnC!=null?`<span class="${dnC>1?'neg':'pos'}">${pct(dnC,0,false)}</span>`:'—', 'of the index loss · under 100% is better'+(dnC!=null?ind:''))}
+      ${kpi('Your portfolio beta', num(st.beta), 'monthly, vs EGX30 Capped · 1.0 = moves with the index'+(st.beta!=null?ind:''))}
       ${kpi('Cash today', pct(tot?Math.max(0,cash)/tot:0,1,false), `${egp(cash)} EGP · top three stocks are ${pct(top3,0,false)} of the portfolio`)}
     </div>
     <p class="note" style="margin-top:10px">${dnC!=null&&dnC>1?`You lose more than the index when it falls. The table below shows which months and which stocks did it.`:dnC!=null?`You lose less than the index when it falls.`:''}</p>
@@ -495,7 +503,7 @@ function analysisPanel(c){
   const sym=(h)=>esc(h.sym);
   const single = st.rows.length===1;
   // 1. where you stand (the selected period, same label as the period bar)
-  const stand=[`${single?`In ${M(st.rows[0].month)}${st.rows[0].live?' so far':''}`:`From ${M(st.rows[0].month)} to ${M(st.rows[st.rows.length-1].month)}`} the portfolio ${single?'returned':'has returned'} <b class="${sgn(st.twr)}">${pct(st.twr)}</b> against <b>${pct(st.benchTwr)}</b> for EGX30 Capped, so it is ${st.alpha>=0?'ahead of':'behind'} the index by <b>${pct(Math.abs(st.alpha),1,false)}</b>.`,
+  const stand=[`${single?`In ${M(st.rows[0].month)}${st.rows[0].live?' so far':''}`:`From ${M(st.rows[0].month)} to ${M(st.rows[st.rows.length-1].month)}`} the portfolio ${single?'returned':'has returned'} <b class="${sgn(st.twr)}">${pct(st.twr)}</b>${st.benchTwr!=null&&st.alpha!=null?` against <b>${pct(st.benchTwr)}</b> for EGX30 Capped, so it is ${st.alpha>=0?'ahead of':'behind'} the index by <b>${pct(Math.abs(st.alpha),1,false)}</b>`:'; the EGX30 Capped return is incomplete for this period, so there is no index comparison'}.`,
     upC!=null&&dnC!=null?`In the index's ${upN} up month${upN===1?'':'s'} you captured ${pct(upC,0,false)} of its gains; in its ${dnN} down month${dnN===1?'':'s'} you took ${pct(dnC,0,false)} of its losses. ${dnC>1&&upC<1?'You are paid less on the way up and charged more on the way down, and that gap is most of the shortfall.':dnC<=1&&upC>=1?'You gain more than the index when it rises and lose less when it falls: that is what beating it looks like.':dnC<=1?'You hold up better than the index when it falls; the shortfall comes from lagging it in up months.':'You keep up in rising months but lose more than the index when it falls.'}`
     : upC!=null?`The index only rose in this period (${upN} up month${upN===1?'':'s'}); you captured ${pct(upC,0,false)} of its gains.`
     : dnC!=null?`The index only fell in this period (${dnN} down month${dnN===1?'':'s'}); you took ${pct(dnC,0,false)} of its losses.`:'',
@@ -511,11 +519,13 @@ function analysisPanel(c){
   if(over.length) could.push(`<b>Bring each position to ${pct(G.max,0,false)} or less.</b> ${list(over,h=>`${sym(h)} is ${pct(h.w,1,false)} (about ${egp((h.w-G.max)*tot)} EGP over)`)}. Trimming them all raises about ${egp(excess)} EGP and would put cash at ${pct(cashAfter,0,false)}. Sell winners and losers alike; selling only winners to keep funding losers is how losers become the largest positions.`);
   else could.push(`<b>Position sizes are already under ${pct(G.max,0,false)} each.</b> Keep new buys there.`);
   could.push(cashPct<G.cash?`<b>Hold about ${pct(G.cash,0,false)} cash</b> (${egp(G.cash*tot)} EGP at today's size). It softens a fall by roughly a tenth and, more importantly, it is what you buy a dip with instead of selling something at the bottom.`:`<b>Cash is at ${pct(cashPct,0,false)}</b>, which already gives you a cushion and dry powder.`);
-  if(below.length) could.push(`<b>Make one decision on each stock well below its high.</b> ${list(below,h=>`${sym(h)} is ${pct(h.fromHigh,0)} from its high (${h.unreal<0?'−':'+'}${egp(Math.abs(h.unreal))} EGP unrealized)`)}. For each, ask: would I buy it today at this price with fresh money? If yes, keep it at ${pct(G.max,0,false)} or less and write the reason in its note under Settings. If no, sell. Not deciding is what turns a −10% stock into a −20% one.`);
+  if(below.length) could.push(`<b>Make one decision on each stock well below its high.</b> ${list(below,h=>`${sym(h)} is ${pct(h.fromHigh,0)} from its high (${h.unreal<0?'−':'+'}${egp(Math.abs(h.unreal))} EGP unrealized)`)}. For each, ask: would I buy it today at this price with fresh money? If yes, keep it at ${pct(G.max,0,false)} or less and write down your reason for holding it. If no, sell. Not deciding is what turns a −10% stock into a −20% one.`);
   if(hiB.length) could.push(`<b>Size the high-beta ${hiB.length>1?'names':'name'} smaller.</b> ${list(hiB,sym)} can stay, but as ${hiB.length>1?'the smaller positions':'a smaller position'} rather than ${hiB.length>1?'the largest':'one of the largest'}.`);
   could.push(`<b>Three habits for every future buy:</b> buy only with cash, never by selling something else the same day; no buy takes a stock above ${pct(G.max,0,false)}; write the price at which you would be wrong (the stop field on each asset) before you buy, and act the week it is hit.`);
   if(turnover!=null&&turnover>2) could.push(`<b>Trade less.</b> One decision day a week and a calendar rebalance (monthly or quarterly, back to your target sizes) removes most reactive trades.`);
-  could.push(`<b>Add ballast.</b> One or two low-beta dividend payers (telecom, food, utilities) or a slice in the Thndr savings fund so the whole book is not cyclicals and financials.`);
+  // ballast only when nothing defensive is already more than 5% of the portfolio
+  const DEF=new Set(['Food & Beverage','Healthcare & Pharma','Telecom','Utilities','Cash & Savings']);
+  if(!H.some(h=>DEF.has(h.sector)&&h.w>0.05)) could.push(`<b>Add ballast.</b> One or two low-beta dividend payers (telecom, food, utilities) or a slice in the Thndr savings fund so the whole book is not cyclicals and financials.`);
   could.push(`<b>Monthly, ten minutes, after the statement posts:</b> open this tab, read the first paragraph, check cash and the top three, and trim anything that drifted over ${pct(G.max,0,false)}.`);
   const expect = dnC!=null&&dnC>1 ? `Done this way, the down-month capture should drift toward 90–100% within a couple of down months, mostly from sizing. You give up a little in strong up months because ${pct(G.cash,0,false)} sits in cash and the winners are smaller; on your numbers the worst down month alone cost more against the index than a cash buffer costs in a year of average months.` : `The main thing to protect is the down-month record; keep sizes even and cash on hand and it should hold.`;
   return `<div class="panel brief" data-testid="analysis"><div class="phead"><div><h2>What the numbers say</h2><div class="sub" data-testid="analysis-period">${esc(st.label)} · a written review of the portfolio as it stands today · guideline figures used here: ${pct(G.cash,0,false)} cash, ${pct(G.max,0,false)} per stock, ${pct(G.top3,0,false)} for the top three, a decision at ${pct(G.high,0,false)} below a stock's high · these are suggestions, nothing is tracked or enforced</div></div></div>

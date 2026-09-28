@@ -17,7 +17,7 @@
    the browser key and the user chooses a real password. */
 (function(){
   'use strict';
-  const MAX_TRIES = 10, RELOCK_MS = 5 * 60e3, REFRESH_MS = 30 * 60e3, PBKDF2_ITER = 310000;
+  const MAX_TRIES = 10, RELOCK_MS = 5 * 60e3, REFRESH_MS = 30 * 60e3, LIVE_MS = 10 * 60e3, PBKDF2_ITER = 310000;
   const CUR_LS = 'pd.current', BIO_LS = 'pd.bio.v3', OLD_BIO_LS = 'pd.bio.v1', LEGACY_LS = 'pd.device.v1';
   const DEV_AD = 'portfolio-device-v3', BIO_INFO = 'portfolio-bio-v3';
   const enc = new TextEncoder(), dec = new TextDecoder();
@@ -81,7 +81,7 @@
   }
 
   /* ---------- keys ---------- */
-  let KEYS = null, PK8 = null, DATA_AT = null, lastFetch = 0;
+  let KEYS = null, PK8 = null, DATA_AT = null, lastFetch = 0, fetchTry = 0;
   async function unwrapWithSetupKey(code) {
     const w = KEYS.wrap, clean = code.toUpperCase().replace(/[^A-Z0-9]/g, '');
     const k0 = await crypto.subtle.importKey('raw', enc.encode(clean), 'PBKDF2', false, ['deriveKey']);
@@ -150,7 +150,7 @@
   window.claude = Object.freeze({ use: async (n) => (n === 'db' ? dbReady : n === 'downloads' ? downloads : null) });
 
   /* ---------- live prices straight from TradingView (15-min delayed; the scanner allows this site's origin) ---------- */
-  let LIVE = null, liveAt = 0;
+  let LIVE = null, liveAt = 0, liveTry = 0;
   const cairoDay = (ts) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date(ts * 1000));
   async function scan(market, body) {
     const r = await fetch('https://scanner.tradingview.com/' + market + '/scan', { method: 'POST', body: JSON.stringify(body) });
@@ -162,30 +162,56 @@
     const syms = [...new Set(Object.values(items).map((a) => (a.symbol || '').toUpperCase()).filter((s) => s && s !== 'SAVINGS' && s !== 'THNDRGOLD'))].sort();
     const idx = ['EGX30CAPPED', 'EGX30', 'EGX70EWI', 'EGX100EWI'], today = cairoDay(Date.now() / 1000);
     const cols = ['close', 'change', 'time', 'close[1]|1M', 'description', 'dividends_yield_current', 'ex_dividend_date_upcoming', 'dividend_amount_upcoming', 'ex_dividend_date_recent', 'dividend_amount_recent'];
-    // every stock listed on the EGX in one call, plus the indices, plus USD/EGP and gold
-    const [all, eg, gl] = await Promise.all([
-      scan('egypt', { columns: cols, range: [0, 800], symbols: { query: { types: ['stock', 'dr', 'fund'] } } }),
+    // every stock listed on the EGX in one call, plus the indices, plus USD/EGP and gold. Only the stock scan is required: a failed
+    // index or FX/gold call keeps the saved values (each carries its own date), and asOf is the time the stock scan came back.
+    let scanAt = null;
+    const [allR, egR, glR] = await Promise.allSettled([
+      scan('egypt', { columns: cols, range: [0, 800], symbols: { query: { types: ['stock', 'dr', 'fund'] } } }).then((d) => { scanAt = new Date().toISOString(); return d; }),
       scan('egypt', { symbols: { tickers: idx.map((s) => 'EGX:' + s) }, columns: cols }),
       scan('global', { symbols: { tickers: ['FX_IDC:USDEGP', 'OANDA:XAUUSD'] }, columns: ['close', 'change', 'close[1]|1M'] })]);
-    const prev = DOCS['market/latest'] || {}, quotes = {}, index = {}, missing = [];
+    if (allR.status !== 'fulfilled') throw allR.reason;
+    const all = allR.value, eg = egR.status === 'fulfilled' ? egR.value : {}, gl = glR.status === 'fulfilled' ? glR.value : {};
+    if (egR.status !== 'fulfilled') console.warn('index quotes unavailable, keeping the saved ones', egR.reason);
+    if (glR.status !== 'fulfilled') console.warn('USD/EGP and gold unavailable, keeping the saved ones', glR.reason);
+    const prev = DOCS['market/latest'] || {}, quotes = {}, index = {}, missing = [], carried = [];
     const put = (s, d) => { quotes[s] = { price: d[0], chg: +(d[1] || 0).toFixed(4), date: d[2] ? cairoDay(d[2]) : today, prevMonthClose: d[3], name: d[4], dy: d[5] == null ? null : +d[5].toFixed(4),
       exDate: d[6] ? cairoDay(d[6]) : null, divUp: d[7] ?? null, exRecent: d[8] ? cairoDay(d[8]) : null, divRecent: d[9] ?? null }; };
     for (const [t, d] of Object.entries(all)) { if (d && d[0] != null) put(t.replace(/^EGX:/, ''), d); }
     for (const s of syms) { if (!quotes[s]) { if (prev.quotes && prev.quotes[s]) quotes[s] = prev.quotes[s]; else missing.push(s); } }
-    for (const s of idx) { const d = eg['EGX:' + s]; if (d && d[0] != null) index[s] = { close: d[0], chg: +(d[1] || 0).toFixed(4), date: d[2] ? cairoDay(d[2]) : today, prevMonthClose: d[3] }; }
+    for (const s of idx) { const d = eg['EGX:' + s]; if (d && d[0] != null) index[s] = { close: d[0], chg: +(d[1] || 0).toFixed(4), date: d[2] ? cairoDay(d[2]) : today, prevMonthClose: d[3] };
+      else if (prev.index && prev.index[s]) { index[s] = prev.index[s]; if (s === 'EGX30CAPPED') carried.push('EGX30 Capped'); } }
     if (!Object.keys(quotes).length || !index.EGX30CAPPED) throw new Error('TradingView returned no EGX prices');
     const fx = gl['FX_IDC:USDEGP'], xau = gl['OANDA:XAUUSD'];
-    LIVE = { asOf: new Date().toISOString(), source: 'TradingView scanner (15-min delayed), fetched by this browser', quotes, index,
+    if (!fx) carried.push('USD/EGP'); if (!(fx && xau)) carried.push('gold');
+    LIVE = { asOf: scanAt || new Date().toISOString(), source: 'TradingView scanner (15-min delayed), fetched by this browser', quotes, index,
       fx: fx ? { USDEGP: { price: fx[0], chg: +(fx[1] || 0).toFixed(4), prevMonthClose: fx[2], date: today } } : prev.fx || {},
-      gold: fx && xau ? { XAUUSD: xau[0], gram24kEgp: +(xau[0] * fx[0] / 31.1035).toFixed(2), date: today } : prev.gold || {}, missing };
+      gold: fx && xau ? { XAUUSD: xau[0], gram24kEgp: +(xau[0] * fx[0] / 31.1035).toFixed(2), date: today } : prev.gold || {}, missing, carried };
     liveAt = Date.now();
     if (PK8) { DOCS['market/latest'] = LIVE; listeners.forEach(fire); }   // never repopulate a locked page
     return Object.keys(quotes).length;
   }
+  const cairoTime = (iso) => new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Africa/Cairo' });
+  function priceStatus(ok) {
+    whenReady(() => { const el = document.getElementById('pd-prices'); if (!el) return;
+      el.textContent = ok && LIVE ? `Prices as of ${cairoTime(LIVE.asOf)} Cairo (15-min delayed)${LIVE.carried && LIVE.carried.length ? ` · ${LIVE.carried.join(', ')} from the last daily update` : ''}`
+        : 'Prices from the last daily update · live prices unavailable';
+      el.dataset.state = ok ? 'live' : 'saved'; });
+  }
+  // livePrices() plus the footer status; every caller goes through here (rethrows so the Refresh button can report the error)
+  async function updateLive() {
+    liveTry = Date.now();
+    try { const n = await livePrices(); priceStatus(true); return n; } catch (e) { priceStatus(false); throw e; }
+  }
+  // a short notice once the page is actually showing (the lock screen hides the toast); uses the page's own toast when present
+  function notice(msg, tries = 0) {
+    if (!PK8) return;
+    if (!lockEl().hidden) { if (tries < 240) setTimeout(() => notice(msg, tries + 1), 500); return; }
+    if (window.pdToast) window.pdToast(msg);
+  }
   window.pdRefreshPrices = async (btn, toast) => {
     if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
-    try { await refresh(); const n = await livePrices(); const miss = (LIVE && LIVE.missing) || []; const items = Object.values((DOCS['portfolio/assets'] || {}).items || {}); const funds = items.filter((a) => !a.symbol || a.symbol === 'SAVINGS' || a.symbol === 'THNDRGOLD').length;
-      toast && toast(`Refreshed every EGX-listed stock (${n}), EGX30 Capped, USD/EGP and gold as of ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Africa/Cairo' })} Cairo (15-minute delayed).${funds ? ` ${funds} fund${funds > 1 ? 's' : ''} priced from your last trade.` : ''}${miss.length ? ` No TradingView listing for ${miss.join(', ')}.` : ''}`); }
+    try { await refresh(); const n = await updateLive(); const miss = (LIVE && LIVE.missing) || []; const items = Object.values((DOCS['portfolio/assets'] || {}).items || {}); const funds = items.filter((a) => !a.symbol || a.symbol === 'SAVINGS' || a.symbol === 'THNDRGOLD').length;
+      toast && toast(`Refreshed every EGX-listed stock (${n}), EGX30 Capped, USD/EGP and gold as of ${cairoTime(LIVE.asOf)} Cairo (15-minute delayed).${LIVE.carried && LIVE.carried.length ? ` ${LIVE.carried.join(', ')} could not be fetched; the last daily values are kept.` : ''}${funds ? ` ${funds} fund${funds > 1 ? 's' : ''} priced from your last trade.` : ''}${miss.length ? ` No TradingView listing for ${miss.join(', ')}.` : ''}`); }
     catch (e) { console.error(e); toast && toast('Could not reach TradingView: ' + (e.message || e) + '. Showing the last saved prices.', 'error'); }
     finally { const b = document.getElementById('refresh-prices'); if (b) { b.disabled = false; b.textContent = 'Refresh now'; } }
   };
@@ -196,7 +222,8 @@
     document.title = CUR.name + ' · Stock Market Portfolio Tracker';
     whenReady(() => {   // the bottom bar is the last thing in the document; the data can be ready before it is parsed
       const t = document.getElementById('pd-updated');
-      if (t && DATA_AT) t.textContent = 'Ledger data as of ' + new Date(DATA_AT).toLocaleString('en-US', { timeZone: 'Africa/Cairo', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }) + ' Cairo';
+      if (t && DATA_AT) { const d = new Date(DATA_AT), p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'Africa/Cairo', day: 'numeric', month: 'short', year: 'numeric' }).formatToParts(d).map((x) => [x.type, x.value]));
+        t.textContent = `Ledger data as of ${p.day} ${p.month} ${p.year}, ${cairoTime(DATA_AT)} Cairo`; }
       const w = document.getElementById('pd-who'); if (w) w.textContent = CUR.name;
     });
   }
@@ -420,8 +447,9 @@
     wireSwitch(); $l('#lk-relock').onclick = () => lock(false);
     $l('#lk-retry').onclick = async () => { const b = $l('#lk-retry'); b.disabled = true; b.textContent = 'Trying…'; if (!PK8) return lock(false); await unlocked(PK8); };
   }
-  async function start() { publish(await fetchData()); dbResolve(db); livePrices().catch((e) => console.warn('live prices unavailable', e)); }
-  async function refresh() { if (!PK8) return; try { const b = await fetchData(); if (b.exportedAt !== DATA_AT) publish(b); } catch (e) { console.warn('refresh failed', e); } }
+  async function start() { publish(await fetchData()); dbResolve(db);
+    updateLive().catch((e) => { console.warn('live prices unavailable', e); notice('Live prices are unavailable right now: showing prices from the last daily update.'); }); }
+  async function refresh() { if (!PK8) return; fetchTry = Date.now(); try { const b = await fetchData(); if (b.exportedAt !== DATA_AT) publish(b); } catch (e) { console.warn('refresh failed', e); } }
   window.pdLock = () => { if (CUR) lock(false); };
   window.pdSwitch = () => chooseScreen();
   window.pdSelect = (id) => { const p = PORTFOLIOS.find((x) => x.id === id); if (p && !(CUR && CUR.id === p.id)) select(p); };
@@ -433,8 +461,23 @@
     if (!PK8 || !lockEl().hidden) return;
     if (Date.now() - hiddenAt > RELOCK_MS) return lock(true);
     if (Date.now() - lastFetch > REFRESH_MS) refresh();
-    if (Date.now() - liveAt > 10 * 60e3) livePrices().catch(() => {});
+    if (Date.now() - liveAt > LIVE_MS) updateLive().catch(() => {});
   });
+  // EGX session, Sunday to Thursday 10:00-14:45 Cairo (the 14:30 close shows up 15 minutes later on the delayed feed)
+  function egxOpen(t) {
+    const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'Africa/Cairo', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(t)).map((x) => [x.type, x.value]));
+    const hm = (+p.hour % 24) * 60 + +p.minute;
+    return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu'].includes(p.weekday) && hm >= 600 && hm <= 885;
+  }
+  // while the page is visible and unlocked: the data every 30 minutes, live prices every 10 minutes during the session
+  function tick() {
+    if (document.hidden || !PK8 || !lockEl().hidden) return;
+    const now = Date.now();
+    if (now - Math.max(lastFetch, fetchTry) > REFRESH_MS) refresh();
+    if (egxOpen(now) && now - Math.max(liveAt, liveTry) > LIVE_MS) updateLive().catch((e) => console.warn('live prices unavailable', e));
+  }
+  setInterval(tick, 60e3);
+  window.pdTick = tick; window.pdEgxOpen = egxOpen;   // for tests
   (async () => {
     if (!window.crypto || !crypto.subtle || !window.DecompressionStream) return screen('<h1>Browser too old</h1><p>Update your browser (Safari 16.4+, Chrome 80+) to open the portfolio.</p>');
     try { PORTFOLIOS = await (await fetch('portfolios.json', { cache: 'no-store' })).json(); } catch (e) { return screen('<h1>Offline</h1><p>The portfolio could not load. Check your connection and reload.</p>'); }

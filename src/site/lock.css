@@ -10,16 +10,16 @@
 #lock .lk-btn{font:600 16px/1 var(--f-ui,system-ui,sans-serif);padding:14px;border-radius:10px;border:0;background:var(--accent,#0B6E5F);color:var(--accent-ink,#fff);cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px}
 #lock .lk-btn.ghost{background:transparent;color:var(--accent,#0B6E5F);border:1px solid var(--rule,#DAE2DE)}
 #lock .lk-btn:disabled{opacity:.6;cursor:default}
-#lock .lk-link{background:none;border:0;color:var(--ink-3,#6F7D78);font-size:13px;text-decoration:underline;cursor:pointer;padding:6px}
+#lock .lk-link{background:none;border:0;color:var(--ink-3,#5F6C67);font-size:13px;text-decoration:underline;cursor:pointer;padding:6px}
 #lock .lk-err{color:var(--neg,#c02f2f);font-size:14px;min-height:1.2em}
-#lock .lk-sep{display:flex;align-items:center;gap:10px;color:var(--ink-3,#6F7D78);font-size:12px;text-transform:uppercase;letter-spacing:.08em}
+#lock .lk-sep{display:flex;align-items:center;gap:10px;color:var(--ink-3,#5F6C67);font-size:12px;text-transform:uppercase;letter-spacing:.08em}
 #lock .lk-sep::before,#lock .lk-sep::after{content:"";flex:1;height:1px;background:var(--rule,#DAE2DE)}
-#lock .lk-foot{font-size:12px;color:var(--ink-3,#6F7D78)}
+#lock .lk-foot{font-size:12px;color:var(--ink-3,#5F6C67)}
 #lock .lk-list{display:flex;flex-direction:column;gap:10px}
 #lock .lk-list .lk-btn{flex-direction:column;gap:3px;padding:16px 14px}
 #lock .lk-list .lk-btn small{font:400 12px/1.2 var(--f-ui,system-ui,sans-serif);opacity:.8}
 #lock .lk-links{display:flex;flex-wrap:wrap;justify-content:center;gap:4px 16px}
-#lock .lk-rules{list-style:none;margin:0;padding:0 4px;text-align:left;font-size:13px;line-height:1.5;color:var(--ink-3,#6F7D78);display:flex;flex-direction:column;gap:2px}
+#lock .lk-rules{list-style:none;margin:0;padding:0 4px;text-align:left;font-size:13px;line-height:1.5;color:var(--ink-3,#5F6C67);display:flex;flex-direction:column;gap:2px}
 #lock .lk-rules li::before{content:"○";display:inline-block;width:1.5em}
 #lock .lk-rules li.ok{color:var(--accent,#0B6E5F)}
 #lock .lk-rules li.ok::before{content:"✓"}
@@ -27,5 +27,6 @@
 #pd-bar .pd-actions{display:flex;gap:8px}
 body.pd-locked{overflow:hidden}
 body.pd-locked>:not(#lock){display:none!important}
-#pd-bar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;max-width:1240px;margin:28px auto 0;padding:14px 16px calc(14px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--rule,#DAE2DE);color:var(--ink-3,#6F7D78);font-size:12px}
+#pd-bar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;max-width:1240px;margin:28px auto 0;padding:14px 16px calc(14px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--rule,#DAE2DE);color:var(--ink-3,#5F6C67);font-size:12px}
 #pd-bar button{font:500 12px/1 var(--f-ui,system-ui,sans-serif);padding:8px 12px;border-radius:8px;border:1px solid var(--rule,#DAE2DE);background:var(--surface,#fff);color:var(--ink-2,#46534E);cursor:pointer}
+@media (max-width:600px){#pd-bar button{min-height:40px}#lock .lk-link{min-height:40px}}

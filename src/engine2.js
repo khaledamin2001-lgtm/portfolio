@@ -184,12 +184,15 @@
   }
 
   // ---------- Brinson-Fachler sector attribution, Carino-linked ----------
-  // Monthly: holdings at the prior month-end, buy-and-hold over the month.
+  // Monthly: holdings at the prior month-end, buy-and-hold over the month. A row that spans a gap (spans > 1, the months before
+  // it have no value) is measured from the month-end before its spanFrom, so R, B, Rh and Bs all cover the same span.
   //   allocation_s = (wp − wb)(rb − B*)     selection_s = wp(rp − rb)   (interaction included in selection)
   //   trading      = R − R_h  (effect of trades during the month)     replication = B* − B (model vs real index)
   // Sectors absent from the index use rb = B* (neutral); cash-like sectors use rb = 0 so idle cash shows as allocation.
   // bench.actions (optional): [{s, date, ratio}] — corporate actions; ratio = new shares ÷ old shares, so a member's
   // unadjusted price drops by 1/ratio from `date` and its return over [d0, d1] is p1 × Π ratio(d0 < date ≤ d1) / p0 − 1.
+  // `trading` is R − Rh: everything the buy-and-hold sector returns do not explain (they are price-only)
+  const TRADING_NOTE = 'Trading and other: buys and sells during the month, plus dividends, rebates and fees (sector returns are price-only)';
   const actionFactor = (actions, s, d0, d1) => (actions || []).reduce((f, a) => (a.s === s && a.date > d0 && a.date <= d1 && a.ratio > 0 ? f * a.ratio : f), 1);
   function attribution(months, range, ledger, assets, pb, bench, today) {
     if (!pb.days.length || !bench) return null;
@@ -197,11 +200,12 @@
     const acts = bench.actions || [];
     const out = [];
     P.forEach((r) => {
-      const d0 = pb.lastDayOnOrBefore(eom(addMonths(r.month, -1)));
+      const base = eom(addMonths(r.spans > 1 && r.spanFrom ? r.spanFrom : r.month, -1));
+      const d0 = pb.lastDayOnOrBefore(base);
       const d1 = pb.lastDayOnOrBefore(r.live ? today : eom(r.month));
       if (!d0 || !d1 || d1 <= d0) return;
       const price = makePricer(assets, ledger, pb);
-      const H = holdingsAt(ledger, assets, pb, eom(addMonths(r.month, -1)));
+      const H = holdingsAt(ledger, assets, pb, base);
       const cashW = Math.max(0, H.cash);
       // A month that starts from nothing (the inception month, funded during the month) is kept, not dropped — skipping it
       // would leave the Carino chain one month short of the period's TWR. It is treated as 100% cash at 0%: no stock
@@ -225,7 +229,7 @@
         const sel = x.wp ? x.wp * (rp - rb) : 0;
         return { sector: s, wp: x.wp, wb: x.wb, rp, rb: x.wb ? rb : null, alloc, sel };
       });
-      out.push({ month: r.month, live: !!r.live, d0, d1, R: r.ret, B: r.bench, Rh, Bs, trading: r.ret - Rh, replication: Bs - r.bench, sectors: rows,
+      out.push({ month: r.month, spans: r.spans || 1, spanFrom: r.spanFrom || r.month, live: !!r.live, d0, d1, R: r.ret, B: r.bench, Rh, Bs, trading: r.ret - Rh, replication: Bs - r.bench, sectors: rows,
         alloc: sum(rows.map((x) => x.alloc)), sel: sum(rows.map((x) => x.sel)), startValue: total, marksOpening: r.opening });
     });
     if (!out.length) return null;
@@ -245,7 +249,7 @@
     const secRows = Object.values(sectors).map((x) => ({ ...x, rp: x.nP ? x.rp - 1 : null, rb: x.nB ? x.rb - 1 : null, total: x.alloc + x.sel })).sort((a, b) => b.total - a.total);
     return {
       months: out, R, B, active: R - B,
-      alloc: L((m) => m.alloc), sel: L((m) => m.sel), trading: L((m) => m.trading), replication: L((m) => m.replication),
+      alloc: L((m) => m.alloc), sel: L((m) => m.sel), trading: L((m) => m.trading), replication: L((m) => m.replication), tradingNote: TRADING_NOTE,
       sectors: secRows,
       trackingCheck: Math.sqrt(mean(out.map((m) => m.replication ** 2))),
     };
@@ -334,17 +338,24 @@
   }
 
   // ---------- factsheet: trailing returns and the calendar grid ----------
+  // Windows are calendar months ending at asOf: '3M' = the rows whose month lies in [asOf − 2 months, asOf]. A row that spans a
+  // gap counts when its spanFrom is inside the window too; one that starts before the window makes the result null (its return
+  // cannot be split), as does a window the rows do not fully cover (before inception, or ending in an unvalued month).
+  // n = calendar months covered. YTD starts at January or inception, whichever is later.
   function trailing(months, asOf) {
     const rows = months.filter((r) => r.has && r.ret != null && r.month <= asOf);
     const chain = (list, k) => list.reduce((a, r) => a * (1 + (r[k] ?? 0)), 1) - 1;
-    const win = (n) => { const l = rows.slice(-n); return l.length === n ? l : null; };
+    const inc = months.length ? months[0].month : asOf;
     const y = asOf.slice(0, 4);
-    const res = [['1M', win(1)], ['3M', win(3)], ['6M', win(6)], ['YTD', rows.filter((r) => r.month.startsWith(y))], ['1Y', win(12)], ['Since inception', rows]];
-    return res.map(([label, l]) => {
-      if (!l || !l.length) return { label, p: null, b: null };
+    const res = [['1M', addMonths(asOf, 0)], ['3M', addMonths(asOf, -2)], ['6M', addMonths(asOf, -5)], ['YTD', `${y}-01` > inc ? `${y}-01` : inc], ['1Y', addMonths(asOf, -11)], ['Since inception', inc]];
+    return res.map(([label, from]) => {
+      const l = rows.filter((r) => r.month >= from);
+      const len = PE.monthsBetween(from, asOf) + 1;
+      const covered = sum(l.map((r) => r.spans || 1));
+      if (!l.length || l.some((r) => (r.spanFrom || r.month) < from) || covered !== len) return { label, p: null, b: null, a: null, ann: null, n: 0, from };
       const p = chain(l, 'ret'), b = l.every((r) => r.bench != null) ? chain(l, 'bench') : null;
-      const ann = label === 'Since inception' && l.length >= 12 ? { p: Math.pow(1 + p, 12 / l.length) - 1, b: b != null ? Math.pow(1 + b, 12 / l.length) - 1 : null } : null;
-      return { label, p, b, a: b != null ? p - b : null, ann, n: l.length };
+      const ann = label === 'Since inception' && len >= 12 ? { p: Math.pow(1 + p, 12 / len) - 1, b: b != null ? Math.pow(1 + b, 12 / len) - 1 : null } : null;
+      return { label, p, b, a: b != null ? p - b : null, ann, n: len, from };
     });
   }
   function calendar(months, asOf) {
@@ -356,6 +367,6 @@
       bytd: Y.b.every((x, i) => x != null || Y.m[i] == null) ? Y.b.reduce((a, x) => (x == null ? a : a * (1 + x)), 1) - 1 : null }));
   }
 
-  const api = { priceBook, makePricer, daily, dailyStats, capWeights, benchWeights, holdingsAt, estimateMarks, attribution, activeWeights, tradeChecks, income, trailing, calendar, TRADING_DAYS };
+  const api = { priceBook, makePricer, daily, dailyStats, capWeights, benchWeights, holdingsAt, estimateMarks, attribution, activeWeights, tradeChecks, income, trailing, calendar, TRADING_DAYS, TRADING_NOTE };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.PA = api;
 })(this);

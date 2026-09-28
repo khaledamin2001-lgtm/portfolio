@@ -307,6 +307,7 @@
     if (sel.type !== 'Custom' && asOf < to) to = asOf;
     return { from, to, asOf, lastData, valid: from <= to };
   }
+  const MIN_RATIO_N = 6, MIN_FULL_N = 12; // ratio thresholds (periodStats): ratios need 6 returns, below 12 they are indicative
   const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const fmtMonth = (m) => `${MON[+m.slice(5, 7) - 1]}-${m.slice(2, 4)}`;
 
@@ -314,6 +315,10 @@
   //                    'name' — legacy: one row per stock name (pos.rows), as the workbook counted them.
   // Months with no value are not in S.rows: their return is inside the next valued month (row.spans > 1). n counts the
   // available returns (vol, Sharpe, beta, hit rates); monthsElapsed counts the calendar months of the range (annualization).
+  // A month with no benchmark return is never chained as 0%: benchTwr, alpha and the rows' pBench from that month on are null
+  // (S.benchComplete false), and the benchmark-relative figures use only the months that have one (bp).
+  // Small samples: Sharpe and Sortino need MIN_RATIO_N returns, beta/correlation/tracking error/capture ratios MIN_RATIO_N
+  // months with a benchmark, the risk label 3 returns; S.smallSample (n < 12) lets the page mark ratios "indicative".
   function periodStats(months, range, ledger, settings, pos, opts) {
     const inRange = months.filter((r) => r.month >= range.from && r.month <= range.to);
     const P = inRange.filter((r) => r.has && r.ret != null);
@@ -325,8 +330,8 @@
     const first = P[0], last = P[n - 1];
     let cf = 1, cb = 1, cu = 1, cc = 1, peak = 1;
     P.forEach((r) => {
-      cf *= 1 + r.ret; cb *= 1 + (r.bench ?? 0); cu *= 1 + (r.usdRet ?? 0); cc *= 1 + (r.cpiSpan ?? 0);
-      r.pCum = cf - 1; r.pBench = cb - 1;
+      cf *= 1 + r.ret; cb = cb != null && r.bench != null ? cb * (1 + r.bench) : null; cu *= 1 + (r.usdRet ?? 0); cc *= 1 + (r.cpiSpan ?? 0);
+      r.pCum = cf - 1; r.pBench = cb != null ? cb - 1 : null;
       peak = Math.max(peak, cf); r.dd = cf / peak - 1;
     });
     S.rows = P;
@@ -334,22 +339,24 @@
     S.deposits = sum(P.map((r) => r.deposits)); S.withdrawals = sum(P.map((r) => r.withdrawals));
     S.netFlows = S.deposits - S.withdrawals; S.netGain = S.closing - S.opening - S.netFlows;
     S.dividends = sum(P.map((r) => r.dividends)); S.buys = sum(P.map((r) => r.buys)); S.sells = sum(P.map((r) => r.sells)); S.trades = sum(P.map((r) => r.trades));
-    S.twr = cf - 1; S.benchTwr = cb - 1; S.alpha = S.twr - S.benchTwr;
     S.benchComplete = P.every((r) => r.bench != null);
+    S.twr = cf - 1; S.benchTwr = S.benchComplete ? cb - 1 : null; S.alpha = S.benchTwr != null ? S.twr - S.benchTwr : null;
+    S.smallSample = n < MIN_FULL_N;
     const rets = P.map((r) => r.ret);
     S.posMonths = rets.filter((x) => x > 0).length; S.pctPos = S.posMonths / n;
     const best = P.reduce((a, r) => (r.ret > a.ret ? r : a)), worst = P.reduce((a, r) => (r.ret < a.ret ? r : a));
     S.best = { month: best.month, ret: best.ret }; S.worst = { month: worst.month, ret: worst.ret };
     S.avg = mean(rets); S.vol = n > 1 ? stdevS(rets) : 0;
-    S.risk = n < 2 ? 'n/a' : S.vol < settings.volLow ? 'Low' : S.vol < settings.volHigh ? 'Moderate' : 'High';
+    S.risk = n < 3 ? 'n/a' : S.vol < settings.volLow ? 'Low' : S.vol < settings.volHigh ? 'Moderate' : 'High';
     S.annualized = S.monthsElapsed >= 12 ? Math.pow(1 + S.twr, 12 / S.monthsElapsed) - 1 : null;
     const rfM = Math.pow(1 + settings.riskFree, 1 / 12) - 1;
-    S.sharpe = n >= 3 && S.vol ? ((S.avg - rfM) / S.vol) * Math.sqrt(12) : null;
-    const bp = P.filter((r) => r.bench != null);
-    S.beta = bp.length >= 3 ? slope(bp.map((r) => r.ret), bp.map((r) => r.bench)) : null;
-    S.correl = bp.length >= 3 ? correl(bp.map((r) => r.ret), bp.map((r) => r.bench)) : null;
-    S.trackingError = bp.length >= 3 ? stdevS(bp.map((r) => r.alpha)) * Math.sqrt(12) : null;
-    S.beat = bp.filter((r) => r.alpha > 0).length; S.pctBeat = S.beat / n;
+    S.sharpe = n >= MIN_RATIO_N && S.vol ? ((S.avg - rfM) / S.vol) * Math.sqrt(12) : null;
+    const bp = P.filter((r) => r.bench != null), bpOk = bp.length >= MIN_RATIO_N;
+    S.benchMonths = bp.length;
+    S.beta = bpOk ? slope(bp.map((r) => r.ret), bp.map((r) => r.bench)) : null;
+    S.correl = bpOk ? correl(bp.map((r) => r.ret), bp.map((r) => r.bench)) : null;
+    S.trackingError = bpOk ? stdevS(bp.map((r) => r.alpha)) * Math.sqrt(12) : null;
+    S.beat = bp.filter((r) => r.alpha > 0).length; S.pctBeat = bp.length ? S.beat / bp.length : null;
     const mdd = P.reduce((a, r) => (r.dd < a.dd ? r : a));
     S.maxDD = Math.min(0, mdd.dd); S.maxDDMonth = S.maxDD < 0 ? mdd.month : null;
     // USD & real
@@ -372,12 +379,12 @@
     // downside risk and capture ratios (monthly, CFA-style definitions)
     const dd2 = rets.map((x) => Math.min(0, x - rfM) ** 2);
     S.downsideDev = n > 1 ? Math.sqrt(sum(dd2) / n) : 0;
-    S.sortino = n >= 3 && S.downsideDev ? ((S.avg - rfM) / S.downsideDev) * Math.sqrt(12) : null;
+    S.sortino = n >= MIN_RATIO_N && S.downsideDev ? ((S.avg - rfM) / S.downsideDev) * Math.sqrt(12) : null;
     S.calmar = S.annualized != null && S.maxDD < 0 ? S.annualized / -S.maxDD : null;
     const upM = bp.filter((r) => r.bench > 0), dnM = bp.filter((r) => r.bench < 0);
     const chainK = (rows, key) => rows.reduce((a, r) => a * (1 + r[key]), 1) - 1;
-    S.upCapture = upM.length ? chainK(upM, 'ret') / chainK(upM, 'bench') : null;
-    S.downCapture = dnM.length ? chainK(dnM, 'ret') / chainK(dnM, 'bench') : null;
+    S.upCapture = bpOk && upM.length ? chainK(upM, 'ret') / chainK(upM, 'bench') : null;
+    S.downCapture = bpOk && dnM.length ? chainK(dnM, 'ret') / chainK(dnM, 'bench') : null;
     S.upMonths = upM.length; S.downMonths = dnM.length;
     // Money-weighted
     const d0 = eom(addMonths(range.from, -1)), d1 = eom(range.to);
@@ -515,6 +522,6 @@
     };
   }
 
-  const api = { run, runLedger, positions, monthly, periodRange, periodStats, sectors, xirr, eom, addMonths, monthsBetween, fmtMonth, monthOf, dayNum, cairoToday, effectivePrice, TYPES, PERIOD_TYPES, DAY_ORDER, CASH_LIKE, sortLedger };
+  const api = { run, runLedger, positions, monthly, periodRange, periodStats, sectors, xirr, eom, addMonths, monthsBetween, fmtMonth, monthOf, dayNum, cairoToday, effectivePrice, MIN_RATIO_N, MIN_FULL_N, TYPES, PERIOD_TYPES, DAY_ORDER, CASH_LIKE, sortLedger };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.PE = api;
 })(this);

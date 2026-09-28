@@ -11,6 +11,16 @@
      kickbacks trued up, and broker cash set to its closing balance.
    - "Your monthly E-statement" (full month + positions snapshot): the same, for the whole month, plus the
      month-end marks. The month is final afterwards.
+   - A statement only changes rows dated in months that are still open: a month is closed once it has a full-month
+     import (imports/<M>.fullMonth) or a non-provisional month-end mark from a statement ('statement' or
+     'reconstructed'). Differences in closed months (a requested statement spanning several months) are left
+     alone and listed in the email as "left unchanged in closed <Mon-YY>: …"; they do not hold the statement.
+   - Mutual-fund rows (acc 'MF'): an invoice and a statement amount less than 1 EGP apart are the same trade, not a
+     correction; the existing amount is kept. (If keeping those piasters would leave the ledger's cash more than
+     0.50 EGP off a statement's closing balance, that statement corrects them after all, so the drift never grows
+     into a cash hold.)
+   - Requested (part-month) statements true up kickbacks against the ledger's rebates in their window, not counting
+     an earlier true-up in that window; that earlier true-up is replaced (re-dated and re-amounted), never doubled.
    Nothing is written for a statement unless the corrected ledger re-reconciles cleanly: no differences left,
    cash equal to the statement's closing balance, and (monthly) every share count equal to the snapshot.
    Fund convention: a mutual-fund trade (thndrgold, thndrsavings, thndrmonthlysavings, ...) is booked exactly as
@@ -25,7 +35,10 @@
    An invoice email is all-or-nothing: if any of its blocks cannot be read, nothing from that email is written.
    Output: <out>/write/* (documents to write) and <out>/summary.json (what changed, what needs attention).
    summary.monthlyPending lists the full months whose factsheet email / workbooks are still owed (imports/<M>.reports
-   is stamped by the routine); sync_state.json carries toolSha = sha256 (12 hex) of the tool files that ran. */
+   is stamped by the routine); sync_state.json carries toolSha = sha256 (12 hex) of the tool files that ran.
+   summary.alert is null, or — when a month's monthly statement newly became overdue (once per month, from the 10th
+   of the next month; state.alerts[M]) — every month still missing one, e.g. ['2026-06', '2026-09'] (missingStatements).
+   The email subject starts with settings.name and links the page for settings.portfolioId (PAGE_URLS) and the site. */
 'use strict';
 const fs = require('fs'), path = require('path'), crypto = require('crypto');
 const TS = require('./statement.js');
@@ -40,7 +53,13 @@ const newId = () => Math.random().toString(36).slice(2, 10);
 const today = args.today || new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date());
 const fmt = (x) => (x == null ? '—' : Number(x).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
 const prevMonth = (m) => { const [y, mo] = m.split('-').map(Number); return mo === 1 ? `${y - 1}-12` : `${y}-${String(mo - 1).padStart(2, '0')}`; };
-const lbl = (m) => new Date(m + '-15').toLocaleString('en-GB', { month: 'short', year: '2-digit' }).replace(' ', '-');
+const nextMonth = (m) => { const [y, mo] = m.split('-').map(Number); return mo === 12 ? `${y + 1}-01` : `${y}-${String(mo + 1).padStart(2, '0')}`; };
+// 'Sep-26' on every Node/ICU (en-GB ICU data prints 'Sept'), so the label is built from a fixed list
+const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const lbl = (m) => `${MONTH_NAMES[+m.slice(5, 7) - 1]}-${m.slice(2, 4)}`;
+// the page each portfolio's summary email links to (settings.portfolioId)
+const PAGE_URLS = { khaled: 'https://claude.ai/artifact/PNjUN5wQkvgtZDcTML1HFe', yassin: 'https://claude.ai/artifact/6VL6yHnoUHkNqP1PdzRazc' };
+const SITE_URL = 'https://khaledamin2001-lgtm.github.io/portfolio/';
 
 // ---------- current state ----------
 // Loaded from --data by run(); tests inject their own through _reset().
@@ -126,9 +145,12 @@ function applyInvoice(v, entry) {
     .sort((a, b) => amtDiff(a) - amtDiff(b))[0];
   if (hit) {
     consumed.add(hit.id); // by id: applyStatement replaces the row objects with copies, the ids survive
-    const before = desc(hit), diff = Math.abs((hit.amt || 0) - row.amt) > 0.005 || Math.abs((hit.q || 0) - row.q) > 0.005 || Math.abs((hit.p || 0) - row.p) > 0.00005;
+    // a fund amount less than 1 EGP off (invoice total vs the statement's cash transfer) is the same trade: keep it
+    const keepAmt = (fund || hit.acc === 'MF') && Math.abs((hit.amt || 0) - row.amt) < 1;
+    const before = desc(hit), diff = (!keepAmt && Math.abs((hit.amt || 0) - row.amt) > 0.005) || Math.abs((hit.q || 0) - row.q) > 0.005 || Math.abs((hit.p || 0) - row.p) > 0.00005;
     if (!diff) { entry.unchanged++; return; }
-    hit.amt = row.amt; hit.q = row.q; hit.p = row.p;
+    if (!keepAmt) hit.amt = row.amt;
+    hit.q = row.q; hit.p = row.p;
     hit.note = [hit.note, `corrected per Thndr invoice ${v.d}`].filter(Boolean).join('; '); touch(hit.d);
     entry.changes.push(`corrected ${before} → ${desc(hit)}`);
     return;
@@ -173,49 +195,81 @@ function applyStatement(st, entry, msg) {
   if (st.cash.start != null && Math.abs(open - st.cash.start) > 1) entry.reasons.push(`opening cash ${fmt(st.cash.start)} on ${st.from} differs from the ledger's ${fmt(open)}: an earlier month needs its statement first`);
   if (entry.reasons.length) return 'hold';
 
-  // build the corrected ledger
+  // Months that are already closed are never changed by a statement that merely spans them (a requested statement
+  // over several months): closed = a full-month import, or a non-provisional month-end mark taken from a statement
+  // ('statement' / 'reconstructed'). The month a monthly statement is closing is always open to it.
+  const closedMonth = (m) => !(final && m === M) && !!((imports[m] && imports[m].fullMonth) || (marks[m] && !marks[m].provisional && (marks[m].source === 'statement' || marks[m].source === 'reconstructed')));
+  const closedOf = (...ds) => ds.filter(Boolean).map((d) => d.slice(0, 7)).find(closedMonth) || null;
   const tag = final ? `stmt-${M}` : `stmt-partial-${st.to}`;
-  let next = tx.map((t) => ({ ...t }));
-  const byId = new Map(next.map((t) => [t.id, t]));
-  const ops = [], removed = [];
-  const twin = (t) => byId.get(t.id) || next.find((x) => x.d === t.d && x.t === t.t && x.amt === t.amt && x.a === t.a);
-  rc.matched.forEach(({ stmt, ledger }) => {
-    const t = twin(ledger); if (!t) return;
-    const main = stmt.acc === 'Main' && (stmt.t === 'Buy' || stmt.t === 'Sell');
-    const bonus = stmt.t === 'Bonus'; // no cash, no price: only the share count is compared
-    const diff = t.d !== stmt.d || Math.abs(t.amt - stmt.amt) > 0.005 || (main && (t.q !== stmt.q || Math.abs((t.p || 0) - (stmt.p || 0)) > 0.00005)) || (bonus && Math.abs((t.q || 0) - (stmt.q || 0)) > 0.005);
-    if (!diff) return;
-    const before = desc(t);
-    t.d = stmt.d; t.amt = stmt.amt; if (main) { t.q = stmt.q; t.p = stmt.p; } if (bonus) t.q = stmt.q;
-    t.note = [t.note, 'corrected per Thndr statement'].filter(Boolean).join('; ');
-    ops.push(`corrected ${before} → ${desc(t)}`);
-  });
-  rc.conflicts.forEach(({ stmt, ledger }) => {
-    if (stmt.acc === 'MF' && !st.mf) return; // no fund statement in this email: the fund name on the transfer is a guess, keep the ledger's
-    const t = twin(ledger); if (!t) return;
-    const before = desc(t);
-    Object.assign(t, { d: stmt.d, t: stmt.t, a: stmt.a, q: stmt.q, p: stmt.p, amt: stmt.amt, acc: stmt.acc, src: tag, note: 'rebooked per Thndr statement' });
-    ops.push(`rebooked ${before} → ${desc(t)}`);
-  });
   const removable = (t) => (final || t.d < st.to) && !(t.acc === 'MF' && !st.mf);
-  rc.ledgerOnly.filter(removable).forEach((l) => { const t = twin(l); if (!t) return; next = next.filter((x) => x !== t); removed.push(t); ops.push(`removed ${desc(t)} (not on the statement)`); });
-  const addAssets = {};
-  rc.fresh.forEach((r) => {
-    if (r.acc === 'MF' && !st.mf && r.t !== 'Rebate') return;
-    const o = { id: newId(), d: r.d, t: r.t, amt: r.amt, acc: r.acc || 'Main', src: tag };
-    if (r.a) o.a = r.a; if (r.q != null) o.q = r.q; if (r.p != null) o.p = r.p; if (r.note) o.note = r.note;
-    next.push(o); ops.push(`added ${desc(o)}`);
-    if (r.newAsset && !assets[r.a] && !addAssets[r.a]) {
-      const tk = r.newAsset.ticker; const m = tk && bench.members.find((x) => x.s === tk);
-      addAssets[r.a] = r.acc === 'MF' ? { name: r.a, fund: true, sector: /saving/i.test(r.a) ? 'Cash & Savings' : 'Mutual Funds' } : { name: r.a, symbol: tk || undefined, sector: m ? m.sector : 'Unclassified' };
+  const isTrueUp = (t) => t.t === 'Rebate' && /^Commission kickbacks true-up/.test(t.note || '') && t.d >= st.from && t.d <= st.to && !closedOf(t.d);
+  // build the corrected ledger; strictFunds = false keeps fund amounts that are less than 1 EGP off the statement
+  const build = (strictFunds) => {
+    let next = tx.map((t) => ({ ...t }));
+    const byId = new Map(next.map((t) => [t.id, t]));
+    const ops = [], removed = [], frozen = {}, keptFunds = [], addAssets = {};
+    const freeze = (m, s) => (frozen[m] = frozen[m] || []).push(s);
+    const twin = (t) => byId.get(t.id) || next.find((x) => x.d === t.d && x.t === t.t && x.amt === t.amt && x.a === t.a);
+    rc.matched.forEach(({ stmt, ledger }) => {
+      const t = twin(ledger); if (!t) return;
+      const main = stmt.acc === 'Main' && (stmt.t === 'Buy' || stmt.t === 'Sell');
+      const bonus = stmt.t === 'Bonus'; // no cash, no price: only the share count is compared
+      const keepAmt = !strictFunds && (stmt.acc === 'MF' || t.acc === 'MF') && Math.abs(t.amt - stmt.amt) < 1;
+      const diff = t.d !== stmt.d || (!keepAmt && Math.abs(t.amt - stmt.amt) > 0.005) || (main && (t.q !== stmt.q || Math.abs((t.p || 0) - (stmt.p || 0)) > 0.00005)) || (bonus && Math.abs((t.q || 0) - (stmt.q || 0)) > 0.005);
+      const cm = closedOf(t.d, stmt.d);
+      if (keepAmt && !cm && Math.abs(t.amt - stmt.amt) > 0.005) keptFunds.push(t);
+      if (!diff) return;
+      if (cm) { freeze(cm, `${desc(t)} (the statement has ${desc(stmt)})`); return; }
+      const before = desc(t);
+      t.d = stmt.d; if (!keepAmt) t.amt = stmt.amt; if (main) { t.q = stmt.q; t.p = stmt.p; } if (bonus) t.q = stmt.q;
+      t.note = [t.note, 'corrected per Thndr statement'].filter(Boolean).join('; ');
+      ops.push(`corrected ${before} → ${desc(t)}`);
+    });
+    rc.conflicts.forEach(({ stmt, ledger }) => {
+      if (stmt.acc === 'MF' && !st.mf) return; // no fund statement in this email: the fund name on the transfer is a guess, keep the ledger's
+      const t = twin(ledger); if (!t) return;
+      const cm = closedOf(t.d, stmt.d); if (cm) { freeze(cm, `booked differently: ${desc(t)} (the statement has ${desc(stmt)})`); return; }
+      const before = desc(t);
+      Object.assign(t, { d: stmt.d, t: stmt.t, a: stmt.a, q: stmt.q, p: stmt.p, amt: stmt.amt, acc: stmt.acc, src: tag, note: 'rebooked per Thndr statement' });
+      ops.push(`rebooked ${before} → ${desc(t)}`);
+    });
+    rc.ledgerOnly.filter(removable).forEach((l) => {
+      const t = twin(l); if (!t) return;
+      const cm = closedOf(t.d); if (cm) { freeze(cm, `not on the statement: ${desc(t)}`); return; }
+      next = next.filter((x) => x !== t); removed.push(t); ops.push(`removed ${desc(t)} (not on the statement)`);
+    });
+    rc.fresh.forEach((r) => {
+      if (r.acc === 'MF' && !st.mf && r.t !== 'Rebate') return;
+      const cm = closedOf(r.d); if (cm) { freeze(cm, `missing ${desc(r)}`); return; }
+      const o = { id: newId(), d: r.d, t: r.t, amt: r.amt, acc: r.acc || 'Main', src: tag };
+      if (r.a) o.a = r.a; if (r.q != null) o.q = r.q; if (r.p != null) o.p = r.p; if (r.note) o.note = r.note;
+      next.push(o); ops.push(`added ${desc(o)}`);
+      if (r.newAsset && !assets[r.a] && !addAssets[r.a]) {
+        const tk = r.newAsset.ticker; const m = tk && bench.members.find((x) => x.s === tk);
+        addAssets[r.a] = r.acc === 'MF' ? { name: r.a, fund: true, sector: /saving/i.test(r.a) ? 'Cash & Savings' : 'Mutual Funds' } : { name: r.a, symbol: tk || undefined, sector: m ? m.sector : 'Unclassified' };
+      }
+    });
+    // kickbacks paid so far (the monthly statement's true-up is already in rc.fresh): compared with the ledger's rebates
+    // in the window NOT counting an earlier true-up there (two overlapping requested statements), which is replaced
+    if (!final) {
+      const earlier = next.filter(isTrueUp).sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : 0));
+      const reb = r2(next.filter((t) => t.t === 'Rebate' && t.d >= st.from && t.d <= st.to && !isTrueUp(t)).reduce((s, t) => s + t.amt, 0));
+      const up = r2(rc.kick - reb);
+      const note = `Commission kickbacks true-up to ${st.to} (statement ${fmt(rc.kick)} vs ledger ${fmt(reb)})`;
+      const keep = earlier.pop();
+      earlier.forEach((t) => { next = next.filter((x) => x !== t); removed.push(t); ops.push(`removed ${desc(t)} (an earlier kickbacks true-up, now part of the one to ${st.to})`); });
+      if (keep && Math.abs(up) < 0.05) { next = next.filter((x) => x !== keep); removed.push(keep); ops.push(`removed ${desc(keep)} (kickbacks true-up no longer needed)`); }
+      else if (keep) {
+        if (Math.abs(keep.amt - up) > 0.005 || keep.d !== st.to) { const before = desc(keep); Object.assign(keep, { d: st.to, amt: up, src: tag, note }); ops.push(`replaced kickbacks true-up ${before} → ${desc(keep)}`); }
+      } else if (Math.abs(up) >= 0.05) { const o = { id: newId(), d: st.to, t: 'Rebate', amt: up, acc: 'Main', src: tag, note }; next.push(o); ops.push(`added ${desc(o)}`); }
     }
-  });
-  // kickbacks paid so far (the monthly statement's true-up is already in rc.fresh)
-  if (!final) {
-    const reb = r2(next.filter((t) => t.t === 'Rebate' && t.d >= st.from && t.d <= st.to).reduce((s, t) => s + t.amt, 0));
-    const up = r2(rc.kick - reb);
-    if (Math.abs(up) >= 0.05) { const o = { id: newId(), d: st.to, t: 'Rebate', amt: up, acc: 'Main', src: tag, note: `Commission kickbacks true-up to ${st.to} (statement ${fmt(rc.kick)} vs ledger ${fmt(reb)})` }; next.push(o); ops.push(`added ${desc(o)}`); }
-  }
+    return { next, ops, removed, frozen, keptFunds, addAssets };
+  };
+  let b = build(false);
+  // kept fund piasters must never add up to a cash hold: past 0.50 EGP off the closing balance they are corrected after all
+  if (b.keptFunds.length && st.cash.end != null && Math.abs(cashTo(b.next, st.to) - st.cash.end) > 0.5) b = build(true);
+  const { next, ops, removed, frozen, addAssets } = b;
+  Object.keys(frozen).sort().forEach((m) => entry.notes.push(`left unchanged in closed ${lbl(m)}: ${frozen[m].join('; ')}`));
   // verify: the corrected ledger must re-reconcile cleanly
   const assets2 = { ...assets, ...addAssets };
   const rc2 = TS.reconcile(st, next, assets2, marks);
@@ -229,9 +283,9 @@ function applyStatement(st, entry, msg) {
     ops.push(`ticker ${al.ticker} recorded for "${al.name}" (the snapshot lists it as ${al.snapshotName || al.ticker})`);
   });
   const left = [];
-  rc2.fresh.filter((r) => !(r.acc === 'MF' && !st.mf)).forEach((r) => left.push(`still missing ${desc(r)}`));
-  rc2.conflicts.filter((c) => !(c.stmt.acc === 'MF' && !st.mf)).forEach((c) => left.push(`still booked differently: ${desc(c.ledger)}`));
-  rc2.ledgerOnly.filter(removable).forEach((t) => left.push(`still not on the statement: ${desc(t)}`));
+  rc2.fresh.filter((r) => !(r.acc === 'MF' && !st.mf) && !closedOf(r.d)).forEach((r) => left.push(`still missing ${desc(r)}`));
+  rc2.conflicts.filter((c) => !(c.stmt.acc === 'MF' && !st.mf) && !closedOf(c.ledger.d, c.stmt.d)).forEach((c) => left.push(`still booked differently: ${desc(c.ledger)}`));
+  rc2.ledgerOnly.filter((t) => removable(t) && !closedOf(t.d)).forEach((t) => left.push(`still not on the statement: ${desc(t)}`));
   const close = cashTo(next, st.to);
   if (st.cash.end != null && Math.abs(close - st.cash.end) > 1) left.push(`ledger cash on ${st.to} would be ${fmt(close)} but the statement closes at ${fmt(st.cash.end)}`);
   if (final) (rc2.holdings || []).filter((h) => h.ok === false).forEach((h) => left.push(`holdings differ: ${h.ticker} statement ${h.statementQty} vs ledger ${h.ledgerQty}${h.bonusHint ? ' — ' + h.bonusHint : ''}`));
@@ -245,8 +299,9 @@ function applyStatement(st, entry, msg) {
   }
   tx = next; Object.assign(assets, addAssets, aliasAssets); Object.assign(changed.newAssets, addAssets, aliasAssets);
   entry.changes.push(...ops); entry.removedRows = removed;
+  let cashMoved = false;
   if (st.cash.end != null && (!settings.cashDate || st.to >= settings.cashDate)) {
-    if (settings.cash !== st.cash.end || settings.cashDate !== st.to) entry.changes.push(`broker cash set to ${fmt(st.cash.end)} on ${st.to} (was ${fmt(settings.cash)}${settings.cashDate ? ' on ' + settings.cashDate : ''})`);
+    if (settings.cash !== st.cash.end || settings.cashDate !== st.to) { cashMoved = true; entry.changes.push(`broker cash set to ${fmt(st.cash.end)} on ${st.to} (was ${fmt(settings.cash)}${settings.cashDate ? ' on ' + settings.cashDate : ''})`); }
     settings = { ...settings, cash: st.cash.end, cashDate: st.to, cashSource: `Thndr statement to ${st.to}` }; changed.settings = true;
   }
   if (final) {
@@ -261,7 +316,9 @@ function applyStatement(st, entry, msg) {
     imports[M] = changed.imports[M];
     entry.monthly = M;
   }
-  return ops.length || changed.settings ? 'applied' : 'unchanged';
+  // applied = the ledger changed, broker cash moved, or a month was posted (a clean monthly statement whose only work is
+  // the month-end mark is still a posted month); re-stamping identical broker cash alone is 'unchanged'
+  return ops.length || cashMoved || final ? 'applied' : 'unchanged';
 }
 
 // ---------- run ----------
@@ -303,10 +360,10 @@ async function run() {
     }
     state.seen[msg.id] = { subject: msg.subject, date: msg.date, kind, status: entry.status, at: new Date().toISOString() };
   }
-  // missing monthly statement alert (once per month, from the 10th)
-  const pm = prevMonth(today.slice(0, 7));
+  // missing monthly statement alert: raised once per month (state.alerts[M]), listing every month still missing
+  const missing = missingStatements(today, settings, imports, marks);
   let alert = null;
-  if (+today.slice(8) >= 10 && !(imports[pm] && imports[pm].fullMonth) && !state.alerts[pm] && pm >= settings.inception) { alert = pm; state.alerts[pm] = today; }
+  if (missing.some((m) => !state.alerts[m])) { alert = missing; missing.forEach((m) => { if (!state.alerts[m]) state.alerts[m] = today; }); }
   state.lastRun = new Date().toISOString();
   state.toolSha = toolSha();
 
@@ -326,16 +383,17 @@ async function run() {
   const lines = [];
   applied.forEach((e) => { lines.push(`${e.subject}${e.period ? ` (${e.period})` : ''}:`); e.changes.forEach((c) => lines.push('  • ' + c)); e.notes.forEach((c) => lines.push('  • ' + c)); });
   holds.forEach((e) => { lines.push(`NEEDS REVIEW — ${e.subject}${e.period ? ` (${e.period})` : ''}: nothing from this email was saved.`); e.reasons.forEach((c) => lines.push('  • ' + c)); if (e.proposed && e.proposed.length) { lines.push('  Proposed changes that were not applied:'); e.proposed.forEach((c) => lines.push('    – ' + c)); } });
-  if (alert) lines.push(`The ${lbl(alert)} monthly statement has not arrived yet (checked on ${today}).`);
+  if (alert) lines.push(`Monthly statement${alert.length > 1 ? 's' : ''} still missing: ${alert.map(lbl).join(', ')} (checked on ${today}).`);
   const monthlyPosted = applied.filter((e) => e.monthly).map((e) => e.monthly);
+  const who = settings.name || 'Portfolio';
   const summary = {
     today, status: holds.length ? 'hold' : applied.length ? 'changed' : 'nochange',
     processed: processed.length, applied: applied.length, held: holds.length, ignored: log.length - processed.length,
     monthlyPosted, monthlyPending: monthlyPending(imports, monthlyPosted), alert, toolSha: state.toolSha,
     writes: fs.readdirSync(path.join(out, 'write')),
     email: applied.length || holds.length || alert ? {
-      subject: holds.length ? `Portfolio: ${holds.length} Thndr email${holds.length > 1 ? 's' : ''} need${holds.length > 1 ? '' : 's'} your review` : applied.some((e) => e.monthly) ? `Portfolio: ${applied.filter((e) => e.monthly).map((e) => lbl(e.monthly)).join(', ')} statement posted` : alert && !applied.length ? `Portfolio: ${lbl(alert)} Thndr statement has not arrived` : 'Portfolio updated from Thndr',
-      text: lines.join('\n') + '\n\nhttps://claude.ai/artifact/PNjUN5wQkvgtZDcTML1HFe · https://khaledamin2001-lgtm.github.io/portfolio/',
+      subject: holds.length ? `${who}: ${holds.length} Thndr email${holds.length > 1 ? 's' : ''} need${holds.length > 1 ? '' : 's'} your review` : applied.some((e) => e.monthly) ? `${who}: ${applied.filter((e) => e.monthly).map((e) => lbl(e.monthly)).join(', ')} statement posted` : alert && !applied.length ? `${who}: ${alert.map(lbl).join(', ')} Thndr statement${alert.length > 1 ? 's have' : ' has'} not arrived` : `${who}: updated from Thndr`,
+      text: lines.join('\n') + '\n\n' + [PAGE_URLS[settings.portfolioId], SITE_URL].filter(Boolean).join(' · '),
       notify: holds.length > 0 || !!alert || applied.some((e) => e.monthly || e.kind !== 'invoice'),
     } : null,
     log: log.map(({ removedRows, ...e }) => e),
@@ -356,10 +414,27 @@ function monthlyPending(imp, posted) {
   });
   return [...out].sort();
 }
+// Months from settings.inception to last month with no monthly statement: no full-month import and a month-end mark
+// that is not from a statement ('statement' / 'reconstructed'). Last month counts only from the 10th. A month marked
+// 'price-estimate' before the first statement ever posted (no import dated before it) is not missing: those months
+// (Khaled's Aug–Nov 2025) have no holdings statements by design.
+function missingStatements(todayStr, set, imp, mk) {
+  const last = prevMonth(todayStr.slice(0, 7)), first = Object.keys(imp || {}).sort()[0], out = [];
+  if (!set || !/^\d{4}-\d{2}$/.test(String(set.inception || '').slice(0, 7))) return out;
+  for (let m = set.inception.slice(0, 7); m <= last; m = nextMonth(m)) {
+    if (m === last && +todayStr.slice(8) < 10) continue;
+    if (imp && imp[m] && imp[m].fullMonth) continue;
+    const src = mk && mk[m] && mk[m].source;
+    if (src === 'statement' || src === 'reconstructed') continue;
+    if (src === 'price-estimate' && !(first && first < m)) continue;
+    out.push(m);
+  }
+  return out;
+}
 // sha256 (first 12 hex) of the tool files that ran, so every write records which code produced it
 function toolSha() {
   const sha = (f) => { const p = path.join(__dirname, f); return fs.existsSync(p) ? crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex').slice(0, 12) : null; };
   return { sync: sha('sync.js'), statement: sha('statement.js'), engine: sha('engine.js'), engine2: sha('engine2.js'), at: new Date().toISOString() };
 }
 if (require.main === module) run().catch((e) => { console.error(e); process.exit(1); });
-module.exports = { parseInvoices, applyInvoice, applyInvoiceEmail, applyStatement, monthlyPending, toolSha, run, _state: () => ({ tx, assets, changed, settings, marks, log }), _reset };
+module.exports = { parseInvoices, applyInvoice, applyInvoiceEmail, applyStatement, monthlyPending, missingStatements, lbl, toolSha, run, _state: () => ({ tx, assets, changed, settings, marks, log }), _reset };
