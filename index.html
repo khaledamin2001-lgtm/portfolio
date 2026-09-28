@@ -527,7 +527,10 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
    Every function is pure: data in, numbers out. Dates are 'YYYY-MM-DD', months 'YYYY-MM'. */
 (function (root) {
   'use strict';
-  const TYPES = ['Deposit', 'Withdrawal', 'Buy', 'Sell', 'Dividend', 'Fee', 'Rebate'];
+  // Bonus = corporate action: q new shares for free (amt 0); the average cost falls, nothing else moves.
+  const TYPES = ['Deposit', 'Withdrawal', 'Buy', 'Sell', 'Dividend', 'Fee', 'Rebate', 'Bonus'];
+  // Same-day order. Thndr prints a "Sell Same Day" before the buy it closes, so money in → buys → income → sells → money out.
+  const DAY_ORDER = { Deposit: 0, Buy: 1, Bonus: 1, Dividend: 2, Rebate: 2, Fee: 2, Sell: 3, Withdrawal: 4 };
 
   // ---------- date helpers ----------
   const pad = (n) => String(n).padStart(2, '0');
@@ -593,19 +596,30 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
   }
 
   // ---------- ledger: average-cost engine (🗂️ Data helper columns K–P) ----------
-  function sortLedger(tx) {
-    return tx.map((t, i) => ({ ...t, _i: i })).sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : a._i - b._i));
+  // Date, then type priority (DAY_ORDER), then original position — stable inside a priority.
+  // opts.sameDay: 'type' (default) | 'ledger' (legacy: original row order inside a day, as the workbook had it).
+  function sortLedger(tx, opts) {
+    const byType = !(opts && opts.sameDay === 'ledger');
+    const pr = (t) => (byType ? (DAY_ORDER[t.t] != null ? DAY_ORDER[t.t] : 2) : 0);
+    return tx.map((t, i) => ({ ...t, _i: i })).sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : pr(a) - pr(b) || a._i - b._i));
   }
-  function runLedger(tx) {
+  // A sell larger than the shares held is flagged r.oversold = q − held. Tolerance: 0.5 sh or 1% of the shares held; for fund
+  // rows (MF account or a savings fund) 1% of the larger of shares held and units ever bought, because the savings fund's sells
+  // run ~0.2% over its buys as interest accrues in extra units, and its small interest-only sells land after full redemption.
+  function runLedger(tx, opts) {
     const run = {};
-    return sortLedger(tx).map((t) => {
+    return sortLedger(tx, opts).map((t) => {
       const r = { ...t, basis: 0 };
-      if (!t.a || (t.t !== 'Buy' && t.t !== 'Sell')) return r;
-      const s = run[t.a] || (run[t.a] = { sh: 0, cost: 0 });
-      if (t.t === 'Buy') { s.sh += t.q || 0; s.cost += Math.abs(t.amt || 0); }
+      if (!t.a || (t.t !== 'Buy' && t.t !== 'Sell' && t.t !== 'Bonus')) return r;
+      const s = run[t.a] || (run[t.a] = { sh: 0, cost: 0, bought: 0 });
+      if (t.t === 'Buy') { s.sh += t.q || 0; s.bought += t.q || 0; s.cost += Math.abs(t.amt || 0); }
+      else if (t.t === 'Bonus') { s.sh += t.q || 0; s.bought += t.q || 0; }
       else {
-        r.basis = s.sh > 0 ? (s.cost / s.sh) * (t.q || 0) : 0;
-        s.sh -= t.q || 0; s.cost -= r.basis;
+        const q = t.q || 0;
+        const fundish = t.acc === 'MF' || /saving/i.test(t.a);
+        if (q > s.sh + Math.max(0.5, 0.01 * (fundish ? Math.max(s.sh, s.bought) : s.sh))) r.oversold = q - s.sh;
+        r.basis = s.sh > 0 ? (s.cost / s.sh) * q : 0;
+        s.sh -= q; s.cost -= r.basis;
       }
       return r;
     });
@@ -629,11 +643,12 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     const order = [];
     const P = {};
     ledger.forEach((t) => {
-      if (t.t === 'Buy' && t.a && !P[t.a]) { P[t.a] = { name: t.a, firstBuy: t.d, lastSell: null, bought: 0, sold: 0, buyCost: 0, proceeds: 0, soldBasis: 0, divs: 0 }; order.push(t.a); }
+      if ((t.t === 'Buy' || t.t === 'Bonus') && t.a && !P[t.a]) { P[t.a] = { name: t.a, firstBuy: t.d, lastSell: null, bought: 0, bonus: 0, sold: 0, buyCost: 0, proceeds: 0, soldBasis: 0, divs: 0 }; order.push(t.a); }
     });
     ledger.forEach((t) => {
       const p = P[t.a];
       if (t.t === 'Buy' && p) { p.bought += t.q || 0; p.buyCost += Math.abs(t.amt || 0); }
+      if (t.t === 'Bonus' && p) { p.bonus += t.q || 0; }
       if (t.t === 'Sell' && p) { p.sold += t.q || 0; p.proceeds += t.amt || 0; p.soldBasis += t.basis; if (!p.lastSell || t.d > p.lastSell) p.lastSell = t.d; }
     });
     const thr = settings.openThreshold ?? 0.5;
@@ -641,7 +656,7 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
       const p = P[name], a = byName[name] || {};
       const sym = a.symbol || '';
       p.divs = sum(ledger.filter((t) => t.t === 'Dividend' && t.a && (t.a === name || (sym && t.a === sym))).map((t) => t.amt || 0));
-      const open = p.bought - p.sold;
+      const open = p.bought + p.bonus - p.sold;
       const isOpen = open > thr;
       let px = isOpen ? effectivePrice(a, market, settings) : null;
       if (isOpen && !px && fallback) { const f = fallback(name); if (f) px = { price: f.p, date: f.d, source: 'model' }; }
@@ -655,7 +670,7 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
       const stop = +a.stop || 0, target = +a.target || 0;
       return {
         name, symbol: sym, sector: a.sector || 'Unclassified', firstBuy: p.firstBuy, lastSell: p.lastSell,
-        bought: p.bought, sold: p.sold, open, status: isOpen ? 'Open' : 'Closed',
+        bought: p.bought, bonus: p.bonus, sold: p.sold, open, status: isOpen ? 'Open' : 'Closed',
         buyCost: p.buyCost, proceeds: p.proceeds, soldBasis: p.soldBasis, openCost, divs: p.divs, realized,
         price: px ? px.price : null, priceDate: px ? px.date : null, priceSource: px ? px.source : null, chg: px && px.source === 'auto' ? px.chg : null,
         avgCost: isOpen && open ? openCost / open : null,
@@ -677,7 +692,11 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
   // ---------- monthly engine (⚙️ Model §A) ----------
   // marks: {"YYYY-MM": {cash, securities, benchReturn, benchClose, usdegp, cpi, provisional, note}}
   // live (optional): {month, cash, securities, benchClose, prevBenchClose, usdegp} replaces a provisional/missing current-month row.
-  function monthly(settings, marks, ledger, live) {
+  // opts.flowTiming: 'dietz' (default) — Modified Dietz, each flow weighted by the fraction of the month it was invested
+  //                  (start-of-day: a deposit on the 1st counts fully, on the 16th of a 31-day month 16/31);
+  //                  'start' — the workbook's legacy formula, every flow assumed on day 1. row.retSimple always keeps the legacy figure.
+  function monthly(settings, marks, ledger, live, opts) {
+    const dietz = !(opts && opts.flowTiming === 'start');
     const out = [];
     const inc = settings.inception;
     const keys = Object.keys(marks || {}).filter((k) => k >= inc).sort();
@@ -700,15 +719,20 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
       const inM = ledger.filter((t) => t.d >= from && t.d <= to);
       const s = (type) => sum(inM.filter((t) => t.t === type).map((t) => t.amt || 0));
       const deposits = Math.abs(s('Deposit')), withdrawals = Math.abs(s('Withdrawal'));
+      // day-weighted net flow (Modified Dietz): w = (days in month − day + 1) / days in month
+      const CD = +to.slice(8);
+      const weightedFlow = sum(inM.filter((t) => t.t === 'Deposit' || t.t === 'Withdrawal').map((t) => ((CD - +t.d.slice(8) + 1) / CD) * (t.amt || 0)));
       const row = {
         month: m, has, cash: mk.cash, securities: mk.securities, value: has ? mk.cash + mk.securities : null,
-        deposits, withdrawals, netFlow: deposits - withdrawals, dividends: s('Dividend'),
+        deposits, withdrawals, netFlow: deposits - withdrawals, weightedFlow, dividends: s('Dividend'),
         buys: Math.abs(s('Buy')), sells: s('Sell'), trades: inM.filter((t) => t.t === 'Buy' || t.t === 'Sell').length,
         provisional: !!mk.provisional, live: isLive, note: mk.note || '',
+        source: mk.source || (has ? 'typed' : null), estimate: !!mk.estimate,
         benchClose: mk.benchClose ?? null, usdegp: typeof mk.usdegp === 'number' ? mk.usdegp : null, cpi: typeof mk.cpi === 'number' ? mk.cpi : null,
       };
       row.opening = prev ? prev.value : settings.openingValue;
-      row.ret = has && row.opening != null ? row.value / (row.opening + row.netFlow) - 1 : null;
+      row.retSimple = has && row.opening != null && row.opening + row.netFlow > 0 ? row.value / (row.opening + row.netFlow) - 1 : null;
+      row.ret = dietz && has && row.opening != null && row.opening + weightedFlow > 0 ? (row.value - row.opening - row.netFlow) / (row.opening + weightedFlow) : row.retSimple;
       // benchmark: closes win over typed %, as in the workbook
       const prevClose = isLive && live.prevBenchClose ? live.prevBenchClose : (prev ? prev.benchClose : settings.benchCloseStart || null);
       if (!has) row.bench = null;
@@ -874,8 +898,22 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     add('Transaction types are all recognised', bad.length ? 'error' : 'ok', bad.length ? `${bad.length} rows with unknown type` : `${tx.length} transactions`);
     const gaps = months.filter((r) => !r.has);
     add('Monthly marks have no gaps', gaps.length ? 'error' : 'ok', gaps.length ? `Missing: ${gaps.map((r) => fmtMonth(r.month)).join(', ')}` : `${months.length} months through ${fmtMonth(months[months.length - 1].month)}`);
-    const unconfirmed = months.filter((r) => r.provisional && !r.live);
-    add('Past month-ends are confirmed from statements', unconfirmed.length ? 'warn' : 'ok', unconfirmed.length ? `Provisional: ${unconfirmed.map((r) => fmtMonth(r.month)).join(', ')}` : 'All closed months confirmed');
+    const closedM = months.filter((r) => !r.live);
+    const est = closedM.filter((r) => r.has && (r.estimate || r.source === 'price-estimate'));
+    const noVal = closedM.filter((r) => !r.has);
+    const prov = closedM.filter((r) => r.has && r.provisional && !r.estimate && r.source !== 'price-estimate');
+    add('Closed months confirmed by Thndr statements', noVal.length ? 'error' : est.length || prov.length ? 'warn' : 'ok',
+      noVal.length ? `No value: ${noVal.map((r) => fmtMonth(r.month)).join(', ')}` : est.length || prov.length ? [est.length ? `estimated from closing prices: ${est.map((r) => fmtMonth(r.month)).join(', ')}` : '', prov.length ? `provisional: ${prov.map((r) => fmtMonth(r.month)).join(', ')}` : ''].filter(Boolean).join(' · ') : 'All closed months from statements');
+    const over = ctx.ledger ? ctx.ledger.filter((t) => t.oversold) : [];
+    add('Sells never exceed shares held', over.length ? 'error' : 'ok', over.length ? over.slice(0, 6).map((t) => `${t.a} ${t.d}: sold ${fmtNum(t.q)}, held ${fmtNum(t.q - t.oversold)}`).join('; ') + (over.length > 6 ? ` … ${over.length} rows` : '') : 'Every sell covered by shares held');
+    const seen = {}, dups = [];
+    tx.forEach((t) => { if (t.id != null) { if (seen[t.id] && !dups.includes(t.id)) dups.push(t.id); seen[t.id] = true; } });
+    add('Ledger ids are unique', dups.length ? 'error' : 'ok', dups.length ? `Duplicate ids: ${dups.slice(0, 8).join(', ')}` : `${Object.keys(seen).length} ids`);
+    // end-of-day balances (a same-day sale may fund a buy, so the intra-day order does not matter)
+    let bal = 0, neg = null;
+    const sorted = sortLedger(tx, { sameDay: ctx.sameDay });
+    for (let i = 0; i < sorted.length && !neg; i++) { bal += sorted[i].amt || 0; if ((i + 1 === sorted.length || sorted[i + 1].d !== sorted[i].d) && bal < -1) neg = { d: sorted[i].d, bal }; }
+    add('Ledger cash never negative', neg ? 'warn' : 'ok', neg ? `First below zero on ${neg.d}: ${fmtNum(neg.bal)} EGP at end of day` : 'End-of-day cash balance never below zero');
     const benchMissing = months.filter((r) => r.has && r.bench == null);
     add('Benchmark return present every month', benchMissing.length ? 'warn' : 'ok', benchMissing.length ? `Missing: ${benchMissing.map((r) => fmtMonth(r.month)).join(', ')}` : 'EGX30 Capped complete');
     const gap = pos.rows.filter((r) => r.shareGap !== 0);
@@ -889,13 +927,13 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
   }
   const fmtNum = (x) => (x == null ? '—' : x.toLocaleString('en-US', { maximumFractionDigits: 2, minimumFractionDigits: 2 }));
 
-  // One call that runs the whole model.
+  // One call that runs the whole model. opts: {today, live, fallback, flowTiming: 'dietz' | 'start', sameDay: 'type' | 'ledger'}
   function run(data, sel, opts) {
     opts = opts || {};
     const today = opts.today || cairoToday();
     const settings = data.settings;
     const tx = data.tx || [];
-    const ledger = runLedger(tx);
+    const ledger = runLedger(tx, { sameDay: opts.sameDay });
     const assets = Object.values(data.assets || {});
     const market = data.market || null;
     const ledgerCash = sum(tx.map((t) => t.amt || 0));
@@ -920,18 +958,18 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
         };
       }
     }
-    const months = monthly(settings, data.marks || {}, ledger, live);
+    const months = monthly(settings, data.marks || {}, ledger, live, { flowTiming: opts.flowTiming });
     const range = periodRange(sel, settings, months);
     const pos = positions(ledger, assets, market, settings, today, range, opts.fallback);
     const stats = periodStats(months, range, ledger, settings, pos);
     return {
-      today, settings, ledger, months, range, pos, stats, ledgerCash, ledgerCashAt, liveCash, live,
+      today, settings, ledger, months, range, pos, stats, ledgerCash, ledgerCashAt, liveCash, live, flowTiming: opts.flowTiming || 'dietz', sameDay: opts.sameDay || 'type',
       sectors: sectors(pos), conc: concentration(pos, settings),
-      checks: checks({ tx, months, range, pos, settings, today, ledgerCash: ledgerCashAt }),
+      checks: checks({ tx, ledger, months, range, pos, settings, today, ledgerCash: ledgerCashAt, sameDay: opts.sameDay }),
     };
   }
 
-  const api = { run, runLedger, positions, monthly, periodRange, periodStats, sectors, xirr, eom, addMonths, fmtMonth, monthOf, dayNum, cairoToday, effectivePrice, TYPES, PERIOD_TYPES, sortLedger };
+  const api = { run, runLedger, positions, monthly, periodRange, periodStats, sectors, xirr, eom, addMonths, fmtMonth, monthOf, dayNum, cairoToday, effectivePrice, TYPES, PERIOD_TYPES, DAY_ORDER, sortLedger };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.PE = api;
 })(this);
 
@@ -972,19 +1010,20 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     return { days: [...new Set(days)].sort(), at, has: (s) => !!series[s], lastDayOnOrBefore, first: days[0] || null, last: days[days.length - 1] || null };
   }
 
-  // Price of one asset on a date: market close > gold-indexed last trade > last trade price.
+  // Price of one asset on a date: market close > gold-indexed last trade > last traded NAV (funds) > par 1 for the savings fund only
+  // when it has never traded.
   function makePricer(assets, ledger, pb) {
     const byName = {}; Object.values(assets || {}).forEach((a) => { byName[a.name] = a; });
     const trades = {}; // name -> [[date, price]]
-    ledger.forEach((t) => { if ((t.t === 'Buy' || t.t === 'Sell') && t.a && t.p > 0) (trades[t.a] || (trades[t.a] = [])).push([t.d, t.p]); });
+    PE.sortLedger(ledger).forEach((t) => { if ((t.t === 'Buy' || t.t === 'Sell') && t.a && t.p > 0) (trades[t.a] || (trades[t.a] = [])).push([t.d, t.p]); });
     const lastTrade = (name, date) => { const a = trades[name]; if (!a) return null; let r = null; for (const x of a) { if (x[0] <= date) r = x; else break; } return r; };
     return function price(name, date) {
       const a = byName[name] || {};
       if (a.symbol && a.symbol !== 'SAVINGS' && pb.has(a.symbol)) { const c = pb.at(a.symbol, date); if (c != null) return { p: c, src: 'close' }; }
       const lt = lastTrade(name, date);
       if (a.proxy && lt && pb.has(a.proxy)) { const now = pb.at(a.proxy, date), then = pb.at(a.proxy, lt[0]); if (now && then) return { p: lt[1] * now / then, src: 'proxy' }; }
-      if (a.symbol === 'SAVINGS' || name === 'thndrsavings') return { p: 1, src: 'par' };
       if (lt) return { p: lt[1], src: 'trade' };
+      if (a.symbol === 'SAVINGS' || name === 'thndrsavings') return { p: 1, src: 'par' };
       return null;
     };
   }
@@ -1005,7 +1044,7 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
       while (i < tx.length && tx[i].d <= d) {
         const t = tx[i++]; cash += t.amt || 0;
         if (t.t === 'Deposit' || t.t === 'Withdrawal') flow += t.amt || 0;
-        if (t.a && (t.t === 'Buy' || t.t === 'Sell')) sh[t.a] = (sh[t.a] || 0) + (t.t === 'Buy' ? 1 : -1) * (t.q || 0);
+        if (t.a && (t.t === 'Buy' || t.t === 'Sell' || t.t === 'Bonus')) sh[t.a] = (sh[t.a] || 0) + (t.t === 'Sell' ? -1 : 1) * (t.q || 0);
       }
       let mv = 0, px = 0;
       Object.keys(sh).forEach((n) => { if (sh[n] > 0.5) { const p = price(n, d); if (p) { mv += sh[n] * p.p; if (p.src !== 'close' && p.src !== 'par') px += sh[n] * p.p; } else unpriced.add(n); } });
@@ -1079,9 +1118,10 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     PE.sortLedger(ledger).forEach((t) => {
       if (t.d > date) return;
       cash += t.amt || 0;
-      if (!t.a || (t.t !== 'Buy' && t.t !== 'Sell')) return;
+      if (!t.a || (t.t !== 'Buy' && t.t !== 'Sell' && t.t !== 'Bonus')) return;
       const s = sh[t.a] || 0, c = cost[t.a] || 0;
       if (t.t === 'Buy') { sh[t.a] = s + (t.q || 0); cost[t.a] = c + Math.abs(t.amt || 0); }
+      else if (t.t === 'Bonus') { sh[t.a] = s + (t.q || 0); cost[t.a] = c; }
       else { const b = s > 0 ? (c / s) * (t.q || 0) : 0; sh[t.a] = s - (t.q || 0); cost[t.a] = c - b; }
     });
     const byName = {}; Object.values(assets || {}).forEach((a) => { byName[a.name] = a; });
@@ -1092,14 +1132,46 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     return { rows, cash, mv: sum(rows.map((r) => r.mv || 0)) };
   }
 
+  // ---------- month-close estimates ----------
+  // For every closed month (inception … the month before today's) whose mark is missing, provisional or has no cash, build a
+  // row from the ledger and the price book: cash = ledger cash through month-end, securities = holdingsAt(month-end).mv.
+  // Rows from statements, reconstructed rows and non-provisional typed rows are never touched. Returns a NEW marks object.
+  function estimateMarks(settings, marks, ledger, assets, pb, today) {
+    const out = { ...(marks || {}) };
+    if (!settings || !settings.inception || !pb || !pb.days || !pb.days.length) return out;
+    const lastM = addMonths(monthOf(today || PE.cairoToday()), -1);
+    const tx = PE.sortLedger(ledger);
+    for (let m = settings.inception; m <= lastM; m = addMonths(m, 1)) {
+      const mk = marks && marks[m];
+      if (mk && !mk.provisional && mk.cash != null) continue;
+      if (mk && (mk.source === 'statement' || mk.source === 'reconstructed')) continue;
+      const end = eom(m), lastDay = pb.lastDayOnOrBefore(end);
+      if (!lastDay || lastDay < `${m}-01`) continue;
+      const cash = sum(tx.filter((t) => t.d <= end).map((t) => t.amt || 0));
+      const securities = holdingsAt(ledger, assets, pb, end).mv;
+      const row = { ...(mk || {}), cash, securities, provisional: true, estimate: true, source: 'price-estimate',
+        estimateNote: `Estimated from closing prices on ${lastDay}; replaced when the Thndr statement is posted` };
+      if (typeof row.benchClose !== 'number') { const b = pb.at('EGX30CAPPED', lastDay); if (typeof b === 'number') row.benchClose = b; else delete row.benchClose; }
+      if (typeof row.usdegp !== 'number') { const fx = pb.at('USDEGP', lastDay); if (typeof fx === 'number') row.usdegp = fx; else delete row.usdegp; }
+      if (mk && typeof mk.cash === 'number' && mk.cash !== cash) row.typedCash = mk.cash;
+      if (mk && typeof mk.securities === 'number' && mk.securities !== securities) row.typedSecurities = mk.securities;
+      out[m] = row;
+    }
+    return out;
+  }
+
   // ---------- Brinson-Fachler sector attribution, Carino-linked ----------
   // Monthly: holdings at the prior month-end, buy-and-hold over the month.
   //   allocation_s = (wp − wb)(rb − B*)     selection_s = wp(rp − rb)   (interaction included in selection)
   //   trading      = R − R_h  (effect of trades during the month)     replication = B* − B (model vs real index)
   // Sectors absent from the index use rb = B* (neutral); cash-like sectors use rb = 0 so idle cash shows as allocation.
+  // bench.actions (optional): [{s, date, ratio}] — corporate actions; ratio = new shares ÷ old shares, so a member's
+  // unadjusted price drops by 1/ratio from `date` and its return over [d0, d1] is p1 × Π ratio(d0 < date ≤ d1) / p0 − 1.
+  const actionFactor = (actions, s, d0, d1) => (actions || []).reduce((f, a) => (a.s === s && a.date > d0 && a.date <= d1 && a.ratio > 0 ? f * a.ratio : f), 1);
   function attribution(months, range, ledger, assets, pb, bench, today) {
     if (!pb.days.length || !bench) return null;
     const P = months.filter((r) => r.has && r.month >= range.from && r.month <= range.to && r.ret != null && r.bench != null);
+    const acts = bench.actions || [];
     const out = [];
     P.forEach((r) => {
       const d0 = pb.lastDayOnOrBefore(eom(addMonths(r.month, -1)));
@@ -1114,7 +1186,7 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
       H.rows.forEach((h) => { if (!h.mv) return; const p1 = price(h.name, d1); const ret = p1 && h.price ? p1.p / h.price - 1 : 0; addP(h.sector, h.mv / total, ret); });
       if (cashW) addP('Cash & Savings', cashW / total, 0);
       const bw = benchWeights(bench, pb, d0) || [];
-      bw.forEach((m) => { const p1 = pb.at(m.s, d1); const ret = p1 ? p1 / m.p - 1 : 0; const x = sec[m.sector] || (sec[m.sector] = { wp: 0, wr: 0, wb: 0, wbr: 0 }); x.wb += m.w; x.wbr += m.w * ret; });
+      bw.forEach((m) => { const p1 = pb.at(m.s, d1); const ret = p1 ? p1 * actionFactor(acts, m.s, d0, d1) / m.p - 1 : 0; const x = sec[m.sector] || (sec[m.sector] = { wp: 0, wr: 0, wb: 0, wbr: 0 }); x.wb += m.w; x.wbr += m.w * ret; });
       const Bs = sum(Object.values(sec).map((x) => x.wbr));
       const Rh = sum(Object.values(sec).map((x) => x.wr));
       const rows = Object.entries(sec).map(([s, x]) => {
@@ -1160,6 +1232,37 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     if (cash > 0) wp['Cash & Savings'] = (wp['Cash & Savings'] || 0) + cash / tot;
     const secs = [...new Set([...Object.keys(wb), ...Object.keys(wp)])];
     return { date: d, rows: secs.map((s) => ({ sector: s, wp: wp[s] || 0, wb: wb[s] || 0, active: (wp[s] || 0) - (wb[s] || 0) })).sort((a, b) => b.active - a.active), members: bw.sort((a, b) => b.w - a.w) };
+  }
+
+  // ---------- trade-price sanity and corporate actions ----------
+  // 'Trade prices agree with closing prices': Buy/Sell rows of quoted stocks whose price is more than 6% off that day's close.
+  // 'Bonus shares booked': every action where the owner held the stock the day before, but no Bonus row within 7 days of it.
+  function tradeChecks(ledger, assets, pb, actions) {
+    const out = [];
+    const byName = {}; Object.values(assets || {}).forEach((a) => { byName[a.name] = a; });
+    const quoted = (a) => a && a.symbol && a.symbol !== 'SAVINGS' && !a.fund && !a.proxy && pb && pb.has(a.symbol);
+    const off = [];
+    if (pb && pb.days && pb.days.length) ledger.forEach((t) => {
+      if ((t.t !== 'Buy' && t.t !== 'Sell') || !t.a || !(t.p > 0)) return;
+      const a = byName[t.a]; if (!quoted(a)) return;
+      const c = pb.at(a.symbol, t.d); if (!(c > 0)) return;
+      if (Math.abs(t.p / c - 1) > 0.06) off.push(`${a.symbol} ${t.d}: traded ${t.p} vs close ${c}`);
+    });
+    out.push({ label: 'Trade prices agree with closing prices', status: off.length ? 'warn' : 'ok', detail: off.length ? off.slice(0, 8).join('; ') + (off.length > 8 ? ` … ${off.length} rows` : '') : 'Every trade within 6% of that day\'s close' });
+    const missing = [];
+    (actions || []).forEach((ac) => {
+      if (!ac || !ac.s || !ac.date || !(ac.ratio > 1)) return;
+      const names = Object.values(assets || {}).filter((a) => a.symbol === ac.s).map((a) => a.name); if (!names.length) return;
+      const before = new Date(Date.UTC(+ac.date.slice(0, 4), +ac.date.slice(5, 7) - 1, +ac.date.slice(8, 10) - 1)).toISOString().slice(0, 10);
+      const H = holdingsAt(ledger, assets, pb, before);
+      const held = sum(H.rows.filter((r) => names.includes(r.name)).map((r) => r.shares));
+      if (!(held > 0.5)) return;
+      const lo = dayNum(ac.date) - 7, hi = dayNum(ac.date) + 7;
+      const booked = ledger.some((t) => t.t === 'Bonus' && names.includes(t.a) && dayNum(t.d) >= lo && dayNum(t.d) <= hi);
+      if (!booked) missing.push(`${ac.s}: bonus of about ${Math.round(held * (ac.ratio - 1))} shares on ${ac.date} (ratio ${ac.ratio}) has no Bonus row — check the statement`);
+    });
+    out.push({ label: 'Bonus shares booked', status: missing.length ? 'warn' : 'ok', detail: missing.length ? missing.join('; ') : 'No corporate actions missing' });
+    return out;
   }
 
   // ---------- income ----------
@@ -1224,7 +1327,7 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
       bytd: Y.b.every((x, i) => x != null || Y.m[i] == null) ? Y.b.reduce((a, x) => (x == null ? a : a * (1 + x)), 1) - 1 : null }));
   }
 
-  const api = { priceBook, makePricer, daily, dailyStats, capWeights, benchWeights, holdingsAt, attribution, activeWeights, income, trailing, calendar, TRADING_DAYS };
+  const api = { priceBook, makePricer, daily, dailyStats, capWeights, benchWeights, holdingsAt, estimateMarks, attribution, activeWeights, tradeChecks, income, trailing, calendar, TRADING_DAYS };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.PA = api;
 })(this);
 
@@ -1355,6 +1458,18 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     const clean = (n) => n.replace(/^(Same Day|T\+\d|Instant)\s+/i, '').trim();
     if ((m = d.match(/^Buy (.+)$/))) return { t: 'Buy', name: clean(m[1]), q: r.qty, p: r.price, amt: r.value };
     if ((m = d.match(/^Sell (.+)$/))) return { t: 'Sell', name: clean(m[1]), q: r.qty, p: r.price, amt: r.value };
+    // bonus shares / stock dividend / free shares: no cash moves, the share count goes up. Thndr's exact wording is not
+    // known yet, so "Bonus", "Bonus Shares -", "Bonus Issue:", "Stock Dividend", "Free Shares" and the Arabic منحة are all
+    // accepted; the quantity comes from the "(n @ 0 EGP)" trade bracket, or failing that from "n shares" in the text.
+    if ((m = d.match(/^(?:Bonus(?:\s+(?:Shares?|Issue))?|Stock\s+Dividends?|Free\s+Shares?|منحة(?:\s+(?:أسهم|اسهم))?)(?=[\s\-:–—]|$)\s*[-:–—]?\s*(.*)$/i))) {
+      let rest = m[1].trim(), q = r.qty, ticker = null, isin = null, mm;
+      if ((mm = rest.match(/^(\S+)\s+-\s+(\S+)\s+-\s+([\d.,]+)\s+shares?/i))) { isin = mm[1]; ticker = mm[2]; if (q == null) q = num(mm[3]); rest = ''; }
+      else if (q == null && (mm = rest.match(/([\d,]+(?:\.\d+)?)\s*(?:shares?|أسهم|اسهم|سهم)/i))) { q = num(mm[1]); rest = rest.replace(mm[0], ' '); }
+      if (!(q > 0)) return { t: '?', amt: r.value, note: d, hint: 'bonus' };
+      const o = { t: 'Bonus', name: clean(rest).replace(/\s*\([^()]*$/, '').replace(/[\s\-:–—(),]+$/, '').trim(), q, amt: 0 };
+      if (ticker) { o.ticker = ticker; o.isin = isin; }
+      return o;
+    }
     if (/^Deposit/i.test(d)) return { t: 'Deposit', amt: r.value };
     if (/^Transfer Bank/i.test(d) || /^Withdraw/i.test(d)) return { t: r.value < 0 ? 'Withdrawal' : 'Deposit', amt: r.value };
     if (/^Transfer (To Mutual Funds Account|from main account)/i.test(d)) return { t: 'MFOut', amt: r.value };
@@ -1402,14 +1517,21 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
       if (c.t === 'Rebate') { kick += c.amt; return; }
       if (c.t === 'MFOut') { mfOut.push({ d: r.date, amt: c.amt, used: false }); return; }
       if (c.t === 'MFIn') { mfIn.push({ d: r.date, amt: c.amt, used: false }); return; }
-      if (c.t === '?') { unknown.push(r); return; }
+      if (c.t === '?') { unknown.push(c.hint ? Object.assign({}, r, { hint: c.hint }) : r); return; }
       const row = { d: r.date, t: c.t, amt: Math.round(c.amt * 100) / 100, acc: 'Main', src: 'statement' };
       if (c.t === 'Buy' || c.t === 'Sell') { const n = resolveName(c.name); row.a = n.name; row.q = c.q; row.p = c.p; if (!n.known) row.newAsset = { name: c.name, ticker: n.ticker }; }
+      if (c.t === 'Bonus') { // free shares: q only, amt 0
+        const a = c.ticker && bySym[c.ticker.toUpperCase()]; const n = a ? { name: a.name, known: true } : resolveName(c.name);
+        row.a = n.name; row.q = c.q; row.amt = 0; if (!n.known) row.newAsset = { name: c.name, ticker: c.ticker || n.ticker || null };
+      }
       if (c.t === 'Dividend') { const a = bySym[c.ticker.toUpperCase()]; row.a = a ? a.name : c.ticker; row.ticker = c.ticker; }
       if (c.t === 'Fee') row.a = c.name;
       cand.push(row);
     });
-    // mutual-fund trades: units and NAV from the fund account, cost from the matching cash transfer (includes the subscription fee)
+    // mutual-fund trades: units and NAV from the fund account, cost from the matching cash transfer (includes the subscription fee).
+    // One convention for every fund (thndrgold, thndrsavings, thndrmonthlysavings, ...): q = Thndr units and p = NAV per unit,
+    // exactly as the statement prints them in its "(units @ NAV EGP)" bracket. Nothing here converts to grams or ounces or
+    // special-cases the gold fund; the engine owns fund pricing and the conversion of old gram-denominated rows.
     if (st.mf) st.mf.rows.filter((r) => r.date && inWin(r.date) && /^(Buy|Sell) /.test(r.desc)).forEach((r) => {
       const buy = /^Buy /.test(r.desc); const name = r.desc.replace(/^(Buy|Sell) /, '').trim();
       const pool = buy ? mfOut : mfIn;
@@ -1431,6 +1553,7 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
       if (t.t !== r.t || used.has(t)) return false;
       const dd = days(t.d, r.d);
       if (r.t === 'Buy' || r.t === 'Sell') return (t.a || '').toLowerCase() === (r.a || '').toLowerCase() && dd <= 4 && (Math.abs((t.q || 0) - (r.q || 0)) < 0.01 || Math.abs(t.amt - r.amt) <= Math.max(1, Math.abs(r.amt) * 0.015));
+      if (r.t === 'Bonus') return (t.a || '').toLowerCase() === (r.a || '').toLowerCase() && dd <= 4 && Math.abs((t.q || 0) - (r.q || 0)) < 0.01;
       if (r.t === 'Dividend') return dd <= 10 && Math.abs(t.amt - r.amt) <= 0.05;
       return dd <= 4 && Math.abs(t.amt - r.amt) <= 0.05;
     };
@@ -1442,7 +1565,10 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
       const alt = pool.find((t) => !used.has(t) && t.t === r.t && days(t.d, r.d) <= 4 && Math.abs(t.amt - r.amt) <= Math.max(1, Math.abs(r.amt) * 0.015));
       if (alt) { used.add(alt); conflicts.push({ stmt: r, ledger: alt }); fresh.splice(i, 1); }
     }
-    const ledgerOnly = pool.filter((t) => !used.has(t) && t.d >= from && t.d <= to && t.t !== 'Rebate');
+    // A typed Bonus row is only "not on the statement" when the statement itself prints Bonus lines for that stock; a cash
+    // statement that shows no bonus line at all (no money moves) must not delete the owner's own Bonus rows.
+    const stmtBonus = new Set(cand.filter((r) => r.t === 'Bonus').map((r) => (r.a || '').toLowerCase()));
+    const ledgerOnly = pool.filter((t) => !used.has(t) && t.d >= from && t.d <= to && t.t !== 'Rebate' && (t.t !== 'Bonus' || stmtBonus.has((t.a || '').toLowerCase())));
     // kickbacks: compare the month's total with ledger rebates dated in the month; post only the difference
     const ledgerReb = tx.filter((t) => t.t === 'Rebate' && inWin(t.d)).reduce((s, t) => s + (t.amt || 0), 0);
     const trueUp = Math.round((kick - ledgerReb) * 100) / 100;
@@ -1451,12 +1577,14 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     let holdings = null;
     if (st.snapshot) {
       const sh = {};
-      tx.concat(fresh).forEach((t) => { if (t.d <= to && t.a && (t.t === 'Buy' || t.t === 'Sell')) sh[t.a] = (sh[t.a] || 0) + (t.t === 'Buy' ? 1 : -1) * (t.q || 0); });
+      tx.concat(fresh).forEach((t) => { if (t.d <= to && t.a && (t.t === 'Buy' || t.t === 'Sell' || t.t === 'Bonus')) sh[t.a] = (sh[t.a] || 0) + (t.t === 'Sell' ? -1 : 1) * (t.q || 0); });
       holdings = st.snapshot.holdings.map((h) => {
         const a = bySym[h.ticker.toUpperCase()] || byLower[h.ticker.toLowerCase()] || (h.name && byLower[h.name.toLowerCase()]);
         const name = a ? a.name : h.ticker;
         const ledgerQty = sh[name] || 0;
-        return { ticker: h.ticker, name, kind: h.kind, statementQty: h.qty, ledgerQty, value: h.value, ok: h.kind === 'fund' ? null : Math.abs(ledgerQty - h.qty) < 0.5 };
+        const o = { ticker: h.ticker, name, kind: h.kind, statementQty: h.qty, ledgerQty, value: h.value, ok: h.kind === 'fund' ? null : Math.abs(ledgerQty - h.qty) < 0.5 };
+        if (o.ok === false) { const bh = bonusHint(h.qty, ledgerQty); if (bh) o.bonusHint = bh; }
+        return o;
       });
       Object.keys(sh).forEach((n) => { const a = byLower[n.toLowerCase()] || {}; if (sh[n] > 0.5 && !holdings.some((h) => h.name === n) && a.symbol !== 'SAVINGS' && !a.fund && !a.proxy) holdings.push({ ticker: a.symbol || n, name: n, kind: 'stock', statementQty: 0, ledgerQty: sh[n], value: 0, ok: false }); });
     }
@@ -1481,6 +1609,18 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     return { month, from, to, fullMonth: st.fullMonth, fresh, matched, unknown, conflicts, ledgerOnly, trueUp, kick, holdings, markProposal,
       markDiff: markProposal ? { cash: mk.cash != null ? markProposal.cash - mk.cash : null, securities: mk.securities != null && markProposal.securities != null ? markProposal.securities - mk.securities : null, current: mk } : null,
       newAssets: fresh.filter((r) => r.newAsset).map((r) => r.newAsset) };
+  }
+  // A share count that is (n+1)/n (n = 1..50), 2 or 3 times the ledger's, within 0.1%, is what a bonus issue leaves behind.
+  function bonusHint(statementQty, ledgerQty) {
+    if (!(ledgerQty > 0) || !(statementQty > ledgerQty)) return null;
+    const ratio = statementQty / ledgerQty, off = (x) => Math.abs(ratio / x - 1);
+    // the closest candidate wins: for large n the neighbours (49/48, 51/50) are all within 0.1% of each other
+    let kind = null, best = 0.001;
+    for (let n = 1; n <= 50; n++) if (off((n + 1) / n) <= best) { best = off((n + 1) / n); kind = `1-for-${n}`; }
+    if (off(3) <= best) { best = off(3); kind = '2-for-1'; }
+    if (!kind) return null;
+    const x = Math.round((statementQty - ledgerQty) * 10000) / 10000;
+    return `looks like a ${kind} bonus issue: add a Bonus row of ${x} shares dated before the snapshot`;
   }
   function PEsort(rows) { return rows.map((t, i) => ({ t, i })).sort((a, b) => (a.t.d < b.t.d ? -1 : a.t.d > b.t.d ? 1 : a.i - b.i)).map((x) => x.t); }
   function addDays(d, k) { const t = new Date(Date.parse(d) + k * 864e5); return t.toISOString().slice(0, 10); }
@@ -1552,7 +1692,10 @@ function allTx(){
   const out=[]; years.forEach(y => (S.ledgerDocs[y].rows||[]).forEach(r => out.push(r)));
   return out;
 }
-function dataset(){ return { settings:S.settings, marks:S.marks, assets:S.assets, tx:allTx(), market:S.market }; }
+// dataset(true) swaps in month-close estimates for closed months that still have no statement (PA.estimateMarks: ledger cash +
+// holdings × closing prices). The stored marks are never changed; the backup export uses dataset() and keeps them as typed.
+function estMarks(){ try{ if(!S.history || !Object.keys(S.history).length) return S.marks; return PA.estimateMarks(S.settings, S.marks, PE.runLedger(allTx()), S.assets, pbook(), PE.cairoToday()); }catch(e){ console.error(e); return S.marks; } }
+function dataset(est){ return { settings:S.settings, marks: est ? estMarks() : S.marks, assets:S.assets, tx:allTx(), market:S.market }; }
 function isReady(){ return S.ready.settings && S.ready.marks && S.ready.assets && S.ready.ledger; }
 
 let raf=0;
@@ -1564,7 +1707,7 @@ function recompute(){
     const pb = pbook(), today = PE.cairoToday();
     const pricer = PA.makePricer(S.assets, PE.runLedger(allTx()), pb);
     S.fallback = (name) => { const p = pricer(name, today); return p ? { p: p.p, d: pb.last } : null; };
-    S.R = PE.run(dataset(), S.sel, { fallback: S.fallback });
+    S.R = PE.run(dataset(true), S.sel, { fallback: S.fallback });
   }catch(e){ console.error(e); $('#main').innerHTML = `<div class="empty"><h2>The model hit an error</h2><p>${esc(e.message)}</p></div>`; return; }
   $('#pf-name-text').textContent = S.settings.name || 'Portfolio';
   renderTape(); renderPeriod(); renderTab(false);
@@ -1803,11 +1946,11 @@ function vHoldings(){
     <div class="phead"><div><h2>Open positions</h2><div class="sub">Average-cost basis · prices refresh automatically after each EGX session</div></div><button class="btn sm" id="dl-holdings" data-testid="download-holdings">Download CSV</button></div>
     <div class="tbl"><table data-testid="holdings-table"><thead><tr><th>Position</th><th>Sector</th><th class="n">Shares</th><th class="n">Avg cost</th><th class="n">Price</th><th class="n">Day %</th><th class="n">Day P/L</th><th>Source</th><th class="n">Market value</th><th class="n">Unrealized P/L</th><th class="n">Return</th><th class="n">Dividends</th><th class="n">Total P/L</th><th class="n">Weight</th><th class="n">Target</th><th class="n">Stop</th><th class="n">Held</th></tr></thead><tbody>
     ${rows.map(r=>{ const age=r.priceDate?PE.dayNum(today)-PE.dayNum(r.priceDate):null; const stale=age==null||age>R.settings.staleDays;
-      const src = r.price==null?'<span class="pill stale">No price</span>': stale?`<span class="pill stale" title="Price date ${esc(r.priceDate||'')}">${age}d old</span>`: r.priceSource==='auto'?'<span class="pill auto">Auto</span>':'<span class="pill man">Manual</span>';
+      const src = r.price==null?'<span class="pill stale">No price</span>': stale?`<span class="pill stale" title="Price date ${esc(r.priceDate||'')}">${age}d old</span>`: r.priceSource==='auto'?'<span class="pill auto">Auto</span>': r.priceSource==='model'?'<span class="pill man" title="No market quote: last traded NAV, or the last trade moved with its proxy price">Last NAV</span>':'<span class="pill man">Manual</span>';
       const toT = r.target&&r.price? r.target/r.price-1 : null, toS = r.stop&&r.price? r.stop/r.price-1:null;
       return `<tr><td><span class="sym">${esc(r.symbol||'—')}</span><div class="muted" style="font-size:11.5px;line-height:1.3;max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${esc(r.name)}">${esc(r.name)}</div></td><td class="ink2">${esc(r.sector)}</td><td class="n">${num(r.open,r.open%1?2:0)}</td><td class="n">${num(r.avgCost,3)}</td><td class="n">${num(r.price,2)}</td><td class="n ${sgn(r.chg)}">${r.chg!=null?pct(r.chg/100,2):'—'}</td><td class="n ${sgn(r.chg)}">${r.chg!=null&&r.mv?egp(r.mv-r.mv/(1+r.chg/100)):'—'}</td><td>${src}</td><td class="n">${egp(r.mv)}</td><td class="n ${sgn(r.unreal)}">${egp(r.unreal)}</td><td class="n ${sgn(r.unreal)}">${pct(r.openCost?r.unreal/r.openCost:null)}</td><td class="n">${egp(r.divs)}</td><td class="n ${sgn(r.total)}">${egp(r.total)}</td><td class="n">${pct(r.weight,1,false)}</td><td class="n">${r.target?num(r.target)+` <span class="muted">${pct(toT,0)}</span>`:'—'}</td><td class="n">${r.stop?num(r.stop)+` <span class="muted">${pct(toS,0)}</span>`:'—'}</td><td class="n">${r.holdDays}d</td></tr>`; }).join('')}
     </tbody><tfoot><tr><td colspan="8">Total holdings</td><td class="n">${egp(R.pos.mvTotal)}</td><td class="n ${sgn(unreal)}">${egp(unreal)}</td><td class="n ${sgn(unreal)}">${pct(cost?unreal/cost:null)}</td><td class="n">${egp(R.pos.open.reduce((s,r)=>s+r.divs,0))}</td><td class="n">${egp(R.pos.open.reduce((s,r)=>s+r.total,0))}</td><td class="n">100.0%</td><td colspan="3"></td></tr></tfoot></table></div>
-    <p class="note" style="margin:10px 0 0">Total P/L = realized on shares already sold + unrealized + dividends, since first buy. Set targets and stops under Inputs → Assets & prices.</p>
+    <p class="note" style="margin:10px 0 0">Total P/L = realized on shares already sold + unrealized + dividends, since first buy. Stocks at the latest EGX close; funds without a quote at their last traded NAV (gold funds move with the 24K gold price). Set targets and stops under Inputs → Assets & prices.</p>
   </div>
   <div class="grid g2">
     <div class="panel"><div class="phead"><div><h2>Sector allocation</h2><div class="sub">Share of holdings value</div></div></div>${sectorBars()}</div>
@@ -1863,9 +2006,9 @@ function vPerformance(){
   </div>
   <div class="panel"><div class="phead"><div><h2>Drawdown from peak</h2><div class="sub">Decline in cumulative return from its running high within the period</div></div></div>
     ${chartSlot('ch-dd',{kind:'line',title:'Drawdown',labels,series:[{name:'Drawdown',color:C.neg(),values:rows.map(r=>r.dd),area:true}],yFmt:pctAxis},200)}</div>
-  <div class="panel"><div class="phead"><div><h2>Monthly breakdown</h2><div class="sub">Return = month-end value ÷ (opening value + net flow) − 1</div></div><button class="btn sm" id="dl-monthly" data-testid="download-monthly">Download CSV</button></div>
+  <div class="panel"><div class="phead"><div><h2>Monthly breakdown</h2><div class="sub">Modified Dietz: (month-end value − opening − net flow) ÷ (opening + day-weighted net flow)</div></div><button class="btn sm" id="dl-monthly" data-testid="download-monthly">Download CSV</button></div>
     <div class="tbl"><table data-testid="monthly-table"><thead><tr><th>Month</th><th class="n">Opening</th><th class="n">Net flow</th><th class="n">Dividends</th><th class="n">Month-end value</th><th class="n">Return</th><th class="n">EGX30 Capped</th><th class="n">Alpha</th><th class="n">Cum. return</th><th class="n">Cum. EGX30</th><th class="n">Drawdown</th><th class="n">USD return</th><th class="n">Real return</th><th class="n">Trades</th></tr></thead><tbody>
-    ${rows.map(r=>`<tr><td>${M(r.month)} ${r.live?'<span class="pill prov">Live</span>':r.provisional?'<span class="pill prov">Provisional</span>':''}</td><td class="n">${egp(r.opening)}</td><td class="n">${egp(r.netFlow)}</td><td class="n">${egp(r.dividends)}</td><td class="n">${egp(r.value)}</td><td class="n ${sgn(r.ret)}">${pct(r.ret)}</td><td class="n ${sgn(r.bench)}">${pct(r.bench)}</td><td class="n ${sgn(r.alpha)}">${pct(r.alpha)}</td><td class="n">${pct(r.pCum)}</td><td class="n">${pct(r.pBench)}</td><td class="n">${pct(r.dd)}</td><td class="n">${pct(r.usdRet)}</td><td class="n">${pct(r.realRet)}</td><td class="n">${r.trades}</td></tr>`).join('')}
+    ${rows.map(r=>`<tr><td>${M(r.month)} ${r.live?'<span class="pill prov">Live</span>':r.estimate?'<span class="pill stale" title="Estimated from closing prices; replaced when the Thndr statement is posted">Estimate</span>':r.provisional?'<span class="pill prov">Provisional</span>':''}</td><td class="n">${egp(r.opening)}</td><td class="n">${egp(r.netFlow)}</td><td class="n">${egp(r.dividends)}</td><td class="n">${egp(r.value)}</td><td class="n ${sgn(r.ret)}">${pct(r.ret)}</td><td class="n ${sgn(r.bench)}">${pct(r.bench)}</td><td class="n ${sgn(r.alpha)}">${pct(r.alpha)}</td><td class="n">${pct(r.pCum)}</td><td class="n">${pct(r.pBench)}</td><td class="n">${pct(r.dd)}</td><td class="n">${pct(r.usdRet)}</td><td class="n">${pct(r.realRet)}</td><td class="n">${r.trades}</td></tr>`).join('')}
     </tbody></table></div></div>`;
 }
 function trailingStrip(){ const R=S.R; const tr=PA.trailing(R.months, R.range.to); if(!tr||!tr.some(t=>t.p!=null)) return '';
@@ -1897,7 +2040,7 @@ function vTrades(){
 }
 
 // ---------- Ledger ----------
-const SIGN = {Buy:-1, Sell:1, Deposit:1, Withdrawal:-1, Dividend:1, Fee:-1, Rebate:1};
+const SIGN = {Buy:-1, Sell:1, Deposit:1, Withdrawal:-1, Dividend:1, Fee:-1, Rebate:1, Bonus:0};
 function vLedger(){
   const R=S.R; const f=S.ledgerFilter; const tx=allTx();
   const years=[...new Set(tx.map(t=>t.d.slice(0,4)))].sort().reverse();
@@ -1914,12 +2057,12 @@ function vLedger(){
       <label style="grid-column:span 2">Asset<input type="text" id="tx-a" list="asset-list" class="inp" placeholder="Exact asset name"></label>
       <label>Shares<input type="number" id="tx-q" step="any" min="0" class="inp"></label>
       <label>Price (EGP)<input type="number" id="tx-p" step="any" min="0" class="inp"></label>
-      <label>Net amount (EGP)<input type="number" id="tx-amt" step="any" required class="inp" placeholder="After fees"></label>
+      <label>Net amount (EGP)<input type="number" id="tx-amt" step="any" class="inp" placeholder="After fees" data-testid="add-tx-amount"></label>
       <label>Account<select id="tx-acc"><option>Main</option><option>MF</option></select></label>
       <button class="btn primary" type="submit" data-testid="add-tx-submit">Add transaction</button>
     </form>
     <datalist id="asset-list">${names.map(n=>`<option value="${esc(n)}">`).join('')}</datalist>
-    <p class="note" id="tx-hint" style="margin:8px 0 0">Buys, withdrawals and fees are stored as negative amounts; sells, deposits, dividends and rebates as positive.</p>
+    <p class="note" id="tx-hint" style="margin:8px 0 0">Buys, withdrawals and fees are stored as negative amounts; sells, deposits, dividends and rebates as positive. Bonus = free shares from a corporate action: asset and shares only, amount 0.</p>
   </div>
   <div class="panel" ${S.readOnly?'hidden':''}><div class="phead"><div><h2>Import from CSV</h2><div class="sub">Paste rows with the header <code class="mono">Date,Type,Asset,Shares,Price,Amount,Account</code>. Exact duplicates are skipped.</div></div></div>
     <textarea id="csv-in" data-testid="csv-import-input" placeholder="Date,Type,Asset,Shares,Price,Amount,Account&#10;2026-09-28,Buy,TMG Holding,100,88.9,-8905.12,Main"></textarea>
@@ -1950,12 +2093,13 @@ async function addTx(rows){
 function normTx(o){
   const t = PE.TYPES.find(x=>x.toLowerCase()===String(o.t||'').trim().toLowerCase()); if(!t) throw new Error(`Unknown type "${o.t}"`);
   const d = parseDate(o.d); if(!d) throw new Error(`Unreadable date "${o.d}"`);
-  const amt = Math.abs(parseFloat(String(o.amt).replace(/[, ]/g,''))); if(!isFinite(amt)) throw new Error(`Unreadable amount "${o.amt}"`);
-  const r={id:newId(), d, t, amt: SIGN[t]*amt};
+  // Bonus shares are free: the amount is always 0 (an empty amount is accepted), only the asset and the share count matter.
+  const amt = t==='Bonus' ? 0 : Math.abs(parseFloat(String(o.amt).replace(/[, ]/g,''))); if(!isFinite(amt)) throw new Error(`Unreadable amount "${o.amt}"`);
+  const r={id:newId(), d, t, amt: SIGN[t]*amt || 0};
   const a=String(o.a||'').trim(); if(a) r.a=a;
   const q=parseFloat(String(o.q??'').replace(/[, ]/g,'')); if(isFinite(q)&&q>0) r.q=q;
   const p=parseFloat(String(o.p??'').replace(/[, ]/g,'')); if(isFinite(p)&&p>0) r.p=p;
-  if((t==='Buy'||t==='Sell')&&(!r.a||!r.q)) throw new Error(`${t} on ${d} needs an asset and shares`);
+  if((t==='Buy'||t==='Sell'||t==='Bonus')&&(!r.a||!r.q)) throw new Error(`${t} on ${d} needs an asset and shares`);
   r.acc = String(o.acc||'Main').trim()||'Main';
   return r;
 }
@@ -1979,14 +2123,16 @@ function vInputs(){
   const assets=Object.values(S.assets).sort((a,b)=>{ const oa=R.pos.open.some(r=>r.name===a.name), ob=R.pos.open.some(r=>r.name===b.name); return (ob-oa)||a.name.localeCompare(b.name); });
   const cur=PE.monthOf(R.today);
   const mk=(m)=>S.marks[m]||{};
-  const cell=(m,f,v,step='any')=>`<td class="in-cell"><input type="number" step="${step}" data-m="${m}" data-f="${f}" value="${v==null?'':v}" id="mk-${m}-${f}"></td>`;
+  const cell=(m,f,v,step='any',ph)=>`<td class="in-cell"><input type="number" step="${step}" data-m="${m}" data-f="${f}" value="${v==null?'':v}" id="mk-${m}-${f}"${ph!=null?` placeholder="${ph}" title="Estimated ${ph}"`:''}></td>`;
   return `
   <div class="panel"><div class="phead"><div><h2>Month-end marks</h2><div class="sub">Enter values from each Thndr month-end statement. The EGX30 Capped close is filled automatically; a typed % is used only where closes are missing.</div></div>
     <div class="row"><button class="btn primary" id="save-marks" data-testid="save-marks" ${S.readOnly?'disabled':''}>Save changes</button></div></div>
     <div class="tbl grid-in"><table data-testid="marks-table"><thead><tr><th>Month</th><th class="n">Cash (EGP)</th><th class="n">Securities (EGP)</th><th class="n">EGX30 Capped close</th><th class="n">EGX30 Capped %</th><th class="n">USD/EGP (CBE mid)</th><th class="n">CPI MoM</th><th>Note</th><th>Status</th></tr></thead><tbody>
-    ${months.concat(months.some(r=>r.month===cur)?[]:[{month:cur}]).map(r=>{ const m=r.month, k=mk(m); const liveRow=R.live&&R.live.month===m;
-      return `<tr><td>${M(m)}</td>${cell(m,'cash',k.cash)}${cell(m,'securities',k.securities)}${cell(m,'benchClose',k.benchClose)}${cell(m,'benchReturn',k.benchReturn!=null?+(k.benchReturn*100).toFixed(4):null)}${cell(m,'usdegp',k.usdegp)}${cell(m,'cpi',k.cpi!=null?+(k.cpi*100).toFixed(4):null)}<td class="in-cell"><input class="txt" type="text" data-m="${m}" data-f="note" value="${esc(k.note||'')}" id="mk-${m}-note"></td>
-      <td>${k.provisional||liveRow? `<span class="pill prov">${liveRow?'Live':'Provisional'}</span> ${S.readOnly?'':`<button class="btn sm" data-confirm="${m}" data-testid="confirm-month">Confirm</button>`}` : k.cash==null?'<span class="pill loss">Missing</span>' : k.source==='statement'?'<span class="pill win">From statement</span>' : k.source==='price-estimate'?`<span class="pill stale" title="${esc(k.estimateNote||'')}">Price estimate</span>` : k.source==='reconstructed'?`<span class="pill auto" title="${esc(k.estimateNote||'')}">Rebuilt from statements</span>`:'<span class="pill man">Typed</span>'}</td></tr>`; }).join('')}
+    ${(()=>{ const seen=new Set(months.map(r=>r.month)); const extra=Object.keys(S.marks).filter(m=>m>=st.inception&&!seen.has(m)).map(m=>({month:m})); if(!seen.has(cur)) extra.push({month:cur}); return months.concat(extra).sort((a,b)=>a.month<b.month?-1:1); })().map(r=>{ const m=r.month, k=mk(m); const liveRow=R.live&&R.live.month===m; const estRow=!!r.estimate&&!liveRow;
+      const est=(f)=>estRow&&k[f]==null&&typeof r[f]==='number'?+r[f].toFixed(2):null;
+      return `<tr data-testid="marks-row-${m}">
+      <td>${M(m)}</td>${cell(m,'cash',k.cash,'any',est('cash'))}${cell(m,'securities',k.securities,'any',est('securities'))}${cell(m,'benchClose',k.benchClose,'any',est('benchClose'))}${cell(m,'benchReturn',k.benchReturn!=null?+(k.benchReturn*100).toFixed(4):null)}${cell(m,'usdegp',k.usdegp,'any',est('usdegp'))}${cell(m,'cpi',k.cpi!=null?+(k.cpi*100).toFixed(4):null)}<td class="in-cell"><input class="txt" type="text" data-m="${m}" data-f="note" value="${esc(k.note||'')}" id="mk-${m}-note"></td>
+      <td>${estRow? `<span class="pill stale" data-testid="marks-estimate-pill" title="Cash from the ledger and holdings at the last closing prices of the month. Post the Thndr statement to replace it.">Estimated · awaiting statement</span>` : k.provisional||liveRow? `<span class="pill prov">${liveRow?'Live':'Provisional'}</span> ${S.readOnly?'':`<button class="btn sm" data-confirm="${m}" data-testid="confirm-month">Confirm</button>`}` : k.cash==null?'<span class="pill loss">Missing</span>' : k.source==='statement'?'<span class="pill win">From statement</span>' : k.source==='price-estimate'?`<span class="pill stale" title="${esc(k.estimateNote||'')}">Price estimate</span>` : k.source==='reconstructed'?`<span class="pill auto" title="${esc(k.estimateNote||'')}">Rebuilt from statements</span>`:'<span class="pill man">Typed</span>'}</td></tr>`; }).join('')}
     </tbody></table></div>
     <p class="note" style="margin:10px 0 0">EGX30 Capped % and CPI are entered as percentages (4.2 = 4.2%). Confirming a live month copies the current live cash and holdings value into it; overwrite them with the statement figures before or after confirming.</p></div>
 
@@ -2032,9 +2178,10 @@ function extraChecks(){
   const out=[]; const D=dailyA();
   if(D){ const off=D.recon.filter(r=>Math.abs(r.pct)>0.01); out.push({label:'Month-end marks agree with closing prices (±1%)', status: off.length?'warn':'ok', detail: off.length? off.map(r=>`${M(r.month)} ${pct(r.pct,1)}`).join(', ')+' · post the statements to replace estimated marks' : `${D.recon.length} month-ends checked`}); }
   const closed = S.R.months.filter(r=>r.has && !r.live);
-  const src = (r)=> (S.marks[r.month]||{}).source || ((S.imports||{})[r.month] ? 'statement' : 'typed');
+  const src = (r)=> r.estimate ? 'price-estimate' : (r.source && r.source!=='typed' ? r.source : ((S.marks[r.month]||{}).source || ((S.imports||{})[r.month] ? 'statement' : 'typed')));
   const typed = closed.filter(r=>src(r)==='typed'), est = closed.filter(r=>src(r)==='price-estimate'), stm = closed.filter(r=>src(r)==='statement'), rec = closed.filter(r=>src(r)==='reconstructed');
   out.push({label:'Month-ends sourced from Thndr statements', status: typed.length?'warn':'ok', detail: `${stm.length} from statements` + (rec.length?` · ${rec.map(r=>M(r.month)).join(', ')} rebuilt from the next statement`:'') + (est.length?` · ${est.length} closing-price estimates (${est.map(r=>M(r.month)).join(', ')}; no holdings list on those statements)`:'') + (typed.length?` · typed by hand: ${typed.map(r=>M(r.month)).join(', ')}`:'')});
+  try{ PA.tradeChecks(S.R.ledger, S.assets, pbook(), S.bench && S.bench.actions).forEach(c=>out.push(c)); }catch(e){ console.error(e); }
   return out;
 }
 function vChecks(){
@@ -2053,13 +2200,13 @@ function vChecks(){
       <p class="note" style="margin:10px 0 0">Each run also records the prior month-end EGX30 Capped close, and fills any completed month still missing Egypt CPI (CAPMAS urban CPI index) or USD/EGP (market month-end close; the CBE site blocks automated access). Values already entered are never overwritten.</p></div>
   </div>
   <div class="panel"><div class="phead"><div><h2>Methodology</h2><div class="sub">How every figure on this page is calculated</div></div></div><div class="prose">
-    <h3>Time-weighted return (TWR)</h3><p>Each month: <code>r = month-end value ÷ (opening value + net deposits) − 1</code>, which treats the month's flows as arriving at the start of the month. Monthly returns are chain-linked: <code>TWR = Π(1 + r) − 1</code>. TWR removes the effect of your deposit timing and is the right figure to compare against the index.</p>
+    <h3>Time-weighted return (TWR)</h3><p>Monthly return is Modified Dietz: <code>(closing value − opening value − net deposits) ÷ (opening value + day-weighted net deposits)</code>. A deposit on the 1st counts fully for the month, one on the 16th about half. Months are then chain-linked (time-weighted): <code>TWR = Π(1 + r) − 1</code>. TWR removes the effect of your deposit timing and is the right figure to compare against the index.</p>
     <h3>Money-weighted return (XIRR)</h3><p>The internal rate of return of your actual cash flows: the opening value on the day before the period, every deposit and withdrawal on its date, and the closing value at period end. It rewards or penalises the timing of your deposits. Actual/365 day count, same as Excel's XIRR.</p>
     <h3>Benchmark</h3><p>EGX30 Capped, the index most comparable to a retail EGX portfolio because no single stock can dominate it. A month's return comes from consecutive month-end closes when both exist, otherwise from the typed %. Alpha is the simple difference of returns.</p>
     <h3>Cost basis and P/L</h3><p>Weighted-average cost, in ledger order. A sale's cost basis is <code>average cost × shares sold</code>; realized P/L is proceeds minus that basis. Amounts are net of Thndr commissions, as on the statement. Dividends are credited to the stock that paid them.</p>
     <h3>Risk</h3><p>Volatility is the sample standard deviation of monthly returns. Sharpe uses the monthly equivalent of the 3-month T-bill yield and is annualized by √12. Beta is the slope of portfolio on benchmark monthly returns; tracking error is the annualized standard deviation of monthly alpha; information ratio is annualized mean alpha over tracking error. Sortino replaces volatility with downside deviation (returns below the risk-free rate); Calmar is annualized TWR ÷ max drawdown. Upside/downside capture compare the portfolio's compounded return with the index's in the months the index rose or fell. Drawdown is measured on the cumulative return within the selected period. HHI is the sum of squared position weights; 1 ÷ HHI gives the effective number of equal-sized positions.</p>
     <h3>USD and real returns</h3><p>USD return converts each month at consecutive month-end USD/EGP rates: the CBE mid rate where you entered it, otherwise the market close filled automatically. Real return deflates by Egypt urban CPI (CAPMAS), month on month, filled automatically once published around the 10th.</p>
-    <h3>Current month</h3><p>Until the monthly statement arrives, the current month uses live prices and cash = the latest statement's closing balance plus every ledger movement booked after it (trades from Thndr invoices, for example). It is labelled Live. Past months that are still provisional are flagged in the checks.</p>
+    <h3>Current month</h3><p>Until the monthly statement arrives, the current month uses live prices and cash = the latest statement's closing balance plus every ledger movement booked after it (trades from Thndr invoices, for example). It is labelled Live. Once a month closes and its statement has not been posted yet, the month-end is estimated from the ledger (cash) and the last closing prices of the month (holdings, funds at their last traded NAV), labelled Estimate and flagged in the checks; the statement figures replace the estimate when it is posted. Nothing is saved to the marks until then.</p>
     <h3>Conventions</h3><p>All money in EGP. Negative money values are shown in parentheses; returns carry a sign. Inputs you type appear in blue, following the spreadsheet colour convention for hard-coded values.</p>
   </div></div>`;
 }
@@ -2220,7 +2367,7 @@ function declaredDividends(){
 
 // ---------- Factsheet ----------
 function factsheetData(m){
-  const R = PE.run(dataset(), {type:'Since Inception', asOf:m}, {today:S.R.today, fallback:S.fallback});
+  const R = PE.run(dataset(true), {type:'Since Inception', asOf:m}, {today:S.R.today, fallback:S.fallback});
   const live = R.live && R.live.month === m;
   const pb = pbook();
   const tr = PA.trailing(R.months, m), cal = PA.calendar(R.months, m);
@@ -2267,7 +2414,7 @@ function factsheetHTML(F){
     <tr>${td('Portfolio','left','font-weight:600')}${F.tr.map(t=>td(t.p!=null?P(t.p):'—')).join('')}</tr>
     <tr>${td('EGX30 Capped','left')}${F.tr.map(t=>td(t.b!=null?pct(t.b):'—')).join('')}</tr>
     <tr>${td('Difference','left')}${F.tr.map(t=>td(t.a!=null?P(t.a):'—')).join('')}</tr></table>
-  <div style="font:11px Arial;color:${ink3};margin-top:4px">Time-weighted, chain-linked monthly, net of commissions. Periods under one year are not annualized.</div>
+  <div style="font:11px Arial;color:${ink3};margin-top:4px">Time-weighted: Modified Dietz monthly returns (deposits weighted by the days they were invested), chain-linked, net of commissions. Periods under one year are not annualized.</div>
   ${h2('Monthly returns')}
   <table role="presentation" width="100%" style="border-collapse:collapse;font-size:12px"><tr>${th('Year','left')}${MON.map(x=>th(x)).join('')}${th('Year')}${th('Index')}</tr>
     ${F.cal.map(Y=>`<tr>${td(Y.year,'left','font-weight:600')}${Y.m.map(v=>td(v==null?'':P(v),'right','font-size:12px;padding:6px 4px')).join('')}${td(P(Y.ytd),'right','font-weight:600')}${td(Y.bytd!=null?pct(Y.bytd):'—')}</tr>`).join('')}</table>
@@ -2291,7 +2438,7 @@ function factsheetHTML(F){
     <table role="presentation" width="100%" style="border-collapse:collapse"><tr>${th('','left')}${th(M(F.m))}${th('YTD')}</tr>
     ${[['Dividends','div'],['Rebates','reb'],['Fees','fee']].map(([l,k])=>`<tr>${td(l,'left',`color:${ink2}`)}${td(egp(F.incM[k]))}${td(egp(F.incY[k]))}</tr>`).join('')}</table>
   </td></tr></table>
-  <div style="margin-top:22px;padding-top:10px;border-top:1px solid ${rule};font:11px/1.5 Arial;color:${ink3}">Month-end values from Thndr statements${(()=>{ const est=Object.keys(S.marks).sort().filter(k=>k<=F.m&&S.marks[k].source==='price-estimate'); const rec=Object.keys(S.marks).sort().filter(k=>k<=F.m&&S.marks[k].source==='reconstructed'); const parts=[]; if(est.length) parts.push(`${est.map(M).join(', ')} estimated from closing prices; those statements carry no holdings list`); if(rec.length) parts.push(`${rec.map(M).join(', ')} rebuilt from the following month's statement`); return parts.length?` (${parts.join('; ')})`:''; })()}; prices from TradingView closes (15-minute delayed). Attribution uses a free-float model of EGX30 Capped with a ${pct(S.bench?S.bench.capWeight:0.15,0,false)} single-stock cap. Past performance does not guarantee future results. Generated ${dfmt(S.R.today)}.</div>
+  <div style="margin-top:22px;padding-top:10px;border-top:1px solid ${rule};font:11px/1.5 Arial;color:${ink3}">Month-end values from Thndr statements${(()=>{ const est=Object.keys(S.marks).sort().filter(k=>k<=F.m&&S.marks[k].source==='price-estimate'); const rec=Object.keys(S.marks).sort().filter(k=>k<=F.m&&S.marks[k].source==='reconstructed'); const pend=(F.R.months||[]).filter(r=>r.estimate&&r.month<=F.m&&!est.includes(r.month)).map(r=>r.month); const parts=[]; if(est.length) parts.push(`${est.map(M).join(', ')} estimated from closing prices; those statements carry no holdings list`); if(pend.length) parts.push(`${pend.map(M).join(', ')} estimated from closing prices while the statement is awaited`); if(rec.length) parts.push(`${rec.map(M).join(', ')} rebuilt from the following month's statement`); return parts.length?` (${parts.join('; ')})`:''; })()}; prices from TradingView closes (15-minute delayed). Attribution uses a free-float model of EGX30 Capped with a ${pct(S.bench?S.bench.capWeight:0.15,0,false)} single-stock cap. Past performance does not guarantee future results. Generated ${dfmt(S.R.today)}.</div>
   </div>`;
 }
 function vFactsheet(){
@@ -2547,10 +2694,18 @@ document.addEventListener('click', async e=>{
   if(cf){ const m=cf.dataset.confirm; const r=S.R.months.find(x=>x.month===m); const patch={provisional:false};
     if(r&&r.live){ patch.cash=r.cash; patch.securities=Math.round(r.securities*100)/100; if(r.benchClose) patch.benchClose=r.benchClose; if(r.usdegp&&S.marks[m]?.usdegp==null) patch.usdegp=r.usdegp; }
     const cur=S.marks[m]||{}; await save(()=>S.db.doc('portfolio/marks').update({months:{[m]:{...cur,...patch}}}),`${M(m)} confirmed`); return; }
-  if(e.target.id==='save-marks'){ const patch={}; document.querySelectorAll('#main [data-m].dirty').forEach(inp=>{ const m=inp.dataset.m,f=inp.dataset.f; let v=inp.value.trim(); (patch[m] ||= {...(S.marks[m]||{})});
+  if(e.target.id==='save-marks'){ const patch={}, typed={}; document.querySelectorAll('#main [data-m].dirty').forEach(inp=>{ const m=inp.dataset.m,f=inp.dataset.f; let v=inp.value.trim(); (patch[m] ||= {...(S.marks[m]||{})}); (typed[m] ||= new Set()).add(f);
       if(f==='note'){ if(v) patch[m].note=v; else delete patch[m].note; return; }
       if(v===''){ delete patch[m][f]; return; } let n=parseFloat(v); if(!isFinite(n)){ return; } if(f==='benchReturn'||f==='cpi') n=n/100; patch[m][f]=n; });
     if(!Object.keys(patch).length){ toast('Nothing changed'); return; }
+    // Typing the two month-end figures for a closed month makes it a confirmed typed row, so it wins over the month-close estimate.
+    // Only the cash/securities inputs the owner actually edited count (patch[m] is seeded from the stored row, which may already
+    // hold placeholder numbers): both typed in this save, or one typed to a value that differs from the stored one. Editing any
+    // other cell of the row (CPI, USD/EGP, EGX %, note) leaves it provisional so the estimate keeps standing in.
+    const curM=PE.monthOf(PE.cairoToday()); Object.keys(patch).forEach(m=>{ const p=patch[m], was=S.marks[m]||{}, ty=typed[m];
+      if(!(m<curM && p.provisional && typeof p.cash==='number' && typeof p.securities==='number')) return;
+      const both=ty.has('cash')&&ty.has('securities'), changed=['cash','securities'].some(f=>ty.has(f)&&p[f]!==was[f]);
+      if(both||changed){ p.provisional=false; delete p.estimate; } });
     const all={...S.marks,...patch}; await save(()=>S.db.doc('portfolio/marks').set({months:all}),'Month-end marks saved'); return; }
   if(e.target.id==='save-assets'){ const patch={}; document.querySelectorAll('#main [data-a].dirty').forEach(inp=>{ const a=inp.dataset.a,f=inp.dataset.f; const v=inp.value.trim(); (patch[a] ||= {...(S.assets[a]||{name:a})});
       if(f==='symbol'||f==='sector'||f==='priceDate'){ if(v) patch[a][f]= f==='symbol'?v.toUpperCase():v; else delete patch[a][f]; return; }
@@ -2563,7 +2718,7 @@ document.addEventListener('click', async e=>{
   if(e.target.id==='csv-import'&&csvPending){ const n=csvPending.length; if(await addTx(csvPending)){ toast(`${n} transactions imported`); csvPending=null; } return; }
   if(e.target.id==='dl-ledger'){ const rows=[['Date','Type','Asset','Symbol','Shares','Price','Amount','CostBasisSold','Account']].concat(S.R.ledger.map(t=>[t.d,t.t,t.a||'',(S.assets[t.a]||{}).symbol||'',t.q??'',t.p??'',t.amt,t.t==='Sell'?t.basis.toFixed(2):'',t.acc||''])); download('portfolio-ledger.csv', toCsv(rows)); return; }
   if(e.target.id==='dl-holdings'){ const rows=[['Symbol','Asset','Sector','Shares','AvgCost','Price','PriceDate','MarketValue','Unrealized','Dividends','TotalPL','Weight']].concat(S.R.pos.open.map(r=>[r.symbol,r.name,r.sector,r.open,r.avgCost?.toFixed(4),r.price,r.priceDate,r.mv?.toFixed(2),r.unreal?.toFixed(2),r.divs.toFixed(2),r.total.toFixed(2),r.weight.toFixed(6)])); download('portfolio-holdings.csv', toCsv(rows)); return; }
-  if(e.target.id==='dl-monthly'){ const st=S.R.stats; const rows=[['Month','Opening','NetFlow','Dividends','MonthEndValue','Return','EGX30Capped','Alpha','CumReturn','CumBench','Drawdown','USDReturn','RealReturn','Status']].concat(st.rows.map(r=>[r.month,r.opening,r.netFlow,r.dividends,r.value,r.ret,r.bench,r.alpha,r.pCum,r.pBench,r.dd,r.usdRet,r.realRet,r.live?'live':r.provisional?'provisional':'confirmed'])); download('portfolio-monthly.csv', toCsv(rows)); return; }
+  if(e.target.id==='dl-monthly'){ const st=S.R.stats; const rows=[['Month','Opening','NetFlow','WeightedFlow','Dividends','MonthEndValue','Return','EGX30Capped','Alpha','CumReturn','CumBench','Drawdown','USDReturn','RealReturn','Status']].concat(st.rows.map(r=>[r.month,r.opening,r.netFlow,r.weightedFlow,r.dividends,r.value,r.ret,r.bench,r.alpha,r.pCum,r.pBench,r.dd,r.usdRet,r.realRet,r.live?'live':r.estimate?'estimate':r.provisional?'provisional':'confirmed'])); download('portfolio-monthly.csv', toCsv(rows)); return; }
   if(e.target.id==='dl-backup'){ download('portfolio-backup.json', JSON.stringify({exported:new Date().toISOString(), ...dataset(), history:S.history},null,1)); return; }
   if(e.target.id==='refresh-prices'){ refreshNow(e.target); return; }
   if(e.target.id==='scan-gmail'){ scanGmail(false); return; }
