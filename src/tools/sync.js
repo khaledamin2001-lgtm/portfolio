@@ -1,0 +1,365 @@
+#!/usr/bin/env node
+/* Thndr inbox sync: applies every new Thndr email to the portfolio ledger, oldest first.
+     node sync.js --data <ArtifactData export dir> --inbox <dir> --out <plan dir> [--today YYYY-MM-DD]
+   <inbox>/manifest.json lists [{id, subject, date}]; <inbox>/<id>.json is the Gmail get_message RAW result.
+   - "Your Thndr Invoice": each trade is added, or the matching ledger row corrected to the invoice. A ledger row
+     matches an invoice block only when it has the SAME date, type and asset and (stocks) the same quantity or a
+     close amount, (funds) a close amount; every row is matched at most once per run, so two equal lots on
+     different days, or two equal lots on the same day, stay two rows.
+   - "Your requested E-statement" (any period): the statement wins for the dates it covers: missing rows added,
+     mis-booked rows corrected, rows not on it removed (except on its last day, which may still be settling),
+     kickbacks trued up, and broker cash set to its closing balance.
+   - "Your monthly E-statement" (full month + positions snapshot): the same, for the whole month, plus the
+     month-end marks. The month is final afterwards.
+   Nothing is written for a statement unless the corrected ledger re-reconciles cleanly: no differences left,
+   cash equal to the statement's closing balance, and (monthly) every share count equal to the snapshot.
+   Fund convention: a mutual-fund trade (thndrgold, thndrsavings, thndrmonthlysavings, ...) is booked exactly as
+   Thndr prints it — q = Thndr units, p = NAV per unit, amt = the cash that moved (fees included). There is no
+   gram or ounce bookkeeping anywhere in this file or in statement.js: a gold-fund invoice for N units at NAV P
+   becomes q N, p P, whatever the ledger row typed by hand looked like. (Pricing of fund units
+   and the conversion of old gram-denominated rows live in the engine, not here.)
+   Bonus shares: a statement line "Bonus Shares - <stock> (<n> @ 0 EGP)" (or Stock Dividend / Free Shares /
+   منحة) becomes a ledger row { t: 'Bonus', q: n, amt: 0 } — no cash moves, the share count goes up.
+   Sender: before anything is parsed the email must come from *.thndr.app AND carry a DKIM pass for that domain
+   in the receiving host's Authentication-Results (TS.authCheck); otherwise it is held and nothing from it is used.
+   An invoice email is all-or-nothing: if any of its blocks cannot be read, nothing from that email is written.
+   Output: <out>/write/* (documents to write) and <out>/summary.json (what changed, what needs attention).
+   summary.monthlyPending lists the full months whose factsheet email / workbooks are still owed (imports/<M>.reports
+   is stamped by the routine); sync_state.json carries toolSha = sha256 (12 hex) of the tool files that ran. */
+'use strict';
+const fs = require('fs'), path = require('path'), crypto = require('crypto');
+const TS = require('./statement.js');
+const args = Object.fromEntries(process.argv.slice(2).reduce((a, x, i, arr) => (x.startsWith('--') ? a.concat([[x.slice(2), arr[i + 1] && !arr[i + 1].startsWith('--') ? arr[i + 1] : true]]) : a), []));
+const J = (f) => { const x = JSON.parse(fs.readFileSync(f)); return x.data || x; };
+const opt = (f, d) => (fs.existsSync(f) ? J(f) : d);
+const D = (...p) => path.join(args.data, ...p);
+const num = (s) => parseFloat(String(s).replace(/,/g, ''));
+const r2 = (x) => Math.round(x * 100) / 100;
+const days = (a, b) => Math.abs((Date.parse(a) - Date.parse(b)) / 864e5);
+const newId = () => Math.random().toString(36).slice(2, 10);
+const today = args.today || new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date());
+const fmt = (x) => (x == null ? '—' : Number(x).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+const prevMonth = (m) => { const [y, mo] = m.split('-').map(Number); return mo === 1 ? `${y - 1}-12` : `${y}-${String(mo - 1).padStart(2, '0')}`; };
+const lbl = (m) => new Date(m + '-15').toLocaleString('en-GB', { month: 'short', year: '2-digit' }).replace(' ', '-');
+
+// ---------- current state ----------
+// Loaded from --data by run(); tests inject their own through _reset().
+let tx = [], marks = {}, assets = {}, settings = {}, imports = {}, bench = { members: [] }, state = { seen: {}, alerts: {} };
+const freshChanged = () => ({ ledgerYears: new Set(), marks: false, settings: false, newAssets: {}, imports: {} });
+let changed = freshChanged();
+const log = [];
+// ledger rows already matched to (or created by) an invoice block earlier in this run: a second invoice for an
+// equal lot must never be folded into the same row
+const consumed = new Set();
+function loadState() {
+  const ledgerYears = fs.readdirSync(D('ledger')).filter((f) => /^y\d{4}\.json$/.test(f)).map((f) => f.slice(1, 5));
+  tx = ledgerYears.flatMap((y) => J(D('ledger', `y${y}.json`)).rows || []);
+  marks = J(D('portfolio', 'marks.json')).months;
+  assets = J(D('portfolio', 'assets.json')).items;
+  settings = J(D('portfolio', 'settings.json'));
+  imports = fs.existsSync(D('imports')) ? Object.fromEntries(fs.readdirSync(D('imports')).map((f) => [f.replace('.json', ''), J(D('imports', f))])) : {};
+  bench = opt(D('bench', 'egx30.json'), { members: [] });
+  state = opt(D('sync', 'state.json'), { seen: {}, alerts: {} });
+  state.seen = state.seen || {}; state.alerts = state.alerts || {};
+  changed = freshChanged(); log.length = 0; consumed.clear();
+}
+function _reset(txRows, assetsObj, settingsObj, extra) {
+  tx = txRows || []; assets = assetsObj || {}; settings = settingsObj || {};
+  marks = (extra && extra.marks) || {}; imports = (extra && extra.imports) || {}; bench = (extra && extra.bench) || { members: [] };
+  state = { seen: {}, alerts: {} }; changed = freshChanged(); log.length = 0; consumed.clear();
+}
+
+// ---------- names ----------
+function resolveName(n) {
+  const k = n.toLowerCase();
+  const a = Object.values(assets).find((x) => x.name.toLowerCase() === k || (x.symbol || '').toLowerCase() === k);
+  if (a) return { name: a.name, known: true };
+  const t = tx.find((x) => (x.a || '').toLowerCase() === k);
+  if (t) return { name: t.a, known: true };
+  return { name: n, known: false };
+}
+const cashTo = (rows, d) => r2(rows.filter((t) => t.d <= d).reduce((s, t) => s + (t.amt || 0), 0));
+const cashBefore = (rows, d) => r2(rows.filter((t) => t.d < d).reduce((s, t) => s + (t.amt || 0), 0));
+const touch = (d) => changed.ledgerYears.add(d.slice(0, 4));
+const desc = (t) => `${t.d} ${t.t}${t.a ? ' ' + t.a : ''}${t.q != null ? ' ' + t.q : ''} ${fmt(t.amt)}`;
+
+// ---------- invoices ----------
+function parseInvoices(lines) {
+  const out = []; let cur = null, sec = [], mode = null;
+  for (const l of lines) {
+    let m;
+    if (l === 'Invoice') { if (cur) out.push(cur); cur = {}; sec = []; mode = null; continue; }
+    if (!cur) continue;
+    if (!cur.d && (m = l.match(/^(\d{2})\/(\d{2})\/(\d{4})$/))) { cur.d = `${m[3]}-${m[2]}-${m[1]}`; continue; }
+    if (/^Security Name/.test(l)) { mode = 'sec'; continue; }
+    if (/^Transaction No\./.test(l)) {
+      mode = 'tx';
+      const s = sec.join(' ');
+      if ((m = s.match(/^(.*?)\s*\b(EG[A-Z0-9]{10}|thndr[a-z]+)\s+(buy|sell)\s+[\d.,]+\s*EGP\s*(.*)$/i))) {
+        cur.name = `${m[1]} ${m[4]}`.replace(/\s+/g, ' ').trim(); cur.code = m[2]; cur.type = m[3][0].toUpperCase() + m[3].slice(1).toLowerCase();
+        cur.fund = /^thndr/i.test(m[2]);
+      }
+      continue;
+    }
+    if (mode === 'sec') { sec.push(l); continue; }
+    if (/^Total Quantity/.test(l)) { mode = 'tot'; continue; }
+    if (mode === 'tot') { if ((m = l.match(/^([\d,.]+)\s+[\d,.]+\s*EGP\s+([\d,.]+)\s*EGP$/))) { cur.qty = num(m[1]); cur.gross = num(m[2]); } mode = null; continue; }
+    if ((m = l.match(/^Total Fees ([\d,.]+) EGP/))) cur.fees = num(m[1]);
+    if ((m = l.match(/^Grand Total ([\d,.]+) EGP/))) cur.total = num(m[1]);
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+// One invoice block against the ledger. A hit needs the same date, type and asset, must not have been used by an
+// earlier block this run, and (stock) the same quantity or a close amount / (fund) a close amount; among several
+// candidates the closest amount wins. On a hit q, p and amt are always taken from the invoice (funds in Thndr
+// units at NAV, see the header); otherwise the trade is added.
+function applyInvoice(v, entry) {
+  if (!v.d || !v.type || !v.qty || v.total == null) { entry.reasons.push(`could not read an invoice block (${v.name || 'unknown security'})`); return; }
+  const fund = v.fund, name = fund ? v.code.toLowerCase() : resolveName(v.name).name;
+  const known = fund || resolveName(v.name).known;
+  const row = { d: v.d, t: v.type, a: name, q: v.qty, p: +(v.gross / v.qty).toFixed(fund ? 6 : 4), amt: r2(v.type === 'Buy' ? -v.total : v.total), acc: fund ? 'MF' : 'Main' };
+  const tol = Math.max(1, Math.abs(row.amt) * 0.015);
+  const amtDiff = (t) => Math.abs((t.amt || 0) - row.amt);
+  const hit = tx.filter((t) => !consumed.has(t.id) && t.d === row.d && t.t === row.t && (t.a || '').toLowerCase() === row.a.toLowerCase() &&
+    ((!fund && Math.abs((t.q || 0) - row.q) < 0.01) || amtDiff(t) <= tol))
+    .sort((a, b) => amtDiff(a) - amtDiff(b))[0];
+  if (hit) {
+    consumed.add(hit.id); // by id: applyStatement replaces the row objects with copies, the ids survive
+    const before = desc(hit), diff = Math.abs((hit.amt || 0) - row.amt) > 0.005 || Math.abs((hit.q || 0) - row.q) > 0.005 || Math.abs((hit.p || 0) - row.p) > 0.00005;
+    if (!diff) { entry.unchanged++; return; }
+    hit.amt = row.amt; hit.q = row.q; hit.p = row.p;
+    hit.note = [hit.note, `corrected per Thndr invoice ${v.d}`].filter(Boolean).join('; '); touch(hit.d);
+    entry.changes.push(`corrected ${before} → ${desc(hit)}`);
+    return;
+  }
+  const add = { id: newId(), ...row, src: `invoice-${v.d}` };
+  tx.push(add); consumed.add(add.id); touch(add.d); entry.changes.push(`added ${desc(add)}`);
+  if (!known && !changed.newAssets[name]) {
+    changed.newAssets[name] = { name, sector: 'Unclassified' }; assets[name] = changed.newAssets[name];
+    entry.notes.push(`new stock "${name}" has no ticker yet; it is filled in from the next monthly statement snapshot`);
+  }
+}
+// One invoice EMAIL, all-or-nothing: its blocks are applied to a working copy of the ledger, assets and pending
+// writes; if any block cannot be read (entry.reasons non-empty) the copy is discarded — nothing from that email is
+// written, the email is held, and what would have changed is kept in entry.proposed. On success the copy is kept.
+function applyInvoiceEmail(blocks, entry) {
+  const keep = { tx, assets, changed, consumed: new Set(consumed) };
+  tx = tx.map((t) => ({ ...t })); assets = { ...assets };
+  changed = { ledgerYears: new Set(changed.ledgerYears), marks: changed.marks, settings: changed.settings, newAssets: { ...changed.newAssets }, imports: { ...changed.imports } };
+  if (!blocks.length) entry.reasons.push('no invoice found in the PDF');
+  try { blocks.forEach((v) => applyInvoice(v, entry)); }
+  catch (e) { entry.reasons.push('could not process an invoice block: ' + (e.message || e)); }
+  if (entry.reasons.length) {
+    tx = keep.tx; assets = keep.assets; changed = keep.changed; consumed.clear(); keep.consumed.forEach((id) => consumed.add(id));
+    if (entry.changes.length) entry.proposed = entry.changes;
+    entry.changes = []; entry.notes = []; entry.unchanged = 0;
+    entry.reasons.push('nothing from this invoice email was applied (all its trades are written together or not at all)');
+    return 'hold';
+  }
+  return entry.changes.length ? 'applied' : 'unchanged';
+}
+
+// ---------- statements ----------
+function applyStatement(st, entry, msg) {
+  if (!st.cash) { entry.reasons.push('no account statement among the PDFs'); return 'hold'; }
+  const M = st.month, final = !!(st.fullMonth && st.snapshot);
+  entry.period = `${st.from} to ${st.to}`; entry.final = final;
+  if (imports[M] && imports[M].fullMonth) { entry.notes.push(`${lbl(M)} is already final from its monthly statement; nothing to do`); return 'skip'; }
+  if (!final && marks[M] && !marks[M].provisional) { entry.notes.push(`${lbl(M)} is already closed; a part-month statement cannot change it`); return 'skip'; }
+  const rc = TS.reconcile(st, tx, assets, marks);
+  if (rc.unknown.length) entry.reasons.push(`${rc.unknown.length} statement lines not recognised: ${rc.unknown.map((u) => u.desc || u.raw).join(' | ')}`);
+  const open = cashBefore(tx, st.from);
+  if (st.cash.start != null && Math.abs(open - st.cash.start) > 1) entry.reasons.push(`opening cash ${fmt(st.cash.start)} on ${st.from} differs from the ledger's ${fmt(open)}: an earlier month needs its statement first`);
+  if (entry.reasons.length) return 'hold';
+
+  // build the corrected ledger
+  const tag = final ? `stmt-${M}` : `stmt-partial-${st.to}`;
+  let next = tx.map((t) => ({ ...t }));
+  const byId = new Map(next.map((t) => [t.id, t]));
+  const ops = [], removed = [];
+  const twin = (t) => byId.get(t.id) || next.find((x) => x.d === t.d && x.t === t.t && x.amt === t.amt && x.a === t.a);
+  rc.matched.forEach(({ stmt, ledger }) => {
+    const t = twin(ledger); if (!t) return;
+    const main = stmt.acc === 'Main' && (stmt.t === 'Buy' || stmt.t === 'Sell');
+    const bonus = stmt.t === 'Bonus'; // no cash, no price: only the share count is compared
+    const diff = t.d !== stmt.d || Math.abs(t.amt - stmt.amt) > 0.005 || (main && (t.q !== stmt.q || Math.abs((t.p || 0) - (stmt.p || 0)) > 0.00005)) || (bonus && Math.abs((t.q || 0) - (stmt.q || 0)) > 0.005);
+    if (!diff) return;
+    const before = desc(t);
+    t.d = stmt.d; t.amt = stmt.amt; if (main) { t.q = stmt.q; t.p = stmt.p; } if (bonus) t.q = stmt.q;
+    t.note = [t.note, 'corrected per Thndr statement'].filter(Boolean).join('; ');
+    ops.push(`corrected ${before} → ${desc(t)}`);
+  });
+  rc.conflicts.forEach(({ stmt, ledger }) => {
+    if (stmt.acc === 'MF' && !st.mf) return; // no fund statement in this email: the fund name on the transfer is a guess, keep the ledger's
+    const t = twin(ledger); if (!t) return;
+    const before = desc(t);
+    Object.assign(t, { d: stmt.d, t: stmt.t, a: stmt.a, q: stmt.q, p: stmt.p, amt: stmt.amt, acc: stmt.acc, src: tag, note: 'rebooked per Thndr statement' });
+    ops.push(`rebooked ${before} → ${desc(t)}`);
+  });
+  const removable = (t) => (final || t.d < st.to) && !(t.acc === 'MF' && !st.mf);
+  rc.ledgerOnly.filter(removable).forEach((l) => { const t = twin(l); if (!t) return; next = next.filter((x) => x !== t); removed.push(t); ops.push(`removed ${desc(t)} (not on the statement)`); });
+  const addAssets = {};
+  rc.fresh.forEach((r) => {
+    if (r.acc === 'MF' && !st.mf && r.t !== 'Rebate') return;
+    const o = { id: newId(), d: r.d, t: r.t, amt: r.amt, acc: r.acc || 'Main', src: tag };
+    if (r.a) o.a = r.a; if (r.q != null) o.q = r.q; if (r.p != null) o.p = r.p; if (r.note) o.note = r.note;
+    next.push(o); ops.push(`added ${desc(o)}`);
+    if (r.newAsset && !assets[r.a] && !addAssets[r.a]) {
+      const tk = r.newAsset.ticker; const m = tk && bench.members.find((x) => x.s === tk);
+      addAssets[r.a] = r.acc === 'MF' ? { name: r.a, fund: true, sector: /saving/i.test(r.a) ? 'Cash & Savings' : 'Mutual Funds' } : { name: r.a, symbol: tk || undefined, sector: m ? m.sector : 'Unclassified' };
+    }
+  });
+  // kickbacks paid so far (the monthly statement's true-up is already in rc.fresh)
+  if (!final) {
+    const reb = r2(next.filter((t) => t.t === 'Rebate' && t.d >= st.from && t.d <= st.to).reduce((s, t) => s + t.amt, 0));
+    const up = r2(rc.kick - reb);
+    if (Math.abs(up) >= 0.05) { const o = { id: newId(), d: st.to, t: 'Rebate', amt: up, acc: 'Main', src: tag, note: `Commission kickbacks true-up to ${st.to} (statement ${fmt(rc.kick)} vs ledger ${fmt(reb)})` }; next.push(o); ops.push(`added ${desc(o)}`); }
+  }
+  // verify: the corrected ledger must re-reconcile cleanly
+  const assets2 = { ...assets, ...addAssets };
+  const rc2 = TS.reconcile(st, next, assets2, marks);
+  // a symbol-less stock (first seen on an invoice) that the snapshot lists under its ticker: record the ticker on the
+  // existing asset, keeping the ledger name, so the next month prices it and the statement no longer holds
+  const aliasAssets = {};
+  (rc2.aliases || []).forEach((al) => {
+    const m = bench.members.find((x) => x.s === al.ticker), cur = addAssets[al.name] || assets[al.name] || { name: al.name };
+    const upd = { ...cur, name: al.name, symbol: al.ticker, sector: m ? m.sector : cur.sector || 'Unclassified' };
+    if (addAssets[al.name]) addAssets[al.name] = upd; else aliasAssets[al.name] = upd;
+    ops.push(`ticker ${al.ticker} recorded for "${al.name}" (the snapshot lists it as ${al.snapshotName || al.ticker})`);
+  });
+  const left = [];
+  rc2.fresh.filter((r) => !(r.acc === 'MF' && !st.mf)).forEach((r) => left.push(`still missing ${desc(r)}`));
+  rc2.conflicts.filter((c) => !(c.stmt.acc === 'MF' && !st.mf)).forEach((c) => left.push(`still booked differently: ${desc(c.ledger)}`));
+  rc2.ledgerOnly.filter(removable).forEach((t) => left.push(`still not on the statement: ${desc(t)}`));
+  const close = cashTo(next, st.to);
+  if (st.cash.end != null && Math.abs(close - st.cash.end) > 1) left.push(`ledger cash on ${st.to} would be ${fmt(close)} but the statement closes at ${fmt(st.cash.end)}`);
+  if (final) (rc2.holdings || []).filter((h) => h.ok === false).forEach((h) => left.push(`holdings differ: ${h.ticker} statement ${h.statementQty} vs ledger ${h.ledgerQty}${h.bonusHint ? ' — ' + h.bonusHint : ''}`));
+  if (Object.values(addAssets).some((a) => !a.fund && !a.symbol)) left.push(`new stock without a ticker on the snapshot: ${Object.values(addAssets).filter((a) => !a.fund && !a.symbol).map((a) => a.name).join(', ')}`);
+  if (left.length) { entry.reasons.push(...left); entry.proposed = ops; return 'hold'; }
+
+  // apply
+  if (ops.length) {
+    const key = (rows, y) => JSON.stringify(rows.filter((t) => t.d.slice(0, 4) === y).map((t) => [t.id, t.d, t.t, t.a, t.q, t.p, t.amt, t.acc]).sort());
+    new Set(tx.concat(next).map((t) => t.d.slice(0, 4))).forEach((y) => { if (key(tx, y) !== key(next, y)) changed.ledgerYears.add(y); });
+  }
+  tx = next; Object.assign(assets, addAssets, aliasAssets); Object.assign(changed.newAssets, addAssets, aliasAssets);
+  entry.changes.push(...ops); entry.removedRows = removed;
+  if (st.cash.end != null && (!settings.cashDate || st.to >= settings.cashDate)) {
+    if (settings.cash !== st.cash.end || settings.cashDate !== st.to) entry.changes.push(`broker cash set to ${fmt(st.cash.end)} on ${st.to} (was ${fmt(settings.cash)}${settings.cashDate ? ' on ' + settings.cashDate : ''})`);
+    settings = { ...settings, cash: st.cash.end, cashDate: st.to, cashSource: `Thndr statement to ${st.to}` }; changed.settings = true;
+  }
+  if (final) {
+    const mp = rc2.markProposal, prev = marks[M] || {};
+    const mark = { ...prev, cash: mp.cash, securities: mp.securities, provisional: false, source: 'statement' };
+    delete mark.note;
+    if (prev.cash != null && prev.source !== 'statement' && prev.source !== 'reconstructed') { mark.typedCash = prev.cash; mark.typedSecurities = prev.securities; }
+    marks = { ...marks, [M]: mark }; changed.marks = true;
+    entry.changes.push(`${lbl(M)} month-end set from the statement: cash ${fmt(mp.cash)}, securities ${fmt(mp.securities)}${prev.securities != null ? ` (was ${fmt(prev.securities)})` : ''}`);
+    changed.imports[M] = { month: M, messageId: msg.id, postedAt: new Date().toISOString(), added: ops.filter((o) => o.startsWith('added')).length, corrected: ops.filter((o) => !o.startsWith('added') && !o.startsWith('removed') && !o.startsWith('ticker ')).length,
+      removed: removed.length, removedRows: removed, replaced: 0, marks: true, fullMonth: true, postedBy: 'automatic inbox sync', reportsPending: true };
+    imports[M] = changed.imports[M];
+    entry.monthly = M;
+  }
+  return ops.length || changed.settings ? 'applied' : 'unchanged';
+}
+
+// ---------- run ----------
+async function run() {
+  const pdfjs = require(require.resolve('pdfjs-dist/legacy/build/pdf.js', { paths: [__dirname, path.join(__dirname, 'node_modules'), path.join(__dirname, 'pdfjs', 'node_modules')] }));
+  loadState();
+  const out = args.out; fs.rmSync(path.join(out, 'write'), { recursive: true, force: true }); fs.mkdirSync(path.join(out, 'write'), { recursive: true });
+  const manifest = fs.existsSync(path.join(args.inbox, 'manifest.json')) ? JSON.parse(fs.readFileSync(path.join(args.inbox, 'manifest.json'))) : [];
+  manifest.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  for (const msg of manifest) {
+    if (state.seen[msg.id]) continue;
+    const kind = /invoice/i.test(msg.subject) ? 'invoice' : /monthly e-statement/i.test(msg.subject) ? 'monthly' : /requested e-statement/i.test(msg.subject) ? 'requested' : null;
+    const entry = { id: msg.id, subject: msg.subject, date: msg.date, kind, status: 'ignored', changes: [], reasons: [], notes: [], unchanged: 0 };
+    log.push(entry);
+    if (kind) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(path.join(args.inbox, `${msg.id}.json`))).raw;
+        // sender verification comes first: nothing is parsed from an email that is not provably Thndr's
+        const auth = TS.authCheck(raw);
+        entry.sender = { from: auth.from, dkim: auth.dkim, spf: auth.spf, ok: auth.ok };
+        if (!auth.ok) throw Object.assign(new Error(`sender not verified: From ${auth.from || '(none)'}, DKIM ${auth.dkim} — nothing from it was used`), { held: true });
+        const att = TS.attachments(raw);
+        const docs = [];
+        for (const a of att) docs.push({ filename: a.filename, lines: await TS.pdfLines(pdfjs, a.bytes) });
+        // account lock: only this portfolio's own Thndr documents are ever applied
+        const own = TS.ownerCheck(docs, settings);
+        if (own.error) {
+          entry.status = 'hold'; entry.reasons.push(`refused: this ${kind === 'invoice' ? 'invoice' : 'statement'} ${own.error}; nothing from it was used`);
+        } else if (own.code && settings.account && !settings.account.unifiedCode) {
+          settings = { ...settings, account: { ...settings.account, unifiedCode: own.code } }; changed.settings = true;
+          entry.notes.push(`Thndr account ${own.code} recorded for this portfolio from its first statement`);
+        }
+        if (own.error) { /* held above */ } else if (kind === 'invoice') {
+          entry.status = applyInvoiceEmail(docs.flatMap((d) => parseInvoices(d.lines)), entry);
+        } else {
+          entry.status = applyStatement(TS.parseStatement(docs), entry, msg);
+        }
+      } catch (e) { entry.status = 'hold'; entry.reasons.push((e.held ? '' : 'could not process: ') + (e.message || e)); }
+    }
+    state.seen[msg.id] = { subject: msg.subject, date: msg.date, kind, status: entry.status, at: new Date().toISOString() };
+  }
+  // missing monthly statement alert (once per month, from the 10th)
+  const pm = prevMonth(today.slice(0, 7));
+  let alert = null;
+  if (+today.slice(8) >= 10 && !(imports[pm] && imports[pm].fullMonth) && !state.alerts[pm] && pm >= settings.inception) { alert = pm; state.alerts[pm] = today; }
+  state.lastRun = new Date().toISOString();
+  state.toolSha = toolSha();
+
+  // write plan
+  const W = (f, o) => fs.writeFileSync(path.join(out, 'write', f), JSON.stringify(o));
+  const byYear = {}; tx.forEach((t) => (byYear[t.d.slice(0, 4)] = byYear[t.d.slice(0, 4)] || []).push(t));
+  [...changed.ledgerYears].forEach((y) => W(`ledger_y${y}.json`, { rows: (byYear[y] || []).sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : 0)) }));
+  if (changed.marks) W('marks.json', { months: marks });
+  if (changed.settings) W('settings.json', settings);
+  if (Object.keys(changed.newAssets).length) W('assets_update.json', { items: changed.newAssets });
+  Object.entries(changed.imports).forEach(([m, o]) => W(`import_${m}.json`, o));
+  W('sync_state.json', state);
+
+  const processed = log.filter((e) => e.kind);
+  const holds = processed.filter((e) => e.status === 'hold');
+  const applied = processed.filter((e) => e.status === 'applied');
+  const lines = [];
+  applied.forEach((e) => { lines.push(`${e.subject}${e.period ? ` (${e.period})` : ''}:`); e.changes.forEach((c) => lines.push('  • ' + c)); e.notes.forEach((c) => lines.push('  • ' + c)); });
+  holds.forEach((e) => { lines.push(`NEEDS REVIEW — ${e.subject}${e.period ? ` (${e.period})` : ''}: nothing from this email was saved.`); e.reasons.forEach((c) => lines.push('  • ' + c)); if (e.proposed && e.proposed.length) { lines.push('  Proposed changes that were not applied:'); e.proposed.forEach((c) => lines.push('    – ' + c)); } });
+  if (alert) lines.push(`The ${lbl(alert)} monthly statement has not arrived yet (checked on ${today}).`);
+  const monthlyPosted = applied.filter((e) => e.monthly).map((e) => e.monthly);
+  const summary = {
+    today, status: holds.length ? 'hold' : applied.length ? 'changed' : 'nochange',
+    processed: processed.length, applied: applied.length, held: holds.length, ignored: log.length - processed.length,
+    monthlyPosted, monthlyPending: monthlyPending(imports, monthlyPosted), alert, toolSha: state.toolSha,
+    writes: fs.readdirSync(path.join(out, 'write')),
+    email: applied.length || holds.length || alert ? {
+      subject: holds.length ? `Portfolio: ${holds.length} Thndr email${holds.length > 1 ? 's' : ''} need${holds.length > 1 ? '' : 's'} your review` : applied.some((e) => e.monthly) ? `Portfolio: ${applied.filter((e) => e.monthly).map((e) => lbl(e.monthly)).join(', ')} statement posted` : alert && !applied.length ? `Portfolio: ${lbl(alert)} Thndr statement has not arrived` : 'Portfolio updated from Thndr',
+      text: lines.join('\n') + '\n\nhttps://claude.ai/artifact/PNjUN5wQkvgtZDcTML1HFe · https://khaledamin2001-lgtm.github.io/portfolio/',
+      notify: holds.length > 0 || !!alert || applied.some((e) => e.monthly || e.kind !== 'invoice'),
+    } : null,
+    log: log.map(({ removedRows, ...e }) => e),
+  };
+  fs.writeFileSync(path.join(out, 'summary.json'), JSON.stringify(summary, null, 1));
+  console.log(JSON.stringify({ status: summary.status, processed: summary.processed, applied: summary.applied, held: summary.held, monthlyPosted: summary.monthlyPosted, monthlyPending: summary.monthlyPending, alert, writes: summary.writes, toolSha: summary.toolSha }));
+}
+// Full months whose month-end reports are still owed: the routine stamps imports/<M>.reports.factsheetSentAt and
+// .workbooksPublishedAt after sending / publishing; a month posted on or after 2026-09-28 (when the stamp was
+// introduced) without both stamps is pending, and so is every month posted by this run.
+const REPORTS_TRACKED_FROM = '2026-09-28';
+function monthlyPending(imp, posted) {
+  const out = new Set(posted || []);
+  Object.entries(imp || {}).forEach(([m, o]) => {
+    if (!o || !o.fullMonth || !(o.postedAt >= REPORTS_TRACKED_FROM)) return;
+    const r = o.reports || {};
+    if (!r.factsheetSentAt || !r.workbooksPublishedAt) out.add(m);
+  });
+  return [...out].sort();
+}
+// sha256 (first 12 hex) of the tool files that ran, so every write records which code produced it
+function toolSha() {
+  const sha = (f) => { const p = path.join(__dirname, f); return fs.existsSync(p) ? crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex').slice(0, 12) : null; };
+  return { sync: sha('sync.js'), statement: sha('statement.js'), engine: sha('engine.js'), engine2: sha('engine2.js'), at: new Date().toISOString() };
+}
+if (require.main === module) run().catch((e) => { console.error(e); process.exit(1); });
+module.exports = { parseInvoices, applyInvoice, applyInvoiceEmail, applyStatement, monthlyPending, toolSha, run, _state: () => ({ tx, assets, changed, settings, marks, log }), _reset };

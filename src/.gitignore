@@ -1,0 +1,16 @@
+# private fixtures and data - never commit
+tests/seed.json
+tests/expected.json
+private/
+sync-*/
+synct/
+inv/
+export-*/
+secret/
+# build outputs (the site publishes index.html; the desk pages are published as Claude artifacts)
+portfolio-desk.html
+yassin-desk.html
+tooldocs/
+fix2/            # tests/test_dietz.js writes its Excel-shape scratch file (real data) under fix2/tmp/engine/ when run with the private exports
+__pycache__/
+node_modules/

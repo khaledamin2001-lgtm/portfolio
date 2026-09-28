@@ -1,0 +1,947 @@
+<title>Khaled Portfolio Desk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=Public+Sans:wght@400;500;600;700&family=Spectral:wght@500;600&display=swap">
+<style>
+:root{
+  --bg:#F3F6F4; --surface:#FFFFFF; --surface-2:#EDF2EF; --ink:#0F1A17; --ink-2:#46534E; --ink-3:#6F7D78;
+  --rule:#DAE2DE; --grid:#E5EBE8; --accent:#0B6E5F; --accent-ink:#FFFFFF; --accent-soft:#DCEEE9;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --pos:#137a3a; --neg:#c02f2f; --warn:#8f5a00;
+  --pos-bg:#E2F3E7; --neg-bg:#FBE7E7; --warn-bg:#FFF1D2; --input:#FFFFFF; --input-rule:#C9D4CF;
+  --shadow:0 1px 2px rgba(15,26,23,.06),0 4px 16px rgba(15,26,23,.05);
+  --f-display:"Spectral",Georgia,"Times New Roman",serif;
+  --f-ui:"Public Sans",system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --bg:#0D1311; --surface:#141C19; --surface-2:#1B2522; --ink:#E7EEEB; --ink-2:#A8B6B1; --ink-3:#7F8E89;
+    --rule:#26322E; --grid:#212C28; --accent:#3DB39D; --accent-ink:#04201A; --accent-soft:#12332D;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --pos:#4BC46D; --neg:#F07272; --warn:#E6A93B;
+    --pos-bg:#12301D; --neg-bg:#3A1717; --warn-bg:#35280E; --input:#0F1614; --input-rule:#33423D;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 16px rgba(0,0,0,.25);
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --bg:#0D1311; --surface:#141C19; --surface-2:#1B2522; --ink:#E7EEEB; --ink-2:#A8B6B1; --ink-3:#7F8E89;
+  --rule:#26322E; --grid:#212C28; --accent:#3DB39D; --accent-ink:#04201A; --accent-soft:#12332D;
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --pos:#4BC46D; --neg:#F07272; --warn:#E6A93B;
+  --pos-bg:#12301D; --neg-bg:#3A1717; --warn-bg:#35280E; --input:#0F1614; --input-rule:#33423D;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 16px rgba(0,0,0,.25);
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:14px/1.5 var(--f-ui);-webkit-font-smoothing:antialiased}
+.wrap{max-width:1280px;margin:0 auto;padding-inline:20px;padding-block:0 64px}
+@media (max-width:600px){.wrap{padding-inline:16px}}
+h1,h2,h3{margin:0;text-wrap:balance}
+button,input,select,textarea{font:inherit;color:inherit}
+.num,td.n,th.n{font-variant-numeric:tabular-nums}
+.mono{font-family:var(--f-mono);font-size:.92em;letter-spacing:.01em}
+.muted{color:var(--ink-3)} .ink2{color:var(--ink-2)}
+.pos{color:var(--pos)} .neg{color:var(--neg)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+
+/* masthead */
+.mast{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-bottom:1px solid var(--rule)}
+.mast-in{max-width:1280px;margin:0 auto;padding-inline:20px;display:flex;align-items:center;gap:20px;min-height:56px;flex-wrap:wrap}
+@media (max-width:600px){.mast-in{padding-inline:16px;gap:10px}}
+.brand{display:flex;align-items:baseline;gap:10px;min-width:0}
+.brand b{font:600 19px/1.1 var(--f-display);letter-spacing:-.01em;white-space:nowrap}
+.brand span{font-size:12px;color:var(--ink-3);white-space:nowrap}
+.pf-switch{position:relative;min-width:0}
+.pf-title{font:600 19px/1.1 var(--f-display);letter-spacing:-.01em;white-space:nowrap;background:none;border:0;color:inherit;padding:0;cursor:pointer;display:inline-flex;align-items:center;gap:6px;max-width:100%}
+.pf-title svg{width:14px;height:14px;opacity:.65;flex:none}
+.pf-title:hover svg{opacity:1}
+.pf-menu{position:absolute;top:calc(100% + 8px);left:0;z-index:60;min-width:270px;background:var(--surface);border:1px solid var(--rule);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.2);padding:6px;display:flex;flex-direction:column;gap:2px}
+.pf-menu a,.pf-menu button{display:flex;flex-direction:column;gap:2px;align-items:flex-start;text-align:left;padding:10px 12px;border-radius:8px;border:0;background:none;color:var(--ink);font:500 14px/1.2 var(--f-ui);text-decoration:none;cursor:pointer;width:100%;box-sizing:border-box}
+.pf-menu a:hover,.pf-menu button:hover{background:var(--bg)}
+.pf-menu .cur{color:var(--accent)}
+.pf-menu small{font:400 11px/1.2 var(--f-ui);color:var(--ink-3)}
+nav.tabs{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none;margin-left:auto}
+nav.tabs::-webkit-scrollbar{display:none}
+nav.tabs button{border:0;background:none;padding:8px 12px;border-radius:8px;color:var(--ink-2);font-weight:500;cursor:pointer;white-space:nowrap}
+nav.tabs button:hover{background:var(--surface-2);color:var(--ink)}
+nav.tabs button[aria-selected="true"]{background:var(--ink);color:var(--bg)}
+@media (max-width:860px){nav.tabs{margin-left:0;width:100%;padding-bottom:8px}}
+/* phones: the seven tabs wrap onto two rows instead of scrolling or clipping */
+@media (max-width:520px){nav.tabs{flex-wrap:wrap;overflow:visible;gap:2px 0;padding-bottom:6px}nav.tabs button{padding:7px 10px;font-size:13px}}
+
+/* tape */
+.tape{display:flex;gap:22px;overflow-x:auto;min-width:0;max-width:100%;padding-block:10px;border-bottom:1px solid var(--rule);scrollbar-width:none;font-size:12.5px}
+.tape::-webkit-scrollbar{display:none}
+.tape .t{display:flex;gap:8px;align-items:baseline;white-space:nowrap}
+.tape .t b{font:500 11px var(--f-mono);letter-spacing:.06em;color:var(--ink-3)}
+.feedbar{display:flex;justify-content:flex-end;align-items:center;gap:8px;padding-block:8px 0;font-size:12.5px;flex-wrap:wrap}
+.feedbar:empty{display:none}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--ink-3);display:inline-block}
+.dot.ok{background:var(--pos)} .dot.warn{background:var(--warn)} .dot.err{background:var(--neg)}
+
+/* period bar */
+.period{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;padding-block:18px 6px}
+.seg{display:inline-flex;background:var(--surface-2);border-radius:10px;padding:3px;flex-wrap:wrap}
+.seg button{border:0;background:none;padding:6px 11px;border-radius:8px;cursor:pointer;color:var(--ink-2);font-weight:500;font-size:13px}
+.seg button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
+.period label{font-size:12px;color:var(--ink-3);display:flex;gap:6px;align-items:center}
+select,input[type=text],input[type=number],input[type=date],input[type=month],textarea{background:var(--input);border:1px solid var(--input-rule);border-radius:8px;padding:6px 9px;min-width:0}
+input[type=number]{font-variant-numeric:tabular-nums}
+.period .label{font:600 22px/1.2 var(--f-display);margin-right:auto}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:3px 9px;border-radius:999px;background:var(--surface-2);color:var(--ink-2);white-space:nowrap}
+.chip.warn{background:var(--warn-bg);color:var(--warn)} .chip.ok{background:var(--pos-bg);color:var(--pos)} .chip.err{background:var(--neg-bg);color:var(--neg)}
+
+/* layout */
+section.view{display:grid;gap:18px;padding-top:12px}
+.grid{display:grid;gap:18px}
+.g2{grid-template-columns:repeat(auto-fit,minmax(min(100%,460px),1fr))}
+.g3{grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr))}
+.panel{background:var(--surface);border:1px solid var(--rule);border-radius:14px;padding:18px 20px;min-width:0}
+@media (max-width:600px){.panel{padding:16px 14px}}
+.panel h2{font:600 17px/1.3 var(--f-display);letter-spacing:-.005em}
+.panel .sub{font-size:12.5px;color:var(--ink-3);margin-top:2px}
+.phead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.eyebrow{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);font-weight:600}
+
+/* KPI tiles */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,190px),1fr));gap:1px;background:var(--rule);border:1px solid var(--rule);border-radius:14px;overflow:hidden}
+.kpi{background:var(--surface);padding:16px 18px;display:grid;gap:4px;align-content:start}
+.kpi .v{font:600 26px/1.15 var(--f-display);font-variant-numeric:tabular-nums lining-nums;letter-spacing:-.01em}
+.kpi .v small{font:500 13px var(--f-ui);color:var(--ink-3);margin-left:4px}
+.kpi .d{font-size:12.5px;color:var(--ink-2)}
+.kpi.hero{background:var(--accent);color:var(--accent-ink)}
+.kpi.hero .eyebrow,.kpi.hero .d,.kpi.hero .v small{color:color-mix(in srgb,var(--accent-ink) 78%,transparent)}
+.kpi.hero .pos,.kpi.hero .neg{color:var(--accent-ink)}
+
+/* tables */
+.tbl{overflow-x:auto;margin-inline:-4px;position:relative}
+/* the row label stays put while a wide table is swiped: first column sticky, on the table's own background, with a rule */
+.tbl th:first-child,.tbl td:first-child{position:sticky;left:0;z-index:2;background:var(--surface);border-right:1px solid var(--rule)}
+@media (max-width:520px){.tbl th:first-child,.tbl td:first-child{max-width:140px;white-space:normal;overflow-wrap:anywhere}}
+input:disabled,select:disabled,textarea:disabled{color:var(--ink-2);-webkit-text-fill-color:var(--ink-2)}
+.tbl th:first-child{z-index:3}
+.tbl tbody tr:hover td:first-child{background:var(--surface-2)}
+/* a table wider than its box says so until it has been scrolled (class set by markScrollables) */
+.tbl.can-scroll::after{content:"swipe →";position:sticky;left:calc(100% - 70px);display:inline-block;margin:6px 0 2px;padding:2px 8px;border-radius:999px;background:var(--surface-2);color:var(--ink-3);font-size:11px;letter-spacing:.04em;pointer-events:none}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);font-weight:600;text-align:left;padding:8px 10px;border-bottom:1px solid var(--rule);white-space:nowrap;position:sticky;top:0;background:var(--surface)}
+td{padding:8px 10px;border-bottom:1px solid var(--grid);white-space:nowrap;vertical-align:middle}
+td.n,th.n{text-align:right}
+tbody tr:hover td{background:var(--surface-2)}
+tfoot td{font-weight:600;border-top:1px solid var(--rule);border-bottom:0}
+td.wrap{white-space:normal;min-width:180px}
+.sym{font:500 12.5px var(--f-mono);letter-spacing:.03em}
+.bar{height:6px;border-radius:3px;background:var(--surface-2);position:relative;min-width:60px}
+.bar i{position:absolute;inset:0 auto 0 0;border-radius:3px;background:var(--s1)}
+.pill{font-size:11px;font-weight:600;padding:2px 7px;border-radius:999px;letter-spacing:.03em}
+.pill.win{background:var(--pos-bg);color:var(--pos)} .pill.loss{background:var(--neg-bg);color:var(--neg)}
+.pill.auto{background:var(--accent-soft);color:var(--accent)} .pill.man{background:var(--surface-2);color:var(--ink-2)} .pill.stale{background:var(--warn-bg);color:var(--warn)}
+.pill.prov{background:var(--warn-bg);color:var(--warn)}
+
+/* key-value lists */
+.kv{display:grid;grid-template-columns:1fr auto;gap:0;font-size:13.5px}
+.kv > div{padding:7px 0;border-bottom:1px solid var(--grid);display:contents}
+.kv dt{padding:7px 0;border-bottom:1px solid var(--grid);color:var(--ink-2)}
+.kv dd{margin:0;padding:7px 0;border-bottom:1px solid var(--grid);text-align:right;font-variant-numeric:tabular-nums;font-weight:500}
+.kv dt.total,.kv dd.total{border-top:1.5px solid var(--ink-2);border-bottom:3px double var(--ink-2);font-weight:700;color:var(--ink)}
+.kv dt.sec{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);font-weight:600;padding-top:14px}
+
+/* charts */
+.chart{position:relative;width:100%}
+.chart svg{display:block;width:100%;overflow:visible}
+.chart text{fill:var(--ink-3);font:11px var(--f-ui);font-variant-numeric:tabular-nums}
+.chart .gl{stroke:var(--grid);stroke-width:1}
+.chart .zero{stroke:var(--ink-3);stroke-width:1}
+.tip{position:absolute;pointer-events:none;background:var(--ink);color:var(--bg);border-radius:8px;padding:8px 10px;font-size:12px;line-height:1.45;box-shadow:var(--shadow);white-space:nowrap;z-index:5;transform:translate(-50%,-100%);transition:opacity .08s}
+.tip b{font-weight:600}
+.tip .sw{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px;vertical-align:0}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12.5px;color:var(--ink-2)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:14px;height:3px;border-radius:2px;display:inline-block}
+.legend i.sq{width:10px;height:10px;border-radius:2px}
+
+/* forms & buttons */
+.btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--input-rule);background:var(--surface);padding:7px 13px;border-radius:9px;cursor:pointer;font-weight:500;font-size:13px;white-space:nowrap}
+.btn:hover{background:var(--surface-2)}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.btn.primary:hover{filter:brightness(1.07)}
+.btn.danger{color:var(--neg);border-color:color-mix(in srgb,var(--neg) 40%,var(--input-rule))}
+.btn.sm{padding:4px 9px;font-size:12px;border-radius:7px}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.form{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,150px),1fr));gap:10px 12px;align-items:end}
+.form label{display:grid;gap:4px;font-size:12px;color:var(--ink-2);font-weight:500}
+.form input,.form select{width:100%}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.grid-in input{width:100%;min-width:84px;padding:4px 7px;border-radius:6px;text-align:right;font-variant-numeric:tabular-nums}
+.grid-in input.txt{text-align:left;min-width:140px}
+.grid-in input.dirty{border-color:var(--accent);background:var(--accent-soft)}
+td.in-cell{padding:4px 6px}
+input.inp,.grid-in input{color:#2256c7}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) input.inp,:root:not([data-theme="light"]) .grid-in input{color:#8db8ff}}
+:root[data-theme="dark"] input.inp,:root[data-theme="dark"] .grid-in input{color:#8db8ff}
+textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
+
+/* checks */
+.checks{display:grid;gap:0}
+.check{display:grid;grid-template-columns:28px 1fr;gap:4px 10px;padding:10px 0;border-bottom:1px solid var(--grid)}
+.check .ic{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700}
+.check .ic.ok{background:var(--pos-bg);color:var(--pos)} .check .ic.warn{background:var(--warn-bg);color:var(--warn)} .check .ic.error{background:var(--neg-bg);color:var(--neg)}
+.check .dt{font-size:12.5px;color:var(--ink-3);grid-column:2}
+.prose{max-width:68ch;font-size:14px;color:var(--ink-2)}
+.prose h3{font:600 15px var(--f-display);color:var(--ink);margin:18px 0 4px}
+.prose p{margin:0 0 8px} .prose code{font:12.5px var(--f-mono);background:var(--surface-2);padding:1px 5px;border-radius:4px}
+
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;font-size:13px;z-index:50;box-shadow:var(--shadow);max-width:calc(100% - 32px)}
+.toast.error{background:var(--neg);color:#fff}
+.empty{padding:48px 20px;text-align:center;color:var(--ink-2)}
+.empty h2{font:600 22px var(--f-display);color:var(--ink);margin-bottom:6px}
+.note{font-size:12.5px;color:var(--ink-3)}
+.subnav{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+.subnav .muted{font-size:12px;margin-right:4px}
+.subnav a{font-size:12.5px;padding:6px 11px;border-radius:999px;border:1px solid var(--rule);color:var(--ink-2);text-decoration:none;background:var(--surface)}
+.subnav a:hover{color:var(--ink);background:var(--surface-2)}
+.tsec{scroll-margin-top:110px;min-width:0;max-width:100%}
+.tsec>*+*{margin-top:18px}
+.tsec+.tsec{margin-top:30px;padding-top:24px;border-top:1px solid var(--rule)}
+.secttl{font:600 20px/1.2 var(--f-display);margin:0 0 14px;letter-spacing:-.01em}
+.brief p{font-size:14.5px;line-height:1.65;margin:8px 0 0;max-width:80ch}
+.banner{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 14px;border-radius:10px;background:var(--warn-bg);color:var(--warn);font-size:13px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<header class="mast">
+  <div class="mast-in">
+    <div class="brand"><div class="pf-switch"><button type="button" id="pf-name" class="pf-title" data-testid="portfolio-switch" aria-haspopup="menu" aria-expanded="false" title="Switch portfolio"><span id="pf-name-text">Portfolio</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="pf-menu" id="pf-menu" role="menu" hidden></div></div><span>EGX · Thndr · EGP</span></div>
+    <nav class="tabs" role="tablist" id="tabs">
+      <button role="tab" data-tab="overview" id="tab-overview">Overview</button>
+      <button role="tab" data-tab="holdings" id="tab-holdings">Holdings</button>
+      <button role="tab" data-tab="performance" id="tab-performance">Performance</button>
+      <button role="tab" data-tab="analysis" id="tab-analysis">Analysis</button>
+      <button role="tab" data-tab="activity" id="tab-activity">Activity</button>
+      <button role="tab" data-tab="reports" id="tab-reports">Reports</button>
+      <button role="tab" data-tab="settings" id="tab-settings">Settings</button>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="tape" id="tape"><span class="muted">Loading market data…</span></div>
+  <div class="feedbar" id="feed"></div>
+  <div class="period" id="period"></div>
+  <main id="main"><div class="empty"><h2>Opening your portfolio…</h2><p>Connecting to the portfolio database.</p></div></main>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+/*ENGINE*/
+</script>
+<script>
+/*ENGINE2*/
+</script>
+<script>
+/*STATEMENT*/
+</script>
+<script>
+(function(){
+'use strict';
+const REFRESH_TRIGGER_ID = 'trig_014NNnjAsB4CrMpKaZSAJNoG';   // the scheduled price routine; 'Refresh now' fires it once
+const $ = (s, el=document) => el.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const ls = { get(k,d){ try{ const v = localStorage.getItem(k); return v==null?d:JSON.parse(v);}catch(e){return d;} }, set(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch(e){} } };
+
+// ---------- formatting (CFI style: negatives in parentheses for money, signed % for returns) ----------
+const nf = (dp) => new Intl.NumberFormat('en-US',{minimumFractionDigits:dp,maximumFractionDigits:dp});
+function egp(x, dp=0){ if(x==null||!isFinite(x)) return '—'; const s = nf(dp).format(Math.abs(x)); return x < 0 && Math.abs(x) >= 0.5*Math.pow(10,-dp) ? `(${s})` : s; }
+function pct(x, dp=1, signed=true){ if(x==null||!isFinite(x)) return '—'; const v = x*100; const s = nf(dp).format(Math.abs(v)); if(Math.abs(v) < 0.5*Math.pow(10,-dp)) return nf(dp).format(0)+'%'; return (v<0?'−':(signed?'+':''))+s+'%'; }
+const sgn = (x) => x==null ? '' : x>0 ? 'pos' : x<0 ? 'neg' : '';
+const num = (x, dp=2) => x==null||!isFinite(x) ? '—' : nf(dp).format(x);
+const short = (x) => { if(x==null) return '—'; const a=Math.abs(x); const s = a>=1e6? (a/1e6).toFixed(a>=1e7?1:2)+'M' : a>=1e3? (a/1e3).toFixed(a>=1e5?0:1)+'k' : a.toFixed(0); return (x<0?'−':'')+s; };
+const M = (m) => PE.fmtMonth(m);
+const dfmt = (d) => { if(!d) return '—'; const [y,m,dd]=d.split('-'); return `${+dd} ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][+m-1]} ${y.slice(2)}`; };
+
+// ---------- state ----------
+const S = {
+  db:null, ready:{settings:false,marks:false,assets:false,ledger:false,market:false},
+  settings:null, marks:{}, assets:{}, ledgerDocs:{}, market:null, history:{},
+  tab: ls.get('pd.tab','overview'),
+  sel: ls.get('pd.sel',{type:'Since Inception',asOf:null,from:null,to:null}),
+  ledgerFilter: {q:'', type:'', year:''},
+  R:null, readOnly:false, bench:null, imports:{}, sync:null, stmt:{list:null, busy:false, error:null, review:null}, fsMonth:null, fallback:null,
+};
+if(location.hash && /^#[a-z]+$/.test(location.hash)) S.tab = location.hash.slice(1);
+
+function toast(msg, kind){ const t=$('#toast'); t.textContent=msg; t.className='toast'+(kind?' '+kind:''); t.hidden=false; clearTimeout(toast._t); toast._t=setTimeout(()=>t.hidden=true, kind==='error'?6000:2800); }
+function errText(e){ const c=e&&e.code; if(c==='invalid_argument') return 'Saving was refused. You may only have view access to this page.'; if(c==='quota_exceeded') return 'The portfolio database is full. Delete old history months under Inputs to free space.'; if(c==='resource_exhausted') return 'Too many saves in a row. Wait a few seconds and try again.'; return 'Could not save: '+(e&&e.message||'unknown error')+'. Try again in a moment.'; }
+async function save(fn, ok){ try{ await fn(); if(ok) toast(ok); document.querySelectorAll('#main .dirty').forEach(x=>x.classList.remove('dirty')); if(document.activeElement && document.activeElement.blur) document.activeElement.blur(); S.pending=false; renderTab(true); return true; }catch(e){ console.error(e); if(e&&e.code==='invalid_argument') S.readOnly=true; toast(errText(e),'error'); return false; } }
+
+function allTx(){
+  const years = Object.keys(S.ledgerDocs).sort();
+  const out=[]; years.forEach(y => (S.ledgerDocs[y].rows||[]).forEach(r => out.push(r)));
+  return out;
+}
+// dataset(true) swaps in month-close estimates for closed months that still have no statement (PA.estimateMarks: ledger cash +
+// holdings × closing prices). The stored marks are never changed; the backup export uses dataset() and keeps them as typed.
+function estMarks(){ try{ if(!S.history || !Object.keys(S.history).length) return S.marks; return PA.estimateMarks(S.settings, S.marks, PE.runLedger(allTx()), S.assets, pbook(), PE.cairoToday()); }catch(e){ console.error(e); return S.marks; } }
+function dataset(est){ return { settings:S.settings, marks: est ? estMarks() : S.marks, assets:S.assets, tx:allTx(), market:S.market }; }
+function isReady(){ return S.ready.settings && S.ready.marks && S.ready.assets && S.ready.ledger; }
+
+let raf=0;
+function schedule(){ cancelAnimationFrame(raf); raf=requestAnimationFrame(recompute); }
+function recompute(){
+  if(!isReady()) return;
+  if(!S.settings){ renderEmpty(); return; }
+  try{
+    const pb = pbook(), today = PE.cairoToday();
+    const pricer = PA.makePricer(S.assets, PE.runLedger(allTx()), pb);
+    S.fallback = (name) => { const p = pricer(name, today); return p ? { p: p.p, d: pb.last } : null; };
+    S.R = PE.run(dataset(true), S.sel, { fallback: S.fallback });
+  }catch(e){ console.error(e); $('#main').innerHTML = `<div class="empty"><h2>The model hit an error</h2><p>${esc(e.message)}</p></div>`; return; }
+  $('#pf-name-text').textContent = S.settings.name || 'Portfolio';
+  renderTape(); renderPeriod(); renderTab(false);
+}
+function renderEmpty(){ $('#main').innerHTML = `<div class="empty"><h2>No portfolio data yet</h2><p>The database for this page is empty. Ask Claude to load your workbook into it.</p></div>`; $('#period').innerHTML=''; }
+
+// ---------- tabs ----------
+// Six tabs; the older, finer-grained names still work as links and jump to their section inside the merged tab.
+const TAB_ALIAS = {attribution:'analysis', risk:'analysis', income:'holdings', trades:'activity', ledger:'activity', statements:'settings', factsheet:'reports', inputs:'settings', checks:'settings'};
+const TAB_VIEWS = {
+  overview: [['overview','Overview',()=>vOverview()]],
+  holdings: [['holdings','Holdings',()=>vHoldings()],['income','Income & dividends',()=>vIncome()]],
+  performance: [['performance','Performance',()=>vPerformance()]],
+  analysis: [['analysis','What the numbers say',()=>vAnalysis()],['attribution','Attribution vs EGX30 Capped',()=>vAttribution()]],
+  activity: [['trades','Closed trades',()=>vTrades()],['ledger','Ledger',()=>vLedger()]],
+  reports: [['factsheet','Monthly factsheet & Excel',()=>vFactsheet()]],
+  settings: [['inputs','Inputs & settings',()=>vInputs()],['statements','Statements & imports',()=>vStatements()],['checks','Checks',()=>vChecks()]],
+};
+const tabOf = (t) => (TAB_VIEWS[t] ? t : TAB_ALIAS[t] || 'overview');
+function setTab(t, sec){ const top=tabOf(t); if(!sec && TAB_ALIAS[t]) sec=t; S.tab=top; ls.set('pd.tab',top); try{ history.replaceState(null,'','#'+(sec||top)); }catch(e){} renderTab(true);
+  const el = sec && document.getElementById('sec-'+sec); if(el) el.scrollIntoView({block:'start'}); else window.scrollTo({top:0}); }
+function editing(){ const a=document.activeElement; return inputsDirty() || !!(a && a.closest && a.closest('#main') && a.matches('input,select,textarea')); }
+document.addEventListener('focusout', ()=>{ setTimeout(()=>{ if(S.pending && !editing()){ S.pending=false; renderTab(false); } }, 0); });
+$('#tabs').addEventListener('click', e => { const b=e.target.closest('button[data-tab]'); if(b) setTab(b.dataset.tab); });
+function renderTab(force){
+  if(!force && editing()){ S.pending=true; return; }  // a snapshot arrived mid-edit: re-render once the user leaves the field
+  S.pending=false;
+  S.tab = tabOf(S.tab);
+  document.querySelectorAll('#tabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab===S.tab)));
+  const showPeriod = ['overview','performance','analysis','activity'].includes(S.tab);
+  $('#period').hidden = !showPeriod;
+  const views = TAB_VIEWS[S.tab];
+  const nav = views.length>1 ? `<nav class="subnav" aria-label="On this page"><span class="muted">On this page</span>${views.map(([id,label])=>`<a href="#${id}" data-sec="${id}" data-testid="sec-${id}">${esc(label)}</a>`).join('')}</nav>` : '';
+  $('#main').innerHTML = `<section class="view">${nav}${views.map(([id,label,fn],i)=>`<div class="tsec" id="sec-${id}">${views.length>1&&i>0?`<h2 class="secttl">${esc(label)}</h2>`:''}${fn()}</div>`).join('')}</section>`;
+  mountCharts(); disableReadOnlyForms(); markScrollables();
+}
+// Wide tables on a phone: flag every .tbl that overflows its container so CSS can show a "swipe →" hint; the hint goes once scrolled.
+function markScrollables(){
+  document.querySelectorAll('#main .tbl').forEach(el=>{
+    const can = el.scrollWidth > el.clientWidth + 40;
+    el.classList.toggle('can-scroll', can && !el.dataset.scrolled);
+    if(can && !el._swipeWired){ el._swipeWired=true; el.addEventListener('scroll', ()=>{ if(el.scrollLeft>4){ el.dataset.scrolled='1'; el.classList.remove('can-scroll'); } }, {passive:true}); }
+  });
+}
+window.addEventListener('resize', ()=>{ clearTimeout(markScrollables._t); markScrollables._t=setTimeout(markScrollables,150); });
+
+// ---------- tape (index & feed status) ----------
+function feedStatus(){
+  const m=S.market; if(!m||!m.asOf) return {cls:'err', text:'No automatic prices yet'};
+  const ageH = (Date.now()-Date.parse(m.asOf))/36e5;
+  const when = new Date(m.asOf).toLocaleString('en-US',{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit',hour12:true,timeZone:'Africa/Cairo'});
+  return {cls: ageH<30?'ok': ageH<80?'warn':'err', text:`Prices ${when} Cairo`};
+}
+function renderTape(){
+  const m=S.market||{}; const ix=m.index||{};
+  const item=(k,label,v,chg,dp=2)=> v==null?'':`<span class="t"><b>${label}</b><span class="num">${num(v,dp)}</span>${chg!=null?`<span class="num ${sgn(chg)}">${pct(chg/100,2)}</span>`:''}</span>`;
+  const fs=feedStatus();
+  $('#tape').innerHTML =
+    item('c','EGX30 CAPPED',ix.EGX30CAPPED&&ix.EGX30CAPPED.close,ix.EGX30CAPPED&&ix.EGX30CAPPED.chg,1)+
+    item('e','EGX30',ix.EGX30&&ix.EGX30.close,ix.EGX30&&ix.EGX30.chg,1)+
+    item('s','EGX70 EWI',ix.EGX70EWI&&ix.EGX70EWI.close,ix.EGX70EWI&&ix.EGX70EWI.chg,1)+
+    item('f','USD/EGP',m.fx&&m.fx.USDEGP&&m.fx.USDEGP.price,m.fx&&m.fx.USDEGP&&m.fx.USDEGP.chg,2)+
+    item('g','GOLD 24K /g',m.gold&&m.gold.gram24kEgp,null,0);
+  $('#feed').innerHTML = `<span class="dot ${fs.cls}"></span><span class="muted">${esc(fs.text)}</span>${REFRESH_TRIGGER_ID?` <button class="btn sm" id="refresh-prices" data-testid="refresh-prices" title="Fetch the latest prices, EGX30 Capped, USD/EGP and gold now">Refresh now</button>`:''}`;
+}
+
+// ---------- period selector ----------
+const PT = [['Month','Month'],['Quarter','Quarter'],['YTD','YTD'],['Year','Year'],['Last 12 Months','L12M'],['Since Inception','Since inception'],['Custom','Custom']];
+function renderPeriod(){
+  const R=S.R; const months=R.months.filter(r=>r.has).map(r=>r.month).reverse();
+  const asOf = R.range.asOf;
+  const opt=(m,sel)=>`<option value="${m}" ${m===sel?'selected':''}>${M(m)}${R.months.find(r=>r.month===m&&r.live)?' (live)':''}</option>`;
+  $('#period').innerHTML = `
+    <div class="label">${esc(R.stats.label)}</div>
+    <div class="seg" role="group" aria-label="Analysis period">${PT.map(([v,l])=>`<button data-pt="${v}" aria-pressed="${S.sel.type===v}">${l}</button>`).join('')}</div>
+    ${S.sel.type==='Custom' ? `<label>From <select id="sel-from">${months.slice().reverse().map(m=>opt(m,R.range.from)).join('')}</select></label><label>To <select id="sel-to">${months.map(m=>opt(m,R.range.to)).join('')}</select></label>`
+      : S.sel.type==='Since Inception' && !S.sel.asOf ? `<label>As of <select id="sel-asof">${months.map(m=>opt(m,asOf)).join('')}</select></label>` : `<label>As of <select id="sel-asof">${months.map(m=>opt(m,asOf)).join('')}</select></label>`}
+    ${R.live && R.range.to===R.live.month ? `<span class="chip warn" title="The current month uses live prices and broker cash until you confirm the statement month-end">${M(R.live.month)} is month-to-date</span>`:''}`;
+}
+$('#period').addEventListener('click', e => { const b=e.target.closest('[data-pt]'); if(!b) return; S.sel.type=b.dataset.pt; if(S.sel.type==='Custom'&&!S.sel.from){ S.sel.from=S.R.range.from; S.sel.to=S.R.range.to; } ls.set('pd.sel',S.sel); recompute(); });
+$('#period').addEventListener('change', e => {
+  const latest = S.R.range.lastData;
+  if(e.target.id==='sel-asof'){ S.sel.asOf = e.target.value===latest ? null : e.target.value; }
+  if(e.target.id==='sel-from') S.sel.from=e.target.value;
+  if(e.target.id==='sel-to') S.sel.to=e.target.value;
+  ls.set('pd.sel',S.sel); recompute();
+});
+
+// ---------- charts ----------
+const charts = [];
+function chartSlot(id, spec, h){ charts.push({id, spec, h}); return `<div class="chart" id="${id}" style="height:${h}px" data-testid="${id}"></div>`; }
+function mountCharts(){ ro.disconnect(); const list = charts.splice(0); list.forEach(c => { const el=document.getElementById(c.id); if(el){ el._spec=c; drawChart(el); ro.observe(el);} }); }
+var ro = new ResizeObserver(entries => entries.forEach(en => { const el=en.target; if(el._w!==Math.round(en.contentRect.width)) drawChart(el); }));
+function niceTicks(min,max,count=5){ if(min===max){ max=min+1; } const span=max-min; const step0=span/count; const mag=Math.pow(10,Math.floor(Math.log10(step0))); const f=step0/mag; const step=(f<1.5?1:f<3?2:f<7?5:10)*mag; const lo=Math.floor(min/step)*step, hi=Math.ceil(max/step)*step; const t=[]; for(let v=lo; v<=hi+step/2; v+=step) t.push(+v.toFixed(10)); return t; }
+function cssVar(n){ return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+function drawChart(el){
+  const {spec,h}=el._spec; const W=Math.max(280,Math.round(el.clientWidth)); el._w=W;
+  const kind=spec.kind; const labels=spec.labels; const n=labels.length;
+  const padL=spec.padL||56, padR=16, padT=12, padB=26; const iw=W-padL-padR, ih=h-padT-padB;
+  const all=[]; spec.series.forEach(s=>s.values.forEach(v=>{ if(v!=null&&isFinite(v)) all.push(v); }));
+  let min=Math.min(0,...all), max=Math.max(0,...all); if(spec.minZero===false){ min=Math.min(...all); max=Math.max(...all); const pad=(max-min)*0.08||1; min-=pad; max+=pad; }
+  const ticks=niceTicks(min,max,Math.max(3,Math.round(ih/48))); min=ticks[0]; max=ticks[ticks.length-1];
+  const y=v=>padT+ih-(v-min)/(max-min)*ih;
+  const band=iw/Math.max(1,n); const xC=i=> kind==='bar'? padL+band*(i+.5) : padL+(n<=1?iw/2:i*iw/(n-1));
+  const every=Math.max(1,Math.ceil(n/Math.max(2,Math.floor(iw/58))));
+  let g=`<svg viewBox="0 0 ${W} ${h}" height="${h}" role="img" aria-label="${esc(spec.title||'chart')}">`;
+  ticks.forEach(t=>{ g+=`<line class="${t===0?'zero':'gl'}" x1="${padL}" x2="${W-padR}" y1="${y(t)}" y2="${y(t)}"/><text x="${padL-8}" y="${y(t)+4}" text-anchor="end">${esc(spec.yFmt(t,true))}</text>`; });
+  labels.forEach((l,i)=>{ if(i%every===0 || (kind!=='bar'&&i===n-1&&n>1&&(n-1)%every>every/2)) g+=`<text x="${xC(i)}" y="${h-8}" text-anchor="middle">${esc(l)}</text>`; });
+  if(kind==='bar'){
+    const k=spec.series.length; const gap=2; const bw=Math.max(2,Math.min(26,(band*0.72-(k-1)*gap)/k));
+    spec.series.forEach((s,si)=>{ s.values.forEach((v,i)=>{ if(v==null) return; const x0=xC(i)-(k*bw+(k-1)*gap)/2+si*(bw+gap); const y0=y(Math.max(0,v)), y1=y(Math.min(0,v)); const hh=Math.max(1,y1-y0); const col = s.colorFn? s.colorFn(v) : s.color; const r=Math.min(3,bw/2,hh);
+      g+= v>=0 ? `<path d="M${x0},${y1} V${y0+r} Q${x0},${y0} ${x0+r},${y0} H${x0+bw-r} Q${x0+bw},${y0} ${x0+bw},${y0+r} V${y1} Z" fill="${col}"/>` : `<path d="M${x0},${y0} V${y1-r} Q${x0},${y1} ${x0+r},${y1} H${x0+bw-r} Q${x0+bw},${y1} ${x0+bw},${y1-r} V${y0} Z" fill="${col}"/>`; }); });
+  } else {
+    spec.series.forEach(s=>{
+      const pts=s.values.map((v,i)=>v==null?null:[xC(i),y(v)]);
+      let d=''; pts.forEach((p,i)=>{ if(!p) return; d+=(d&&pts[i-1]?'L':'M')+p[0].toFixed(1)+','+p[1].toFixed(1); });
+      if(s.area){ const f=pts.filter(Boolean); if(f.length) g+=`<path d="${d}L${f[f.length-1][0]},${y(Math.max(min,0))}L${f[0][0]},${y(Math.max(min,0))}Z" fill="${s.color}" opacity=".16"/>`; }
+      g+=`<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" ${s.dash?'stroke-dasharray="5 4"':''}/>`;
+      const last=pts.map((p,i)=>[p,i]).filter(x=>x[0]).pop(); if(last) g+=`<circle cx="${last[0][0]}" cy="${last[0][1]}" r="4" fill="${s.color}" stroke="${cssVar('--surface')}" stroke-width="2"/>`;
+    });
+  }
+  g+=`<line id="${el.id}-x" x1="0" x2="0" y1="${padT}" y2="${padT+ih}" stroke="${cssVar('--ink-3')}" stroke-dasharray="3 3" opacity="0"/>`;
+  g+=`<rect x="${padL}" y="${padT}" width="${iw}" height="${ih}" fill="transparent" class="hit"/></svg><div class="tip" hidden></div>`;
+  el.innerHTML=g;
+  const svg=el.querySelector('svg'), tip=el.querySelector('.tip'), xl=el.querySelector('#'+CSS.escape(el.id+'-x'));
+  const move=(ev)=>{ const r=svg.getBoundingClientRect(); const px=(ev.clientX-r.left)*W/r.width; let i = kind==='bar'? Math.floor((px-padL)/band) : Math.round((px-padL)/(iw/Math.max(1,n-1))); i=Math.max(0,Math.min(n-1,i));
+    const rows=spec.series.map(s=>{ const v=s.values[i]; return v==null?'':`<div><span class="sw" style="background:${s.colorFn?s.colorFn(v):s.color}"></span>${esc(s.name)} <b>${esc(spec.yFmt(v))}</b></div>`; }).join('');
+    tip.innerHTML=`<div class="muted" style="color:inherit;opacity:.75">${esc(spec.tipLabel?spec.tipLabel(i):labels[i])}</div>${rows}${spec.tipExtra?spec.tipExtra(i):''}`; tip.hidden=false;
+    const cx=xC(i)*r.width/W; tip.style.left=Math.max(70,Math.min(r.width-70,cx))+'px'; tip.style.top='6px'; tip.style.transform='translate(-50%,0)';
+    xl.setAttribute('x1',xC(i)); xl.setAttribute('x2',xC(i)); xl.setAttribute('opacity','.8'); };
+  const leave=()=>{ tip.hidden=true; xl.setAttribute('opacity','0'); };
+  svg.addEventListener('pointermove',move); svg.addEventListener('pointerleave',leave); svg.addEventListener('pointerdown',move);
+}
+const C = { s1:()=>cssVar('--s1'), s2:()=>cssVar('--s2'), pos:()=>cssVar('--pos'), neg:()=>cssVar('--neg'), ink3:()=>cssVar('--ink-3') };
+const pctAxis=(v,axis)=> axis ? (v*100).toFixed(Math.abs(v)<0.1&&v!==0?1:0).replace('-','−')+'%' : pct(v,2);
+const egpAxis=(v,axis)=> axis ? short(v) : egp(v)+' EGP';
+
+// ---------- shared bits ----------
+function kpi(label, value, detail, cls='', unit=''){ return `<div class="kpi ${cls}"><div class="eyebrow">${label}</div><div class="v">${value}${unit?`<small>${unit}</small>`:''}</div>${detail?`<div class="d">${detail}</div>`:''}</div>`; }
+function dayPL(){ const R=S.R; let pl=0, base=0; R.pos.open.forEach(r=>{ if(r.chg!=null && r.priceSource==='auto' && r.mv){ const prev=r.mv/(1+r.chg/100); pl+=r.mv-prev; base+=prev; } }); return {pl, pct: base? pl/base : null}; }
+function checkSummary(){ const c=S.R.checks; const e=c.filter(x=>x.status==='error').length, w=c.filter(x=>x.status==='warn').length; return e? {cls:'err',text:`${e} check${e>1?'s':''} failing`} : w? {cls:'warn',text:`All pass · ${w} warning${w>1?'s':''}`} : {cls:'ok',text:'All checks pass'}; }
+
+// ---------- Overview ----------
+function vOverview(){
+  const R=S.R, st=R.stats; if(!st.n) return `<div class="panel empty"><h2>No data for this selection</h2></div>`;
+  const cashNow = R.liveCash ?? R.settings.cash; const total = cashNow + R.pos.mvTotal; const dp=dayPL(); const cs=checkSummary();
+  const unreal = R.pos.open.reduce((s,r)=>s+(r.unreal||0),0);
+  const rows=st.rows; const labels=rows.map(r=>M(r.month));
+  let invested=[]; let cap=st.opening; rows.forEach(r=>{ cap+=r.netFlow; invested.push(cap); });
+  const benchLabel = st.benchComplete ? 'EGX30 Capped' : 'EGX30 Capped (incomplete)';
+  const maxW=Math.max(...R.pos.open.map(r=>r.weight),0.0001);
+  const noCpi=rows.filter(r=>r.cpi==null).map(r=>M(r.month));
+  return `${statementBanner()}
+  <div class="kpis">
+    ${kpi('Total value · live', egp(total), `<span class="${sgn(dp.pl)}">${dp.pct!=null?`${dp.pl>=0?'+':'−'}${egp(Math.abs(dp.pl))} EGP last session (${pct(dp.pct,2)})`:'No session change yet'}</span>`,'hero','EGP')}
+    ${kpi('Time-weighted return', `<span class="${sgn(st.twr)}">${pct(st.twr)}</span>`, `${benchLabel} ${pct(st.benchTwr)} · alpha <span class="${sgn(st.alpha)}">${pct(st.alpha)}</span>`)}
+    ${kpi('Money-weighted (XIRR)', `<span class="${sgn(st.xirr)}">${pct(st.xirr)}</span>`, `annualized · period ${pct(st.mwrPeriod)}`)}
+    ${kpi('Return in USD', st.usdTwr!=null?`<span class="${sgn(st.usdTwr)}">${pct(st.usdTwr)}</span>`:'—', st.egpVsUsd!=null?`EGP vs USD ${pct(st.egpVsUsd)}`:'Enter USD/EGP marks')}
+    ${kpi('Real return', st.realTwr!=null?`<span class="${sgn(st.realTwr)}">${pct(st.realTwr)}</span>`:st.realTwrPartial!=null?`<span class="${sgn(st.realTwrPartial)}">${pct(st.realTwrPartial)}</span>`:'—', st.inflation!=null?`after ${pct(st.inflation,1,false)} Egypt CPI`:st.realTwrPartial!=null?`through ${M(st.realThrough)} · CPI for ${noCpi.join(', ')} pending`:`Needs CPI for ${noCpi.join(', ')}`)}
+    ${kpi('Max drawdown', `<span class="${sgn(st.maxDD)}">${pct(st.maxDD)}</span>`, `Sharpe ${num(st.sharpe)} · vol ${pct(st.vol,1,false)}/mo`)}
+  </div>
+  ${briefPanel()}
+  <div class="grid g2">
+    <div class="panel">
+      <div class="phead"><div><h2>Growth of 1 EGP</h2><div class="sub">Cumulative time-weighted return, chain-linked monthly</div></div>
+        <div class="legend"><span><i style="background:var(--s1)"></i>Portfolio ${pct(st.twr)}</span><span><i style="background:var(--s2)"></i>EGX30 Capped ${pct(st.benchTwr)}</span></div></div>
+      ${chartSlot('ch-growth',{kind:'line',title:'Cumulative return vs EGX30 Capped',labels:[`${M(PE.addMonths(st.rows[0].month,-1))}`].concat(labels),series:[{name:'Portfolio',color:C.s1(),values:[0].concat(rows.map(r=>r.pCum))},{name:'EGX30 Capped',color:C.s2(),values:[0].concat(rows.map(r=>r.pBench))}],yFmt:pctAxis,minZero:false},260)}
+    </div>
+    <div class="panel">
+      <div class="phead"><div><h2>Value vs capital invested</h2><div class="sub">Month-end value against opening value plus net deposits</div></div>
+        <div class="legend"><span><i style="background:var(--s1)"></i>Month-end value</span><span><i style="background:var(--s2)"></i>Capital invested</span></div></div>
+      ${chartSlot('ch-value',{kind:'line',title:'Value vs invested capital',labels,series:[{name:'Month-end value',color:C.s1(),values:rows.map(r=>r.value),area:true},{name:'Capital invested',color:C.s2(),values:invested,dash:true}],yFmt:egpAxis,tipExtra:(i)=>`<div>Gain <b>${egp(rows[i].value-invested[i])} EGP</b></div>`},260)}
+    </div>
+  </div>
+  <div class="grid g2">
+    <div class="panel">
+      <div class="phead"><div><h2>Largest holdings</h2><div class="sub">Live market value · ${R.pos.open.length} open positions</div></div><button class="btn sm" data-go="holdings" id="go-holdings">All holdings</button></div>
+      <div class="tbl"><table><thead><tr><th>Symbol</th><th class="n">Value</th><th class="n">Unrealized</th><th class="n">Return</th><th>Weight</th></tr></thead><tbody>
+      ${R.pos.open.slice().sort((a,b)=>(b.mv||0)-(a.mv||0)).slice(0,6).map(r=>`<tr><td><span class="sym">${esc(r.symbol||r.name)}</span></td><td class="n">${egp(r.mv)}</td><td class="n ${sgn(r.unreal)}">${egp(r.unreal)}</td><td class="n ${sgn(r.unreal)}">${pct(r.openCost?r.unreal/r.openCost:null)}</td><td><div class="bar" title="${pct(r.weight,1,false)}"><i style="width:${(r.weight/maxW*100).toFixed(1)}%"></i></div></td></tr>`).join('')}
+      </tbody></table></div>
+      <div class="row" style="margin-top:12px;justify-content:space-between"><span class="note">Cash ${egp(cashNow)} EGP · Unrealized P/L <span class="${sgn(unreal)}">${egp(unreal)}</span> EGP</span><span class="chip ${cs.cls}" data-go="checks" style="cursor:pointer">${esc(cs.text)}</span></div>
+    </div>
+    <div class="panel">
+      <div class="phead"><div><h2>Sector allocation</h2><div class="sub">Share of holdings value · ${R.sectors.length} sectors</div></div></div>
+      ${sectorBars()}
+    </div>
+  </div>
+  <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,270px),1fr))">
+    <div class="panel"><div class="eyebrow">Capital roll-forward</div>${rollForward(st)}</div>
+    <div class="panel"><div class="eyebrow">Consistency</div><dl class="kv">
+      <dt>Months in period</dt><dd>${st.n}</dd><dt>Positive months</dt><dd>${pct(st.pctPos,0,false)}</dd><dt>Months beating EGX30 Capped</dt><dd>${pct(st.pctBeat,0,false)}</dd>
+      <dt>Best month</dt><dd><span class="pos">${M(st.best.month)} ${pct(st.best.ret)}</span></dd><dt>Worst month</dt><dd><span class="neg">${M(st.worst.month)} ${pct(st.worst.ret)}</span></dd>
+      <dt>Annualized TWR</dt><dd>${st.annualized!=null?pct(st.annualized):'n/a (<12 months)'}</dd></dl></div>
+    <div class="panel"><div class="eyebrow">Closed trades in period</div><dl class="kv">
+      <dt>Trades closed</dt><dd>${st.closedCount}</dd><dt>Win rate</dt><dd>${pct(st.winRate,1,false)}</dd><dt>Profit factor</dt><dd>${st.profitFactor!=null?num(st.profitFactor,1)+'×':'n/a'}</dd>
+      <dt>Total P/L on closed</dt><dd class="${sgn(st.closedPL)}">${egp(st.closedPL)}</dd><dt>Average hold</dt><dd>${num(st.avgHold,0)} days</dd><dt>Realized trading P/L</dt><dd class="${sgn(st.realized)}">${egp(st.realized)}</dd></dl></div>
+    <div class="panel" data-testid="session-movers"><div class="eyebrow">Session movers</div>${moversList()}</div>
+    <div class="panel" data-testid="contributors"><div class="eyebrow">What made the money · all time</div>${contributorsList()}</div>  </div>`;
+}
+// Plain-language summary of the selected period, for readers who don't want to decode the tiles.
+function briefPanel(){
+  const R=S.R, st=R.stats, rows=st.rows, last=rows[rows.length-1]; const cash=R.liveCash??R.settings.cash; const total=cash+R.pos.mvTotal;
+  const c=contributors(); const s=[];
+  s.push(`<b>${esc(st.label)}</b>: the portfolio returned <b class="${sgn(st.twr)}">${pct(st.twr)}</b> against <b>${pct(st.benchTwr)}</b> for EGX30 Capped, ${st.alpha>=0?'ahead of the index by':'behind the index by'} <b class="${sgn(st.alpha)}">${pct(Math.abs(st.alpha),1,false)}</b>${st.n>1?`, with ${st.posMonths} of ${st.n} months positive and a worst month of ${pct(st.worst.ret)} (${M(st.worst.month)})`:''}.`);
+  // the latest-month sentence only when the period is longer than that month (a one-month period already said it above)
+  if(rows.length>1) s.push(`${M(last.month)}${last.live?' so far':''}: <b class="${sgn(last.ret)}">${pct(last.ret)}</b> vs ${pct(last.bench)} for the index.`);
+  s.push(`Today the portfolio is worth <b>${egp(total)} EGP</b>, of which ${egp(cash)} EGP is cash, across ${R.pos.open.length} positions; the largest is ${esc(R.conc.largest)} at ${pct(R.conc.largestWeight,1,false)}.`);
+  if(c.length) s.push(`Since inception the biggest contributors are ${c.slice(0,3).map(x=>`${esc(x.sym)} +${egp(x.total)}`).join(', ')}${c.some(x=>x.total<0)?`; the biggest detractor is ${esc(c[c.length-1].sym)} −${egp(Math.abs(c[c.length-1].total))}`:''} (EGP, realized + unrealized + dividends).`);
+  s.push(...moneyWeightedSentences(R));
+  return `<div class="panel brief" data-testid="brief"><div class="eyebrow">In brief</div><p>${s.join(' ')} <a href="#analysis" data-go="analysis">Read the full review on the Analysis tab →</a></p></div>`;
+}
+// Calendar months covered by the selected period (used to decide whether an annual XIRR is meaningful).
+function periodMonths(range){ const [y1,m1]=range.from.split('-').map(Number), [y2,m2]=range.to.split('-').map(Number); return (y2-y1)*12+(m2-m1)+1; }
+// One sentence per basis: the money-weighted figure (annualized only for 12+ month periods), then the real time-weighted one.
+function moneyWeightedSentences(R){
+  const st=R.stats, out=[]; const pm=periodMonths(R.range);
+  if(st.xirr!=null){ if(pm>=12) out.push(`Money-weighted, your own capital has compounded at ${pct(st.xirr)} a year.`); else if(st.mwrPeriod!=null) out.push(`Money-weighted, your own capital returned ${pct(st.mwrPeriod)} over the period.`); }
+  const real = st.realTwr ?? st.realTwrPartial;
+  if(real!=null) out.push(`After Egyptian inflation the portfolio's time-weighted return is ${pct(real)}${st.realThrough?` (through ${M(st.realThrough)})`:''}.`);
+  return out;
+}
+function contributors(){ return S.R.pos.rows.filter(r=>r.bought>0).map(r=>({sym:r.symbol||r.name,name:r.name,total:r.total,status:r.status,realized:r.realized,unreal:r.unreal||0,divs:r.divs})).sort((a,b)=>b.total-a.total); }
+function contributorsList(){ const c=contributors(); if(!c.length) return '<p class="note" style="margin-top:8px">No trades yet.</p>';
+  const top=c.slice(0,4), bot=c.filter(x=>x.total<0).slice(-3).reverse();
+  const li=(r)=>`<dt><span class="sym">${esc(r.sym)}</span> <span class="muted">${r.status==='Open'?'held':'closed'}</span></dt><dd class="${sgn(r.total)}">${egp(r.total)}</dd>`;
+  return `<dl class="kv"><dt class="sec">Top contributors</dt><dd class="sec"></dd>${top.map(li).join('')}<dt class="sec">Detractors</dt><dd class="sec"></dd>${bot.map(li).join('')||'<dt class="muted">None</dt><dd></dd>'}</dl><p class="note" style="margin:8px 0 0">Realized + unrealized + dividends per stock, EGP.</p>`; }
+function moversList(){ const rows=S.R.pos.open.filter(r=>r.chg!=null&&r.mv&&r.priceSource==='auto').map(r=>({sym:r.symbol||r.name,name:r.name,chg:r.chg/100,pl:r.mv-r.mv/(1+r.chg/100)})).sort((a,b)=>b.pl-a.pl);
+  if(!rows.length) return '<p class="note" style="margin-top:8px">No session change data yet.</p>';
+  const up=rows.filter(r=>r.pl>0).slice(0,3), dn=rows.filter(r=>r.pl<0).slice(-3).reverse(); const dp=dayPL();
+  const li=(r)=>`<dt><span class="sym">${esc(r.sym)}</span></dt><dd class="${sgn(r.pl)}">${pct(r.chg,2)} <span class="muted">${egp(r.pl)}</span></dd>`;
+  return `<dl class="kv"><dt class="sec">Gainers</dt><dd class="sec"></dd>${up.map(li).join('')||'<dt class="muted">None</dt><dd></dd>'}<dt class="sec">Decliners</dt><dd class="sec"></dd>${dn.map(li).join('')||'<dt class="muted">None</dt><dd></dd>'}<dt class="total">Session P/L</dt><dd class="total ${sgn(dp.pl)}">${egp(dp.pl)}</dd></dl>`; }
+function rollForward(st){ return `<dl class="kv">
+  <dt>Opening value · ${M(PE.addMonths(st.rows[0].month,-1))}</dt><dd>${egp(st.opening)}</dd>
+  <dt>Plus: deposits</dt><dd>${egp(st.deposits)}</dd><dt>Less: withdrawals</dt><dd>${egp(-st.withdrawals)}</dd>
+  <dt>Plus: investment gain</dt><dd class="${sgn(st.netGain)}">${egp(st.netGain)}</dd>
+  <dt class="total">Closing value · ${M(st.rows[st.rows.length-1].month)}</dt><dd class="total">${egp(st.closing)}</dd></dl>
+  <p class="note" style="margin:8px 0 0">EGP. Investment gain includes dividends of ${egp(st.dividends)}.</p>`; }
+function sectorBars(){ const secs=S.R.sectors; if(!secs.length) return '<p class="muted">No open positions.</p>'; const max=secs[0].weight;
+  return `<div style="display:grid;gap:10px">${secs.map(s=>`<div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;align-items:center"><span>${esc(s.sector)}</span><span class="num"><b>${pct(s.weight,1,false)}</b> <span class="muted">${short(s.mv)}</span></span><div class="bar" style="grid-column:1/-1;height:8px"><i style="width:${(s.weight/max*100).toFixed(1)}%"></i></div></div>`).join('')}</div>`; }
+
+// ---------- Holdings ----------
+function vHoldings(){
+  const R=S.R, c=R.conc; const cashNow=R.liveCash ?? R.settings.cash; const total=cashNow+R.pos.mvTotal; const unreal=R.pos.open.reduce((s,r)=>s+(r.unreal||0),0); const cost=R.pos.open.reduce((s,r)=>s+r.openCost,0); const dp=dayPL();
+  const rows=R.pos.open.slice().sort((a,b)=>(b.mv||0)-(a.mv||0));
+  const today=R.today;
+  return `
+  <div class="kpis">
+    ${kpi('Holdings value', egp(R.pos.mvTotal), `${R.pos.open.length} positions`, '', 'EGP')}
+    ${kpi('Cash', egp(cashNow), R.settings.cashDate ? `broker ${egp(R.settings.cash)} on ${dfmt(R.settings.cashDate)}${Math.abs(cashNow-R.settings.cash)>=0.5?', plus ledger activity since':''}` : 'broker balance', '', 'EGP')}
+    ${kpi('Total value', egp(total), `<span class="${sgn(dp.pl)}">${dp.pct!=null?pct(dp.pct,2)+' last session':''}</span>`, 'hero', 'EGP')}
+    ${kpi('Unrealized P/L', `<span class="${sgn(unreal)}">${egp(unreal)}</span>`, `${pct(cost?unreal/cost:null)} on cost of ${short(cost)}`)}
+    ${kpi('Largest position', esc(c.largest), `${pct(c.largestWeight,1,false)} · top 3 ${pct(c.top3,1,false)}`)}
+    ${kpi('Effective positions', num(c.hhi?1/c.hhi:0,1), `1 ÷ HHI · ${c.sectorCount} sectors`)}
+  </div>
+  <div class="panel">
+    <div class="phead"><div><h2>Open positions</h2><div class="sub">Average-cost basis · prices refresh automatically after each EGX session</div></div><button class="btn sm" id="dl-holdings" data-testid="download-holdings">Download CSV</button></div>
+    <div class="tbl"><table data-testid="holdings-table"><thead><tr><th>Position</th><th>Sector</th><th class="n">Shares</th><th class="n">Avg cost</th><th class="n">Price</th><th class="n">Day %</th><th class="n">Day P/L</th><th>Source</th><th class="n">Market value</th><th class="n">Unrealized P/L</th><th class="n">Return</th><th class="n">Dividends</th><th class="n">Total P/L</th><th class="n">Weight</th><th class="n">Target</th><th class="n">Stop</th><th class="n">Held</th></tr></thead><tbody>
+    ${rows.map(r=>{ const age=r.priceDate?PE.dayNum(today)-PE.dayNum(r.priceDate):null; const stale=age==null||age>R.settings.staleDays;
+      const src = r.price==null?'<span class="pill stale">No price</span>': stale?`<span class="pill stale" title="Price date ${esc(r.priceDate||'')}">${age}d old</span>`: r.priceSource==='auto'?'<span class="pill auto">Auto</span>': r.priceSource==='model'?'<span class="pill man" title="No market quote: last traded NAV, or the last trade moved with its proxy price">Last NAV</span>':'<span class="pill man">Manual</span>';
+      const toT = r.target&&r.price? r.target/r.price-1 : null, toS = r.stop&&r.price? r.stop/r.price-1:null;
+      return `<tr><td><span class="sym">${esc(r.symbol||'—')}</span><div class="muted" style="font-size:11.5px;line-height:1.3;max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${esc(r.name)}">${esc(r.name)}</div></td><td class="ink2">${esc(r.sector)}</td><td class="n">${num(r.open,r.open%1?2:0)}</td><td class="n">${num(r.avgCost,3)}</td><td class="n">${num(r.price,2)}</td><td class="n ${sgn(r.chg)}">${r.chg!=null?pct(r.chg/100,2):'—'}</td><td class="n ${sgn(r.chg)}">${r.chg!=null&&r.mv?egp(r.mv-r.mv/(1+r.chg/100)):'—'}</td><td>${src}</td><td class="n">${egp(r.mv)}</td><td class="n ${sgn(r.unreal)}">${egp(r.unreal)}</td><td class="n ${sgn(r.unreal)}">${pct(r.openCost?r.unreal/r.openCost:null)}</td><td class="n">${egp(r.divs)}</td><td class="n ${sgn(r.total)}">${egp(r.total)}</td><td class="n">${pct(r.weight,1,false)}</td><td class="n">${r.target?num(r.target)+` <span class="muted">${pct(toT,0)}</span>`:'—'}</td><td class="n">${r.stop?num(r.stop)+` <span class="muted">${pct(toS,0)}</span>`:'—'}</td><td class="n">${r.holdDays}d</td></tr>`; }).join('')}
+    </tbody><tfoot><tr><td colspan="8">Total holdings</td><td class="n">${egp(R.pos.mvTotal)}</td><td class="n ${sgn(unreal)}">${egp(unreal)}</td><td class="n ${sgn(unreal)}">${pct(cost?unreal/cost:null)}</td><td class="n">${egp(R.pos.open.reduce((s,r)=>s+r.divs,0))}</td><td class="n">${egp(R.pos.open.reduce((s,r)=>s+r.total,0))}</td><td class="n">100.0%</td><td colspan="3"></td></tr></tfoot></table></div>
+    <p class="note" style="margin:10px 0 0">Total P/L = realized on shares already sold + unrealized + dividends, since first buy. Stocks at the latest EGX close; funds without a quote at their last traded NAV (gold funds move with the 24K gold price). Set targets and stops under Inputs → Assets & prices.</p>
+  </div>
+  <div class="grid g2">
+    <div class="panel"><div class="phead"><div><h2>Sector allocation</h2><div class="sub">Share of holdings value</div></div></div>${sectorBars()}</div>
+    <div class="panel"><div class="phead"><div><h2>Concentration & downside</h2><div class="sub">Current holdings, not affected by the period selector</div></div></div><dl class="kv">
+      <dt>Open positions</dt><dd>${c.openCount}</dd><dt>Sectors</dt><dd>${c.sectorCount}</dd>
+      <dt>Largest position (${esc(c.largest)})</dt><dd>${pct(c.largestWeight,1,false)}</dd><dt>Top-3 positions</dt><dd>${pct(c.top3,1,false)}</dd>
+      <dt>Largest sector${c.largestSector?' ('+esc(c.largestSector.sector)+')':''}</dt><dd>${c.largestSector?pct(c.largestSector.weight,1,false):'—'}</dd>
+      <dt>Herfindahl index (HHI)</dt><dd>${num(c.hhi,3)}</dd>
+      <dt>Positions with a stop loss</dt><dd>${c.withStop} of ${c.openCount}</dd><dt>Loss if every stop is hit</dt><dd class="${c.lossIfStops?'neg':''}">${c.lossIfStops?egp(-c.lossIfStops):'—'}</dd></dl>
+      ${c.withStop<c.openCount?`<p class="note" style="margin:10px 0 0">${c.openCount-c.withStop} positions have no stop loss. Add them under Inputs to measure downside.</p>`:''}</div>
+  </div>`;
+}
+
+// ---------- Performance ----------
+function vPerformance(){
+  const R=S.R, st=R.stats; if(!st.n) return `<div class="panel empty"><h2>No data for this selection</h2></div>`;
+  const rows=st.rows, labels=rows.map(r=>M(r.month));
+  return `
+  ${trailingStrip()}
+  <div class="grid g3">
+    <div class="panel"><div class="eyebrow">Returns</div><dl class="kv">
+      <dt>Portfolio TWR</dt><dd class="${sgn(st.twr)}">${pct(st.twr)}</dd><dt>EGX30 Capped TWR</dt><dd class="${sgn(st.benchTwr)}">${pct(st.benchTwr)}</dd>
+      <dt>Alpha vs benchmark</dt><dd class="${sgn(st.alpha)}">${pct(st.alpha)}</dd><dt>Annualized TWR</dt><dd>${st.annualized!=null?pct(st.annualized):'n/a (<12 mo)'}</dd>
+      <dt>Average monthly return</dt><dd>${pct(st.avg,2)}</dd><dt>Money-weighted (XIRR, annual)</dt><dd>${pct(st.xirr)}</dd><dt>Money-weighted (period)</dt><dd>${pct(st.mwrPeriod)}</dd>
+      <dt>Return in USD</dt><dd>${st.usdTwr!=null?pct(st.usdTwr):'—'}</dd><dt>EGP change vs USD</dt><dd>${st.egpVsUsd!=null?pct(st.egpVsUsd):'—'}</dd>
+      <dt>Real return (after CPI)${st.realTwr==null&&st.realThrough?` · through ${M(st.realThrough)}`:''}</dt><dd>${st.realTwr!=null?pct(st.realTwr):st.realTwrPartial!=null?pct(st.realTwrPartial):'—'}</dd><dt>Egypt inflation in period</dt><dd>${st.inflation!=null?pct(st.inflation,1,false):st.inflationPartial!=null?pct(st.inflationPartial,1,false):'—'}</dd></dl></div>
+    <div class="panel"><div class="eyebrow">Capital · EGP</div>${rollForward(st)}<dl class="kv" style="margin-top:6px">
+      <dt class="sec">Activity</dt><dd class="sec"></dd>
+      <dt>Realized trading P/L</dt><dd class="${sgn(st.realized)}">${egp(st.realized)}</dd><dt>Dividends received</dt><dd>${egp(st.dividends)}</dd>
+      <dt>Total bought</dt><dd>${egp(st.buys)}</dd><dt>Total sold</dt><dd>${egp(st.sells)}</dd><dt>Trades</dt><dd>${st.trades}</dd>
+      <dt>Turnover (sells ÷ avg value)</dt><dd>${num(st.sells/Math.max(1,(st.opening+st.closing)/2),1)}×</dd></dl></div>
+    <div class="panel"><div class="eyebrow">Risk & consistency</div><dl class="kv">
+      <dt>Monthly volatility</dt><dd>${pct(st.vol,1,false)} <span class="pill ${st.risk==='High'?'loss':st.risk==='Low'?'win':'stale'}">${st.risk}</span></dd>
+      <dt>Annualized volatility</dt><dd>${pct(st.vol*Math.sqrt(12),1,false)}</dd>
+      <dt>Sharpe ratio (annual)</dt><dd>${st.sharpe!=null?num(st.sharpe):'n/a'}</dd>
+      <dt>Risk-free (3M T-bill)</dt><dd>${pct(R.settings.riskFree,2,false)}</dd>
+      <dt>Beta vs EGX30 Capped</dt><dd>${st.beta!=null?num(st.beta):'n/a'}</dd><dt>Correlation</dt><dd>${st.correl!=null?num(st.correl):'n/a'}</dd>
+      <dt>Tracking error (annual)</dt><dd>${st.trackingError!=null?pct(st.trackingError,1,false):'n/a'}</dd>
+      <dt>Information ratio</dt><dd>${st.trackingError&&st.n>=3?num((st.avg-rets(st,'bench'))*12/st.trackingError):'n/a'}</dd>
+      <dt>Sortino ratio (annual)</dt><dd>${st.sortino!=null?num(st.sortino):'n/a'}</dd><dt>Calmar ratio</dt><dd>${st.calmar!=null?num(st.calmar):'n/a (<12 mo)'}</dd>
+      <dt>Upside capture</dt><dd>${st.upCapture!=null?pct(st.upCapture,0,false)+` <span class="muted">${st.upMonths} up months</span>`:'n/a'}</dd><dt>Downside capture</dt><dd>${st.downCapture!=null?pct(st.downCapture,0,false)+` <span class="muted">${st.downMonths} down months</span>`:'n/a'}</dd>
+      <dt>Max drawdown</dt><dd class="neg">${pct(st.maxDD)}${st.maxDDMonth?' · '+M(st.maxDDMonth):''}</dd>
+      <dt>Positive months</dt><dd>${st.posMonths} of ${st.n}</dd><dt>Months beating benchmark</dt><dd>${st.beat} of ${st.n}</dd></dl></div>
+  </div>
+  ${dailySection()}
+  <div class="grid g2">
+    <div class="panel"><div class="phead"><div><h2>Monthly return vs EGX30 Capped</h2><div class="sub">Each month's time-weighted return</div></div>
+      <div class="legend"><span><i class="sq" style="background:var(--s1)"></i>Portfolio</span><span><i class="sq" style="background:var(--s2)"></i>EGX30 Capped</span></div></div>
+      ${chartSlot('ch-monthly',{kind:'bar',title:'Monthly returns',labels,series:[{name:'Portfolio',color:C.s1(),values:rows.map(r=>r.ret)},{name:'EGX30 Capped',color:C.s2(),values:rows.map(r=>r.bench)}],yFmt:pctAxis},250)}</div>
+    <div class="panel"><div class="phead"><div><h2>Monthly alpha</h2><div class="sub">Portfolio minus benchmark · above zero = beat the index</div></div>
+      <div class="legend"><span><i class="sq" style="background:var(--pos)"></i>Beat</span><span><i class="sq" style="background:var(--neg)"></i>Lagged</span></div></div>
+      ${chartSlot('ch-alpha',{kind:'bar',title:'Monthly alpha',labels,series:[{name:'Alpha',colorFn:v=>v>=0?C.pos():C.neg(),values:rows.map(r=>r.alpha)}],yFmt:pctAxis},250)}</div>
+  </div>
+  <div class="panel"><div class="phead"><div><h2>Drawdown from peak</h2><div class="sub">Decline in cumulative return from its running high within the period</div></div></div>
+    ${chartSlot('ch-dd',{kind:'line',title:'Drawdown',labels,series:[{name:'Drawdown',color:C.neg(),values:rows.map(r=>r.dd),area:true}],yFmt:pctAxis},200)}</div>
+  <div class="panel"><div class="phead"><div><h2>Monthly breakdown</h2><div class="sub">Modified Dietz: (month-end value − opening − net flow) ÷ (opening + day-weighted net flow)</div></div><button class="btn sm" id="dl-monthly" data-testid="download-monthly">Download CSV</button></div>
+    <div class="tbl"><table data-testid="monthly-table"><thead><tr><th>Month</th><th class="n">Opening</th><th class="n">Net flow</th><th class="n">Dividends</th><th class="n">Month-end value</th><th class="n">Return</th><th class="n">EGX30 Capped</th><th class="n">Alpha</th><th class="n">Cum. return</th><th class="n">Cum. EGX30</th><th class="n">Drawdown</th><th class="n">USD return</th><th class="n">Real return</th><th class="n">Trades</th></tr></thead><tbody>
+    ${rows.map(r=>`<tr><td>${M(r.month)} ${r.live?'<span class="pill prov">Live</span>':r.estimate?'<span class="pill stale" title="Estimated from closing prices; replaced when the Thndr statement is posted">Estimate</span>':r.provisional?'<span class="pill prov">Provisional</span>':''}</td><td class="n">${egp(r.opening)}</td><td class="n">${egp(r.netFlow)}</td><td class="n">${egp(r.dividends)}</td><td class="n">${egp(r.value)}</td><td class="n ${sgn(r.ret)}">${pct(r.ret)}</td><td class="n ${sgn(r.bench)}">${pct(r.bench)}</td><td class="n ${sgn(r.alpha)}">${pct(r.alpha)}</td><td class="n">${pct(r.pCum)}</td><td class="n">${pct(r.pBench)}</td><td class="n">${pct(r.dd)}</td><td class="n">${pct(r.usdRet)}</td><td class="n">${pct(r.realRet)}</td><td class="n">${r.trades}</td></tr>`).join('')}
+    </tbody></table></div></div>`;
+}
+function trailingStrip(){ const R=S.R; const tr=PA.trailing(R.months, R.range.to); if(!tr||!tr.some(t=>t.p!=null)) return '';
+  return `<div class="panel" data-testid="trailing-returns"><div class="phead"><div><h2>Trailing returns to ${M(R.range.to)}</h2><div class="sub">Time-weighted, chain-linked monthly · periods under one year are not annualized</div></div></div>
+    <div class="tbl"><table><thead><tr><th></th>${tr.map(t=>`<th class="n">${esc(t.label)}</th>`).join('')}</tr></thead><tbody>
+    <tr><td><b>Portfolio</b></td>${tr.map(t=>`<td class="n ${sgn(t.p)}">${t.p!=null?pct(t.p):'—'}</td>`).join('')}</tr>
+    <tr><td>EGX30 Capped</td>${tr.map(t=>`<td class="n">${t.b!=null?pct(t.b):'—'}</td>`).join('')}</tr>
+    <tr><td>Difference</td>${tr.map(t=>`<td class="n ${sgn(t.a)}">${t.a!=null?pct(t.a):'—'}</td>`).join('')}</tr>
+    ${tr.some(t=>t.ann)?`<tr><td class="muted">Annualized</td>${tr.map(t=>`<td class="n muted">${t.ann?pct(t.ann.p):''}</td>`).join('')}</tr>`:''}</tbody></table></div></div>`; }
+function rets(st,k){ const v=st.rows.map(r=>r[k]).filter(x=>x!=null); return v.reduce((a,b)=>a+b,0)/Math.max(1,v.length); }
+
+// ---------- Closed trades ----------
+const CASH_LIKE = (()=>{ const c=PE.CASH_LIKE||PA.CASH_LIKE; return c ? (c instanceof Set ? c : new Set(c)) : new Set(['Cash & Savings','Mutual Funds','Cash']); })();
+const isCashLike = (r) => CASH_LIKE.has(r.sector) || r.cashLike===true;
+function vTrades(){
+  const R=S.R, st=R.stats;
+  // Round trips (engine pos.trips: one row per buy → fully-sold cycle) when the engine provides them; otherwise today's per-name closed rows.
+  const trips = Array.isArray(R.pos.trips) ? R.pos.trips : null;
+  const inPeriod = (t) => t.closedInPeriod!=null ? !!t.closedInPeriod : (t.lastSell>=`${R.range.from}-01` && t.lastSell<=PE.eom(R.range.to));
+  const period = trips ? trips.filter(inPeriod) : (st.closed||[]).slice();
+  // the legacy per-name stats count cash-like funds, so only the trip engine splits them out (keeps the table equal to the tiles)
+  const rows = (trips ? period.filter(t=>!isCashLike(t)) : period).sort((a,b)=>String(b.lastSell||'').localeCompare(String(a.lastSell||'')));
+  const cashRows = (trips ? period.filter(isCashLike) : []).sort((a,b)=>String(b.lastSell||'').localeCompare(String(a.lastSell||'')));
+  const cashN = st.closedCashLike ?? cashRows.length;
+  const allClosed = trips ? trips.length : R.pos.rows.filter(r=>r.status==='Closed').length;
+  const tripRow=(r)=>`<tr><td><span class="sym">${esc(r.symbol||'—')}</span><div class="muted" style="font-size:11.5px;line-height:1.3;max-width:240px;overflow:hidden;text-overflow:ellipsis" title="${esc(r.name)}">${esc(r.name)}</div></td><td>${dfmt(r.firstBuy)}</td><td>${dfmt(r.lastSell)}</td><td class="n">${num(r.holdDays,0)}d</td><td class="n">${egp(r.buyCost)}</td><td class="n">${egp(r.proceeds)}</td><td class="n">${egp(r.divs)}</td><td class="n ${sgn(r.total)}">${egp(r.total)}</td><td class="n ${sgn(r.roi)}">${pct(r.roi)}</td><td><span class="pill ${r.outcome==='WIN'?'win':'loss'}">${r.outcome==='WIN'?'Win':'Loss'}</span></td></tr>`;
+  return `
+  <div class="kpis">
+    ${kpi('Trades closed', st.closedCount||0, `in ${esc(st.label)}`)}
+    ${kpi('Win rate', pct(st.winRate,1,false), `${st.wins||0} wins · ${st.losses||0} losses`)}
+    ${kpi('Total P/L on closed', `<span class="${sgn(st.closedPL)}">${egp(st.closedPL)}</span>`, 'incl. dividends', '', 'EGP')}
+    ${kpi('Profit factor', st.profitFactor!=null?num(st.profitFactor,1)+'×':'n/a', 'gross wins ÷ gross losses')}
+    ${kpi('Average win / loss', `<span class="pos">${short(st.avgWin)}</span> <span class="muted">/</span> <span class="neg">${short(st.avgLoss)}</span>`, `payoff ${st.avgLoss?num(Math.abs(st.avgWin/st.avgLoss),1)+'×':'n/a'}`)}
+    ${kpi('Average hold', num(st.avgHold,0), `best ${short(st.bestTrade)} · worst ${short(st.worstTrade)}`, '', 'days')}
+  </div>
+  <div class="panel"><div class="phead"><div><h2>${trips?'Round trips closed in the period':'Positions fully exited in the period'}</h2><div class="sub">${trips?'One row per round trip: a position bought, fully sold, and possibly bought again later. Cash-like funds are listed separately.':'A position counts once it is fully sold; P/L covers every lot since the first buy'}</div></div><span class="note">${allClosed} ${trips?'round trips':'closed'} since inception</span></div>
+  <div class="tbl"><table data-testid="closed-trades-table"><thead><tr><th>Position</th><th>Bought</th><th>Sold</th><th class="n">Days held</th><th class="n">Cost</th><th class="n">Proceeds</th><th class="n">Dividends</th><th class="n">P/L</th><th class="n">ROI</th><th>Outcome</th></tr></thead><tbody>
+  ${rows.length? rows.map(tripRow).join('') : `<tr><td colspan="10" class="muted">No ${trips?'round trip was closed':'positions were fully exited'} in this period.</td></tr>`}
+  </tbody></table></div>
+  ${cashN||cashRows.length?`<details style="margin-top:12px" data-testid="closed-cashlike"><summary class="eyebrow" style="cursor:pointer;padding:6px 0">Cash-like funds · ${cashN} round trip${cashN===1?'':'s'} not counted in the trade statistics</summary>
+    <div class="tbl"><table data-testid="closed-cashlike-table"><thead><tr><th>Fund</th><th>Bought</th><th>Sold</th><th class="n">Days held</th><th class="n">Cost</th><th class="n">Proceeds</th><th class="n">Dividends</th><th class="n">P/L</th><th class="n">ROI</th><th>Outcome</th></tr></thead><tbody>${cashRows.length?cashRows.map(tripRow).join(''):`<tr><td colspan="10" class="muted">${cashN} cash-like round trip${cashN===1?'':'s'} in the period (details not available from this engine build).</td></tr>`}</tbody></table></div></details>`:''}</div>`;
+}
+
+// ---------- Ledger ----------
+const SIGN = {Buy:-1, Sell:1, Deposit:1, Withdrawal:-1, Dividend:1, Fee:-1, Rebate:1, Bonus:0};
+function vLedger(){
+  const R=S.R; const f=S.ledgerFilter; const tx=allTx();
+  const years=[...new Set(tx.map(t=>t.d.slice(0,4)))].sort().reverse();
+  let rows=PE.sortLedger(tx).reverse();
+  if(f.type) rows=rows.filter(t=>t.t===f.type); if(f.year) rows=rows.filter(t=>t.d.startsWith(f.year));
+  if(f.q){ const q=f.q.toLowerCase(); rows=rows.filter(t=>(t.a||'').toLowerCase().includes(q) || (S.assets[t.a]&&(S.assets[t.a].symbol||'').toLowerCase().includes(q))); }
+  const shown=rows.slice(0,400);
+  const names=Object.keys(S.assets).sort();
+  return `
+  <div class="panel" ${S.readOnly?'hidden':''}><div class="phead"><div><h2>Add a transaction</h2><div class="sub">Copy lines from the Thndr e-statement. The sign of the amount follows the type.</div></div></div>
+    <form class="form" id="tx-form" data-testid="add-tx-form" autocomplete="off">
+      <label>Date<input type="date" id="tx-d" required></label>
+      <label>Type<select id="tx-t">${PE.TYPES.map(t=>`<option>${t}</option>`).join('')}</select></label>
+      <label style="grid-column:span 2">Asset<input type="text" id="tx-a" list="asset-list" class="inp" placeholder="Exact asset name"></label>
+      <label>Shares<input type="number" id="tx-q" step="any" min="0" class="inp"></label>
+      <label>Price (EGP)<input type="number" id="tx-p" step="any" min="0" class="inp"></label>
+      <label>Net amount (EGP)<input type="number" id="tx-amt" step="any" class="inp" placeholder="After fees" data-testid="add-tx-amount"></label>
+      <label>Account<select id="tx-acc"><option>Main</option><option>MF</option></select></label>
+      <button class="btn primary" type="submit" data-testid="add-tx-submit">Add transaction</button>
+    </form>
+    <datalist id="asset-list">${names.map(n=>`<option value="${esc(n)}">`).join('')}</datalist>
+    <p class="note" id="tx-hint" style="margin:8px 0 0">Buys, withdrawals and fees are stored as negative amounts; sells, deposits, dividends and rebates as positive. Bonus = free shares from a corporate action: asset and shares only, amount 0.</p>
+  </div>
+  <div class="panel" ${S.readOnly?'hidden':''}><div class="phead"><div><h2>Import from CSV</h2><div class="sub">Paste rows with the header <code class="mono">Date,Type,Asset,Shares,Price,Amount,Account</code>. Exact duplicates are skipped.</div></div></div>
+    <textarea id="csv-in" data-testid="csv-import-input" placeholder="Date,Type,Asset,Shares,Price,Amount,Account&#10;2026-09-28,Buy,TMG Holding,100,88.9,-8905.12,Main"></textarea>
+    <div class="row" style="margin-top:10px"><button class="btn" id="csv-preview" data-testid="csv-preview">Check rows</button><span id="csv-msg" class="note"></span></div>
+  </div>
+  <div class="panel"><div class="phead"><div><h2>Transaction ledger</h2><div class="sub">${tx.length} rows · ledger cash ${egp(R.ledgerCash,2)} EGP</div></div>
+    <div class="row"><button class="btn sm" id="dl-ledger" data-testid="download-ledger">Download CSV</button><button class="btn sm" id="dl-backup" data-testid="download-backup">Full backup (JSON)</button></div></div>
+    <div class="row" style="margin-bottom:12px">
+      <input type="text" id="lf-q" placeholder="Search asset or symbol" value="${esc(f.q)}" data-testid="ledger-search">
+      <select id="lf-type" data-testid="ledger-type-filter"><option value="">All types</option>${PE.TYPES.map(t=>`<option ${f.type===t?'selected':''}>${t}</option>`).join('')}</select>
+      <select id="lf-year" data-testid="ledger-year-filter"><option value="">All years</option>${years.map(y=>`<option ${f.year===y?'selected':''}>${y}</option>`).join('')}</select>
+      <span class="note">${rows.length} matching${rows.length>shown.length?`, showing latest ${shown.length}`:''}</span></div>
+    <div class="tbl"><table data-testid="ledger-table"><thead><tr><th>Date</th><th>Type</th><th>Asset</th><th class="n">Shares</th><th class="n">Price</th><th class="n">Amount</th><th class="n">Cost basis sold</th><th class="n">Realized</th><th>Account</th><th></th></tr></thead><tbody>
+    ${shown.map(t=>{ const lr = S.R.ledger.find(x=>x.id===t.id); const basis=lr&&t.t==='Sell'?lr.basis:null;
+      return `<tr><td>${dfmt(t.d)}</td><td>${esc(t.t)}</td><td>${esc(t.a||'')}</td><td class="n">${t.q!=null?num(t.q,t.q%1?4:0):''}</td><td class="n">${t.p!=null?num(t.p,t.p%1?4:2):''}</td><td class="n ${sgn(t.amt)}">${egp(t.amt,2)}</td><td class="n">${basis!=null?egp(basis,2):''}</td><td class="n ${basis!=null?sgn(t.amt-basis):''}">${basis!=null?egp(t.amt-basis,2):''}</td><td class="muted">${esc(t.acc||'')}</td><td>${S.readOnly?'':`<button class="btn sm danger" data-del="${esc(t.id)}" data-testid="delete-tx">Delete</button>`}</td></tr>`; }).join('')}
+    </tbody></table></div></div>`;
+}
+function newId(){ return Math.random().toString(36).slice(2,10); }
+async function addTx(rows){
+  const byYear={}; rows.forEach(r=>{ (byYear[r.d.slice(0,4)] ||= []).push(r); });
+  for(const y of Object.keys(byYear)){
+    const cur=(S.ledgerDocs[y]&&S.ledgerDocs[y].rows)||[];
+    const ok = await save(()=>S.db.doc('ledger/y'+y).set({rows:cur.concat(byYear[y])}));
+    if(!ok) return false;
+  }
+  return true;
+}
+function normTx(o){
+  const t = PE.TYPES.find(x=>x.toLowerCase()===String(o.t||'').trim().toLowerCase()); if(!t) throw new Error(`Unknown type "${o.t}"`);
+  const d = parseDate(o.d); if(!d) throw new Error(`Unreadable date "${o.d}"`);
+  // Bonus shares are free: the amount is always 0 (an empty amount is accepted), only the asset and the share count matter.
+  const amt = t==='Bonus' ? 0 : Math.abs(parseFloat(String(o.amt).replace(/[, ]/g,''))); if(!isFinite(amt)) throw new Error(`Unreadable amount "${o.amt}"`);
+  const r={id:newId(), d, t, amt: SIGN[t]*amt || 0};
+  const a=String(o.a||'').trim(); if(a) r.a=a;
+  const q=parseFloat(String(o.q??'').replace(/[, ]/g,'')); if(isFinite(q)&&q>0) r.q=q;
+  const p=parseFloat(String(o.p??'').replace(/[, ]/g,'')); if(isFinite(p)&&p>0) r.p=p;
+  if((t==='Buy'||t==='Sell'||t==='Bonus')&&(!r.a||!r.q)) throw new Error(`${t} on ${d} needs an asset and shares`);
+  r.acc = String(o.acc||'Main').trim()||'Main';
+  return r;
+}
+function parseDate(s){ s=String(s||'').trim(); let m;
+  if((m=s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/))) return `${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`;
+  if((m=s.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/))) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+  return null; }
+function parseCsv(text){ const lines=text.split(/\r?\n/).filter(l=>l.trim()); if(!lines.length) return [];
+  const split=(l)=>{ const out=[]; let cur='', q=false; for(const ch of l){ if(ch==='"'){ q=!q; } else if(ch===','&&!q){ out.push(cur); cur=''; } else cur+=ch; } out.push(cur); return out.map(s=>s.trim()); };
+  let start=0; const h=split(lines[0]).map(s=>s.toLowerCase()); let idx={d:0,t:1,a:2,q:3,p:4,amt:5,acc:6};
+  if(h.includes('date')){ start=1; const f=(...n)=>h.findIndex(x=>n.some(k=>x.startsWith(k))); idx={d:f('date'),t:f('type'),a:f('asset','name','security'),q:f('shares','quantity','qty'),p:f('price'),amt:f('amount','net'),acc:f('account')}; }
+  return lines.slice(start).map(l=>{ const c=split(l); const g=k=>idx[k]>=0?c[idx[k]]:''; return {d:g('d'),t:g('t'),a:g('a'),q:g('q'),p:g('p'),amt:g('amt'),acc:g('acc')}; }); }
+const txKey=(t)=>[t.d,t.t,t.a||'',+(t.q||0).toFixed(4),+(+t.amt).toFixed(2)].join('|');
+let csvPending=null;
+
+// ---------- Inputs ----------
+function inputsDirty(){ return !!document.querySelector('#main .grid-in input.dirty'); }
+function vInputs(){
+  const R=S.R, st=R.settings; const months=R.months;
+  const auto=(S.market&&S.market.quotes)||{};
+  const assets=Object.values(S.assets).sort((a,b)=>{ const oa=R.pos.open.some(r=>r.name===a.name), ob=R.pos.open.some(r=>r.name===b.name); return (ob-oa)||a.name.localeCompare(b.name); });
+  const cur=PE.monthOf(R.today);
+  const mk=(m)=>S.marks[m]||{};
+  const ro=S.readOnly;
+  // A cell of the marks grid. On the Claude page it is an input; on the published site it is plain text (nothing there can be edited).
+  // For an estimate row (closed month, no statement yet) the ESTIMATE is what shows: as the value on the site, as the placeholder of
+  // an empty input on the page, with any stored placeholder number kept in the tooltip so the row cannot be misread as a real mark.
+  const cell=(m,f,v,step='any',ph,stored)=>{
+    const showEst = ph!=null; const txt=(x)=> x==null ? '' : typeof x==='number' ? num(x, x%1?2:0) : esc(String(x));
+    if(ro) return `<td class="n" data-m="${m}" data-f="${f}"${showEst?` title="Estimated${stored!=null?` · typed placeholder: ${esc(String(stored))}`:''}"`:''}>${showEst?`<span class="muted" title="Estimated${stored!=null?` · typed placeholder: ${esc(String(stored))}`:''}">${txt(ph)}</span>`:txt(v)}</td>`;
+    const title = showEst ? (stored!=null ? `Estimated ${ph} · typed placeholder: ${esc(String(stored))}` : `Estimated ${ph}`) : '';
+    return `<td class="in-cell"><input type="number" step="${step}" data-m="${m}" data-f="${f}" value="${showEst?'':v==null?'':v}" id="mk-${m}-${f}"${showEst?` placeholder="${ph}" title="${title}"`:''}></td>`; };
+  return `
+  ${ro?`<div class="banner" data-testid="readonly-banner" style="background:var(--surface-2);color:var(--ink-2)"><span><b>View only</b> — this is the published site. Edit on the Claude page; changes appear here after the next daily update.</span></div>`:''}
+  <div class="panel"><div class="phead"><div><h2>Month-end marks</h2><div class="sub">${ro?'Values from each Thndr month-end statement, as recorded on the Claude page.':'Enter values from each Thndr month-end statement. The EGX30 Capped close is filled automatically; a typed % is used only where closes are missing.'}</div></div>
+    <div class="row"><button class="btn primary" id="save-marks" data-testid="save-marks" ${S.readOnly?'disabled':''}>Save changes</button></div></div>
+    <div class="tbl ${ro?'':'grid-in'}"><table data-testid="marks-table"><thead><tr><th>Month</th><th class="n">Cash (EGP)</th><th class="n">Securities (EGP)</th><th class="n">EGX30 Capped close</th><th class="n">EGX30 Capped %</th><th class="n">USD/EGP (CBE mid)</th><th class="n">CPI MoM</th><th>Note</th><th>Status</th></tr></thead><tbody>
+    ${(()=>{ const seen=new Set(months.map(r=>r.month)); const extra=Object.keys(S.marks).filter(m=>m>=st.inception&&!seen.has(m)).map(m=>({month:m})); if(!seen.has(cur)) extra.push({month:cur}); return months.concat(extra).sort((a,b)=>a.month<b.month?-1:1); })().map(r=>{ const m=r.month, k=mk(m); const liveRow=R.live&&R.live.month===m; const estRow=!!r.estimate&&!liveRow;
+      // the engine's estimate for this month (cash from the ledger, holdings at the month's last closes) replaces whatever placeholder was typed
+      const est=(f)=> estRow && typeof r[f]==='number' && (f==='cash'||f==='securities'||k[f]==null) ? +r[f].toFixed(2) : null;
+      const stored=(f)=> estRow && (f==='cash'||f==='securities') && k[f]!=null ? k[f] : null;
+      return `<tr data-testid="marks-row-${m}"${estRow?' data-estimate="1"':''}>
+      <td>${M(m)}</td>${cell(m,'cash',k.cash,'any',est('cash'),stored('cash'))}${cell(m,'securities',k.securities,'any',est('securities'),stored('securities'))}${cell(m,'benchClose',k.benchClose,'any',est('benchClose'),stored('benchClose'))}${cell(m,'benchReturn',k.benchReturn!=null?+(k.benchReturn*100).toFixed(4):null)}${cell(m,'usdegp',k.usdegp,'any',est('usdegp'),stored('usdegp'))}${cell(m,'cpi',k.cpi!=null?+(k.cpi*100).toFixed(4):null)}<td class="${ro?'wrap':'in-cell'}">${ro?esc(k.note||''):`<input class="txt" type="text" data-m="${m}" data-f="note" value="${esc(k.note||'')}" id="mk-${m}-note">`}</td>
+      <td>${estRow? `<span class="pill stale" data-testid="marks-estimate-pill" title="Cash from the ledger and holdings at the last closing prices of the month. Post the Thndr statement to replace it.">Estimated · awaiting statement</span>` : k.provisional||liveRow? `<span class="pill prov">${liveRow?'Live':'Provisional'}</span> ${S.readOnly?'':`<button class="btn sm" data-confirm="${m}" data-testid="confirm-month">Confirm</button>`}` : k.cash==null?'<span class="pill loss">Missing</span>' : k.source==='statement'?'<span class="pill win">From statement</span>' : k.source==='price-estimate'?`<span class="pill stale" title="${esc(k.estimateNote||'')}">Price estimate</span>` : k.source==='reconstructed'?`<span class="pill auto" title="${esc(k.estimateNote||'')}">Rebuilt from statements</span>`:'<span class="pill man">Typed</span>'}</td></tr>`; }).join('')}
+    </tbody></table></div>
+    <p class="note" style="margin:10px 0 0">EGX30 Capped % and CPI are entered as percentages (4.2 = 4.2%). Confirming a live month copies the current live cash and holdings value into it; overwrite them with the statement figures before or after confirming.</p></div>
+
+  <div class="panel"><div class="phead"><div><h2>Assets & prices</h2><div class="sub">Automatic prices come from TradingView after each EGX session (15-min delayed). A manual price wins only if its date is newer.</div></div>
+    <div class="row"><button class="btn primary" id="save-assets" data-testid="save-assets" ${S.readOnly?'disabled':''}>Save changes</button></div></div>
+    ${(()=>{ const assetRow=(a,i)=>{ const q=auto[a.symbol]; const held=R.pos.open.find(r=>r.name===a.name);
+      if(ro) return `<tr><td>${esc(a.name)}</td><td><span class="sym">${esc(a.symbol||'')}</span></td><td class="ink2">${esc(a.sector||'')}</td>
+      <td class="n">${q?`${num(q.price)} <span class="muted">${dfmt(q.date)}</span>`:'<span class="muted">—</span>'}</td>
+      <td class="n">${a.price!=null?num(a.price):''}</td><td>${a.priceDate?dfmt(a.priceDate):''}</td><td class="n">${a.target!=null?num(a.target):''}</td><td class="n">${a.stop!=null?num(a.stop):''}</td>
+      <td>${held?`<span class="pill auto">${num(held.open,0)} sh</span>`:''}</td></tr>`;
+      return `<tr><td>${esc(a.name)}</td><td class="in-cell"><input class="txt" style="min-width:90px" type="text" data-a="${esc(a.name)}" data-f="symbol" value="${esc(a.symbol||'')}" id="as-${i}-symbol"></td><td class="in-cell"><input class="txt" type="text" data-a="${esc(a.name)}" data-f="sector" value="${esc(a.sector||'')}" id="as-${i}-sector"></td>
+      <td class="n">${q?`${num(q.price)} <span class="muted">${dfmt(q.date)}</span>`:'<span class="muted">—</span>'}</td>
+      <td class="in-cell"><input type="number" step="any" data-a="${esc(a.name)}" data-f="price" value="${a.price??''}" id="as-${i}-price"></td><td class="in-cell"><input class="txt" style="min-width:120px" type="date" data-a="${esc(a.name)}" data-f="priceDate" value="${esc(a.priceDate||'')}" id="as-${i}-pd"></td>
+      <td class="in-cell"><input type="number" step="any" data-a="${esc(a.name)}" data-f="target" value="${a.target??''}" id="as-${i}-target"></td><td class="in-cell"><input type="number" step="any" data-a="${esc(a.name)}" data-f="stop" value="${a.stop??''}" id="as-${i}-stop"></td>
+      <td>${held?`<span class="pill auto">${num(held.open,0)} sh</span>`:''}</td></tr>`; }; const isHeld=(a)=>R.pos.open.some(r=>r.name===a.name); const heldA=assets.filter(isHeld), closedA=assets.filter(a=>!isHeld(a)); const tbl=(rows,off,tid)=>`<div class="tbl ${ro?'':'grid-in'}"><table data-testid="${tid}"><thead><tr><th>Asset (exact ledger name)</th><th>Symbol</th><th>Sector</th><th class="n">Auto price</th><th class="n">Manual price</th><th>Manual date</th><th class="n">Target</th><th class="n">Stop loss</th><th>Held</th></tr></thead><tbody>${rows.map((a,i)=>assetRow(a,i+off)).join('')}</tbody></table></div>`; return tbl(heldA,0,'assets-table')+(closedA.length?`<details style="margin-top:12px" data-testid="assets-closed"><summary class="eyebrow" style="cursor:pointer;padding:6px 0">Closed positions · ${closedA.length} assets not currently held</summary>${tbl(closedA,heldA.length,'assets-table-closed')}</details>`:''); })()}
+    <form class="form" id="asset-form" style="margin-top:14px" data-testid="add-asset-form" ${S.readOnly?'hidden':''}>
+      <label style="grid-column:span 2">New asset name<input type="text" id="na-name" required class="inp" placeholder="As written in the Thndr statement"></label>
+      <label>Symbol<input type="text" id="na-sym" class="inp" placeholder="e.g. COMI"></label>
+      <label>Sector<input type="text" id="na-sec" class="inp" list="sector-list"></label>
+      <button class="btn" type="submit">Add asset</button></form>
+    <datalist id="sector-list">${[...new Set(Object.values(S.assets).map(a=>a.sector).filter(Boolean))].sort().map(s=>`<option value="${esc(s)}">`).join('')}</datalist>
+  </div>
+
+  <div class="panel"><div class="phead"><div><h2>Settings</h2><div class="sub">Every hard-coded assumption in the model lives here${ro?' · view only on this site':''}</div></div></div>
+    <form class="form" id="settings-form" data-testid="settings-form"${ro?' data-readonly="1"':''}>
+      <label>Portfolio name<input type="text" id="st-name" class="inp" value="${esc(st.name)}"></label>
+      <label>Inception month<input type="month" id="st-inc" value="${esc(st.inception)}"></label>
+      <label>Opening value before inception (EGP)<input type="number" step="any" id="st-open" class="inp" value="${st.openingValue}"></label>
+      <label>Broker cash balance (EGP)<input type="number" step="any" id="st-cash" class="inp" value="${st.cash}"></label>
+      <label>Cash as of<input type="date" id="st-cashd" value="${esc(st.cashDate||'')}"></label>
+      <label>Risk-free rate, annual %<input type="number" step="any" id="st-rf" class="inp" value="${+(st.riskFree*100).toFixed(4)}"></label>
+      <label>USD/EGP at inception<input type="number" step="any" id="st-fx" class="inp" value="${st.fxStart}"></label>
+      <label>Low volatility below %/mo<input type="number" step="any" id="st-vl" class="inp" value="${+(st.volLow*100).toFixed(2)}"></label>
+      <label>High volatility from %/mo<input type="number" step="any" id="st-vh" class="inp" value="${+(st.volHigh*100).toFixed(2)}"></label>
+      <label>Open-position share threshold<input type="number" step="any" id="st-thr" class="inp" value="${st.openThreshold}"></label>
+      <label>Price staleness limit (days)<input type="number" step="1" id="st-stale" class="inp" value="${st.staleDays}"></label>
+      <label>Manual price default date<input type="date" id="st-pd" value="${esc(st.priceDate||'')}"></label>
+      <label>Factsheet email<input type="text" id="st-email" class="inp" value="${esc(st.factsheetEmail||'')}" placeholder="you@gmail.com"></label>
+      <label>Thndr account holder (name as printed on statements)<input type="text" id="st-holder" class="inp" value="${esc((st.account||{}).holder||'')}" placeholder="Full name on the statement" data-testid="settings-holder"></label>
+      <label>Thndr Unified Code (top of every statement)<input type="text" id="st-ucode" class="inp" value="${esc((st.account||{}).unifiedCode||'')}" placeholder="learned from the first statement" data-testid="settings-unified-code"></label>      <label>EGX30 Capped close before inception<input type="number" step="any" id="st-bcs" class="inp" value="${st.benchCloseStart??''}"></label>
+      <button class="btn primary" type="submit" ${S.readOnly?'disabled':''} data-testid="save-settings">Save settings</button>
+    </form></div>`;
+}
+// On the published site every form field is inert: disable them right after a render so nothing can turn blue/dirty there.
+function disableReadOnlyForms(){ if(!S.readOnly) return; document.querySelectorAll('#main form input, #main form select, #main form textarea, #main .grid-in input').forEach(el=>{ el.disabled=true; }); }
+
+// ---------- Checks & method ----------
+function extraChecks(){
+  const out=[]; const D=dailyA();
+  if(D){ const off=D.recon.filter(r=>Math.abs(r.pct)>0.01); out.push({label:'Month-end marks agree with closing prices (±1%)', status: off.length?'warn':'ok', detail: off.length? off.map(r=>`${M(r.month)} ${pct(r.pct,1)}`).join(', ')+' · post the statements to replace estimated marks' : `${D.recon.length} month-ends checked`}); }
+  const closed = S.R.months.filter(r=>r.has && !r.live);
+  const src = (r)=> r.estimate ? 'price-estimate' : (r.source && r.source!=='typed' ? r.source : ((S.marks[r.month]||{}).source || ((S.imports||{})[r.month] ? 'statement' : 'typed')));
+  const typed = closed.filter(r=>src(r)==='typed'), est = closed.filter(r=>src(r)==='price-estimate'), stm = closed.filter(r=>src(r)==='statement'), rec = closed.filter(r=>src(r)==='reconstructed');
+  // no closed month from a statement at all (a portfolio seeded from a workbook): every month-end is an estimate, say so
+  if(closed.length && !stm.length && !rec.length) out.push({label:'Month-ends sourced from Thndr statements', status:'warn', detail:'no month comes from a Thndr statement yet — every month-end is an estimate'});
+  else out.push({label:'Month-ends sourced from Thndr statements', status: typed.length||!stm.length?'warn':'ok', detail: `${stm.length} from statements` + (rec.length?` · ${rec.map(r=>M(r.month)).join(', ')} rebuilt from the next statement`:'') + (est.length?` · ${est.length} closing-price estimates (${est.map(r=>M(r.month)).join(', ')}; no holdings list on those statements)`:'') + (typed.length?` · typed by hand: ${typed.map(r=>M(r.month)).join(', ')}`:'')});
+  // account lock: statements and invoices are only accepted for this account; the Unified Code is definitive, the holder name is a fallback
+  const acct=(S.settings&&S.settings.account)||{}; const code=String(acct.unifiedCode||'').trim(), holder=String(acct.holder||'').trim();
+  out.push({label:'Thndr account lock', status: code?'ok':holder?'warn':'error', detail: code?`Unified Code recorded${holder?` · holder ${holder}`:''}`:holder?'Unified Code unknown until the first statement is posted; documents are matched by holder name only':'No account holder or Unified Code set: no statement or invoice can be matched to this portfolio. Set the holder under Settings.'});
+  try{ PA.tradeChecks(S.R.ledger, S.assets, pbook(), S.bench && S.bench.actions).forEach(c=>out.push(c)); }catch(e){ console.error(e); }
+  return out;
+}
+function vChecks(){
+  const R=S.R; const m=S.market;
+  const allChecks = R.checks.concat(extraChecks());
+  const hist=Object.keys(S.history).sort();
+  return `
+  <div class="grid g2">
+    <div class="panel"><div class="phead"><div><h2>Model checks</h2><div class="sub">The same controls as the workbook cover sheet, plus a cash reconciliation</div></div><span class="chip ${checkSummary().cls}">${esc(checkSummary().text)}</span></div>
+      <div class="checks" data-testid="model-checks">${allChecks.map(c=>`<div class="check"><span class="ic ${c.status}">${c.status==='ok'?'✓':c.status==='warn'?'!':'×'}</span><span>${esc(c.label)}</span><span class="dt">${esc(c.detail)}</span></div>`).join('')}</div></div>
+    <div class="panel"><div class="phead"><div><h2>Price automation</h2><div class="sub">Runs Sunday to Thursday at 3:10 PM Cairo, after the EGX close</div></div></div>
+      <dl class="kv"><dt>Last update</dt><dd>${m&&m.asOf?esc(feedStatus().text):'Not yet run'}</dd><dt>Source</dt><dd>${esc(m&&m.source||'TradingView scanner')}</dd>
+      <dt>Symbols priced</dt><dd>${m?Object.keys(m.quotes||{}).length:0}</dd><dt>Held positions with no quote</dt><dd>${(()=>{ const held=new Set(R.pos.open.map(r=>r.symbol)); const mm=((m&&m.missing)||[]).filter(x=>held.has(x)); return mm.length?esc(mm.join(', ')):'None'; })()}</dd>
+      <dt>EGX30 Capped close</dt><dd>${m&&m.index&&m.index.EGX30CAPPED?num(m.index.EGX30CAPPED.close,1)+' · prior month-end '+num(m.index.EGX30CAPPED.prevMonthClose,1):'—'}</dd>
+      <dt>Daily closes stored</dt><dd>${hist.length?`${Object.values(S.history).reduce((s,h)=>s+Object.keys(h.days||{}).length,0)} days since ${esc(hist[0])}`:'None yet'}</dd></dl>
+      <p class="note" style="margin:10px 0 0">Each run also records the prior month-end EGX30 Capped close, and fills any completed month still missing Egypt CPI (CAPMAS urban CPI index) or USD/EGP (market month-end close; the CBE site blocks automated access). Values already entered are never overwritten.</p></div>
+  </div>
+  <div class="panel"><div class="phead"><div><h2>Methodology</h2><div class="sub">How every figure on this page is calculated</div></div></div><div class="prose">
+    <h3>Time-weighted return (TWR)</h3><p>Monthly return is Modified Dietz: <code>(closing value − opening value − net deposits) ÷ (opening value + day-weighted net deposits)</code>. A deposit on the 1st counts fully for the month, one on the 16th about half. Months are then chain-linked (time-weighted): <code>TWR = Π(1 + r) − 1</code>. TWR removes the effect of your deposit timing and is the right figure to compare against the index.</p>
+    <h3>Money-weighted return (XIRR)</h3><p>The internal rate of return of your actual cash flows: the opening value on the day before the period, every deposit and withdrawal on its date, and the closing value at period end. It rewards or penalises the timing of your deposits. Actual/365 day count, same as Excel's XIRR.</p>
+    <h3>Benchmark</h3><p>EGX30 Capped, the index most comparable to a retail EGX portfolio because no single stock can dominate it. A month's return comes from consecutive month-end closes when both exist, otherwise from the typed %. Alpha is the simple difference of returns.</p>
+    <h3>Cost basis and P/L</h3><p>Weighted-average cost, in ledger order. A sale's cost basis is <code>average cost × shares sold</code>; realized P/L is proceeds minus that basis. Amounts are net of Thndr commissions, as on the statement. Dividends are credited to the stock that paid them.</p>
+    <h3>Risk</h3><p>Volatility is the sample standard deviation of monthly returns. Sharpe uses the monthly equivalent of the 3-month T-bill yield and is annualized by √12. Beta is the slope of portfolio on benchmark monthly returns; tracking error is the annualized standard deviation of monthly alpha; information ratio is annualized mean alpha over tracking error. Sortino replaces volatility with downside deviation (returns below the risk-free rate); Calmar is annualized TWR ÷ max drawdown. Upside/downside capture compare the portfolio's compounded return with the index's in the months the index rose or fell. Drawdown is measured on the cumulative return within the selected period. HHI is the sum of squared position weights; 1 ÷ HHI gives the effective number of equal-sized positions.</p>
+    <h3>USD and real returns</h3><p>USD return converts each month at consecutive month-end USD/EGP rates: the CBE mid rate where you entered it, otherwise the market close filled automatically. Real return deflates by Egypt urban CPI (CAPMAS), month on month, filled automatically once published around the 10th.</p>
+    <h3>Current month</h3><p>Until the monthly statement arrives, the current month uses live prices and cash = the latest statement's closing balance plus every ledger movement booked after it (trades from Thndr invoices, for example). It is labelled Live. Once a month closes and its statement has not been posted yet, the month-end is estimated from the ledger (cash) and the last closing prices of the month (holdings, funds at their last traded NAV), labelled Estimate and flagged in the checks; the statement figures replace the estimate when it is posted. Nothing is saved to the marks until then.</p>
+    <h3>Conventions</h3><p>All money in EGP. Negative money values are shown in parentheses; returns carry a sign. Inputs you type appear in blue, following the spreadsheet colour convention for hard-coded values.</p>
+  </div></div>`;
+}
+
+/*APP2*/
+// ---------- events (delegated) ----------
+document.addEventListener('click', async e=>{
+  const sc=e.target.closest('[data-sec]'); if(sc){ e.preventDefault(); const el=document.getElementById('sec-'+sc.dataset.sec); if(el){ el.scrollIntoView({behavior:'smooth',block:'start'}); try{ history.replaceState(null,'','#'+sc.dataset.sec); }catch(x){} } return; }
+  const go=e.target.closest('[data-go]'); if(go){ setTab(go.dataset.go); return; }
+  const del=e.target.closest('[data-del]');
+  if(del){ if(del.dataset.arm!=='1'){ del.dataset.arm='1'; del.textContent='Confirm delete'; setTimeout(()=>{ if(del.isConnected){ del.dataset.arm=''; del.textContent='Delete'; } },4000); return; }
+    const id=del.dataset.del; for(const y of Object.keys(S.ledgerDocs)){ const rows=S.ledgerDocs[y].rows||[]; if(rows.some(r=>r.id===id)){ await save(()=>S.db.doc('ledger/y'+y).set({rows:rows.filter(r=>r.id!==id)}),'Transaction deleted'); break; } } return; }
+  const cf=e.target.closest('[data-confirm]');
+  if(cf){ const m=cf.dataset.confirm; const r=S.R.months.find(x=>x.month===m); const patch={provisional:false};
+    if(r&&r.live){ patch.cash=r.cash; patch.securities=Math.round(r.securities*100)/100; if(r.benchClose) patch.benchClose=r.benchClose; if(r.usdegp&&S.marks[m]?.usdegp==null) patch.usdegp=r.usdegp; }
+    const cur=S.marks[m]||{}; await save(()=>S.db.doc('portfolio/marks').update({months:{[m]:{...cur,...patch}}}),`${M(m)} confirmed`); return; }
+  if(e.target.id==='save-marks'){ const patch={}, typed={}; document.querySelectorAll('#main [data-m].dirty').forEach(inp=>{ const m=inp.dataset.m,f=inp.dataset.f; let v=inp.value.trim(); (patch[m] ||= {...(S.marks[m]||{})}); (typed[m] ||= new Set()).add(f);
+      if(f==='note'){ if(v) patch[m].note=v; else delete patch[m].note; return; }
+      if(v===''){ delete patch[m][f]; return; } let n=parseFloat(v); if(!isFinite(n)){ return; } if(f==='benchReturn'||f==='cpi') n=n/100; patch[m][f]=n; });
+    if(!Object.keys(patch).length){ toast('Nothing changed'); return; }
+    // Typing the two month-end figures for a closed month makes it a confirmed typed row, so it wins over the month-close estimate.
+    // Only the cash/securities inputs the owner actually edited count (patch[m] is seeded from the stored row, which may already
+    // hold placeholder numbers): both typed in this save, or one typed to a value that differs from the stored one. Editing any
+    // other cell of the row (CPI, USD/EGP, EGX %, note) leaves it provisional so the estimate keeps standing in.
+    const curM=PE.monthOf(PE.cairoToday()); Object.keys(patch).forEach(m=>{ const p=patch[m], was=S.marks[m]||{}, ty=typed[m];
+      if(!(m<curM && p.provisional && typeof p.cash==='number' && typeof p.securities==='number')) return;
+      const both=ty.has('cash')&&ty.has('securities'), changed=['cash','securities'].some(f=>ty.has(f)&&p[f]!==was[f]);
+      if(both||changed){ p.provisional=false; delete p.estimate; } });
+    const all={...S.marks,...patch}; await save(()=>S.db.doc('portfolio/marks').set({months:all}),'Month-end marks saved'); return; }
+  if(e.target.id==='save-assets'){ const patch={}; document.querySelectorAll('#main [data-a].dirty').forEach(inp=>{ const a=inp.dataset.a,f=inp.dataset.f; const v=inp.value.trim(); (patch[a] ||= {...(S.assets[a]||{name:a})});
+      if(f==='symbol'||f==='sector'||f==='priceDate'){ if(v) patch[a][f]= f==='symbol'?v.toUpperCase():v; else delete patch[a][f]; return; }
+      if(v===''){ delete patch[a][f]; return; } const n=parseFloat(v); if(isFinite(n)) patch[a][f]=n; });
+    if(!Object.keys(patch).length){ toast('Nothing changed'); return; }
+    await save(()=>S.db.doc('portfolio/assets').set({items:{...S.assets,...patch}}),'Assets saved'); return; }
+  if(e.target.id==='csv-preview'){ const msg=$('#csv-msg'); let parsed; try{ parsed=parseCsv($('#csv-in').value).map(normTx); }catch(err){ msg.textContent=err.message; msg.className='note neg'; csvPending=null; return; }
+    const have=new Set(allTx().map(txKey)); const fresh=parsed.filter(t=>!have.has(txKey(t))); const dup=parsed.length-fresh.length;
+    csvPending=fresh; msg.className='note'; msg.innerHTML=`${fresh.length} new row${fresh.length===1?'':'s'}${dup?`, ${dup} duplicate${dup>1?'s':''} skipped`:''}. ${fresh.length?`<button class="btn sm primary" id="csv-import" data-testid="csv-import">Import ${fresh.length}</button>`:''}`; return; }
+  if(e.target.id==='csv-import'&&csvPending){ const n=csvPending.length; if(await addTx(csvPending)){ toast(`${n} transactions imported`); csvPending=null; } return; }
+  if(e.target.id==='dl-ledger'){ const rows=[['Date','Type','Asset','Symbol','Shares','Price','Amount','CostBasisSold','Account']].concat(S.R.ledger.map(t=>[t.d,t.t,t.a||'',(S.assets[t.a]||{}).symbol||'',t.q??'',t.p??'',t.amt,t.t==='Sell'?t.basis.toFixed(2):'',t.acc||''])); download('portfolio-ledger.csv', toCsv(rows)); return; }
+  if(e.target.id==='dl-holdings'){ const rows=[['Symbol','Asset','Sector','Shares','AvgCost','Price','PriceDate','MarketValue','Unrealized','Dividends','TotalPL','Weight']].concat(S.R.pos.open.map(r=>[r.symbol,r.name,r.sector,r.open,r.avgCost?.toFixed(4),r.price,r.priceDate,r.mv?.toFixed(2),r.unreal?.toFixed(2),r.divs.toFixed(2),r.total.toFixed(2),r.weight.toFixed(6)])); download('portfolio-holdings.csv', toCsv(rows)); return; }
+  if(e.target.id==='dl-monthly'){ const st=S.R.stats; const rows=[['Month','Opening','NetFlow','WeightedFlow','Dividends','MonthEndValue','Return','EGX30Capped','Alpha','CumReturn','CumBench','Drawdown','USDReturn','RealReturn','Status']].concat(st.rows.map(r=>[r.month,r.opening,r.netFlow,r.weightedFlow,r.dividends,r.value,r.ret,r.bench,r.alpha,r.pCum,r.pBench,r.dd,r.usdRet,r.realRet,r.live?'live':r.estimate?'estimate':r.provisional?'provisional':'confirmed'])); download('portfolio-monthly.csv', toCsv(rows)); return; }
+  if(e.target.id==='dl-backup'){ download('portfolio-backup.json', JSON.stringify({exported:new Date().toISOString(), ...dataset(), history:S.history},null,1)); return; }
+  if(e.target.id==='refresh-prices'){ refreshNow(e.target); return; }
+  if(e.target.id==='scan-gmail'){ scanGmail(false); return; }
+  const rvb=e.target.closest('[data-review]'); if(rvb){ const it=S.stmt.list.find(x=>x.month===rvb.dataset.review); if(it) reviewStatement(it); return; }
+  if(e.target.id==='review-close'){ S.stmt.review=null; renderTab(true); return; }
+  if(e.target.id==='retry-held'){ retryHeld(e.target); return; }
+  if(e.target.id==='post-statement'){ postStatement(); return; }
+  if(e.target.id==='fs-xlsx'){ const b=e.target, m=b.dataset.month; b.disabled=true; b.textContent='Preparing…'; try{ const list=await window.pdExports(); if(!list.some(x=>x.month===m)){ const have=list.map(x=>M(x.month)).join(', '); toast(`No Excel workbook for ${M(m)} yet. Workbooks are published with each monthly statement${have?` (available: ${have})`:''}.`,'error'); } else { await window.pdDownloadExport(m); toast(`Excel workbook for ${M(m)} saved`); } }catch(err){ toast('Could not download the workbook: '+(err.message||err),'error'); } b.disabled=false; b.textContent='Download Excel'; return; }
+  if(e.target.id==='fs-email'){ e.target.disabled=true; await emailFactsheet(S.fsMonth); e.target.disabled=false; return; }
+  if(e.target.id==='fs-dl'){ const F=factsheetData(S.fsMonth); download(`factsheet-${S.fsMonth}.html`, `<!doctype html><html><head><meta charset="utf-8"><title>${esc(S.settings.name)} factsheet ${M(S.fsMonth)}</title></head><body style="margin:0;padding:16px;background:#EDF2EF">${factsheetHTML(F)}</body></html>`); return; }
+});
+document.addEventListener('input', e=>{ if(e.target.matches('.grid-in input')) e.target.classList.add('dirty');
+  if(['lf-q'].includes(e.target.id)){ S.ledgerFilter.q=e.target.value; clearTimeout(vLedger._t); vLedger._t=setTimeout(()=>{ const pos=e.target.selectionStart; renderTab(true); const el=$('#lf-q'); if(el){ el.focus(); el.setSelectionRange(pos,pos);} },250); }
+  if(e.target.id==='tx-q'||e.target.id==='tx-p'){ const q=parseFloat($('#tx-q').value), p=parseFloat($('#tx-p').value); if(isFinite(q)&&isFinite(p)) $('#tx-hint').textContent=`Gross ${egp(q*p,2)} EGP. Enter the net amount from the statement, which includes commission.`; } });
+document.addEventListener('change', e=>{ if(e.target.dataset.pick!=null&&S.stmt.review){ S.stmt.review.pick[+e.target.dataset.pick]=e.target.checked; } if(e.target.dataset.use!=null&&S.stmt.review){ S.stmt.review.use[+e.target.dataset.use]=e.target.checked; } if(e.target.id==='apply-marks'&&S.stmt.review){ S.stmt.review.applyMarks=e.target.checked; const o=$('[data-testid=review-outcome]'); if(o) o.textContent=postOutcome(S.stmt.review).text; } if(e.target.id==='fs-month'){ S.fsMonth=e.target.value; renderTab(true); } if(e.target.id==='lf-type'){ S.ledgerFilter.type=e.target.value; renderTab(true); } if(e.target.id==='lf-year'){ S.ledgerFilter.year=e.target.value; renderTab(true); } });
+document.addEventListener('submit', async e=>{
+  e.preventDefault();
+  if(e.target.id==='tx-form'){ let t; try{ t=normTx({d:$('#tx-d').value,t:$('#tx-t').value,a:$('#tx-a').value,q:$('#tx-q').value,p:$('#tx-p').value,amt:$('#tx-amt').value,acc:$('#tx-acc').value}); }catch(err){ toast(err.message,'error'); return; }
+    if(t.a && !S.assets[t.a] && (t.t==='Buy')) toast(`"${t.a}" is a new asset. Add its symbol under Inputs so it gets priced.`);
+    if(await addTx([t])){ toast(`${t.t} added`); e.target.reset(); } }
+  if(e.target.id==='asset-form'){ const name=$('#na-name').value.trim(); if(!name) return; if(S.assets[name]){ toast('That asset already exists','error'); return; }
+    const a={name}; const sym=$('#na-sym').value.trim().toUpperCase(); const sec=$('#na-sec').value.trim(); if(sym) a.symbol=sym; if(sec) a.sector=sec;
+    await save(()=>S.db.doc('portfolio/assets').set({items:{...S.assets,[name]:a}}),`${name} added; it will be priced at the next run`); }
+  if(e.target.id==='settings-form'){ const g=id=>$(id).value; const n=id=>parseFloat($(id).value);
+    const s={...S.settings, name:g('#st-name').trim()||'Portfolio', inception:g('#st-inc')||S.settings.inception, openingValue:n('#st-open'), cash:n('#st-cash'), cashDate:g('#st-cashd')||null, riskFree:n('#st-rf')/100, fxStart:n('#st-fx'), volLow:n('#st-vl')/100, volHigh:n('#st-vh')/100, openThreshold:n('#st-thr'), staleDays:n('#st-stale'), priceDate:g('#st-pd')||null, factsheetEmail:g('#st-email').trim()||null, benchCloseStart:isFinite(n('#st-bcs'))?n('#st-bcs'):null, account:{holder:g('#st-holder').trim(), unifiedCode:g('#st-ucode').trim()}};
+    if(!s.account.holder && !s.account.unifiedCode){ toast('Set the Thndr account holder: statements and invoices are only accepted for that account','error'); return; }
+    if(['openingValue','cash','riskFree','fxStart','volLow','volHigh','openThreshold','staleDays'].some(k=>!isFinite(s[k]))){ toast('Every number field needs a value','error'); return; }
+    await save(()=>S.db.doc('portfolio/settings').set(s),'Settings saved'); }
+});
+function toCsv(rows){ return rows.map(r=>r.map(v=>{ const s=v==null?'':String(v); return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s; }).join(',')).join('\n'); }
+async function download(filename, data){ const dl=await window.claude?.use?.('downloads'); if(!dl){ toast('Downloads are not available in this view','error'); return; }
+  try{ await dl.save({filename, data}); }catch(e){ if(e&&e.code!=='declined') toast('Download failed: '+(e.message||e.code),'error'); } }
+async function refreshNow(btn){ const mcp=await window.claude?.use?.('mcp'); if(!mcp){ toast('Refreshing from the page is not available here. Prices update automatically after each session.','error'); return; }
+  btn.disabled=true; btn.textContent='Starting…';
+  try{ await mcp.callTool('Claude Code Remote','fire_trigger',{trigger_id:REFRESH_TRIGGER_ID},{cache:false}); toast('Price refresh started. New prices arrive in about two minutes.'); btn.textContent='Refresh started'; }
+  catch(e){ toast('Could not start the refresh: '+(e.message||e.code),'error'); btn.disabled=false; btn.textContent='Refresh now'; } }
+
+// ---------- boot ----------
+(async function boot(){
+  const db = await (window.claude && window.claude.use ? window.claude.use('db') : Promise.resolve(null));
+  if(!db){ $('#main').innerHTML=`<div class="empty"><h2>Open this page in Claude to see your portfolio</h2><p>Your portfolio data lives in this page's private database, which only loads inside the Claude viewer.</p></div>`; $('#tape').innerHTML='<span class="muted">Market data unavailable in this view</span>'; return; }
+  S.db=db;
+  const onErr=(e)=>{ console.error(e); toast('Lost connection to the portfolio database. Reload the page.','error'); };
+  db.doc('portfolio/settings').onSnapshot(s=>{ S.settings=s.exists?s.data():null; S.ready.settings=true; schedule(); }, onErr);
+  db.doc('portfolio/marks').onSnapshot(s=>{ S.marks=(s.exists&&s.data().months)||{}; S.ready.marks=true; schedule(); }, onErr);
+  db.doc('portfolio/assets').onSnapshot(s=>{ S.assets=(s.exists&&s.data().items)||{}; S.ready.assets=true; schedule(); }, onErr);
+  db.collection('ledger').onSnapshot(q=>{ const o={}; q.docs.forEach(d=>{ o[d.id.replace(/^y/,'')]=d.data(); }); S.ledgerDocs=o; S.ready.ledger=true; schedule(); }, onErr);
+  db.doc('market/latest').onSnapshot(s=>{ S.market=s.exists?s.data():null; S.ready.market=true; schedule(); }, onErr);
+  db.collection('history').onSnapshot(q=>{ const o={}; q.docs.forEach(d=>{ o[d.id]=d.data(); }); S.history=o; schedule(); }, onErr);
+  db.doc('bench/egx30').onSnapshot(s=>{ S.bench=s.exists?s.data():null; schedule(); }, onErr);
+  db.collection('imports').onSnapshot(q=>{ const o={}; q.docs.forEach(d=>{ o[d.id]=d.data(); }); S.imports=o; schedule(); }, onErr);
+  db.doc('sync/state').onSnapshot(s=>{ S.sync=s.exists?s.data():null; schedule(); }, onErr);
+  setTimeout(autoScan, 2500);
+})();
+})();
+</script>

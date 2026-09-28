@@ -27,50 +27,100 @@
 #lock .lk-list .lk-btn{flex-direction:column;gap:3px;padding:16px 14px}
 #lock .lk-list .lk-btn small{font:400 12px/1.2 var(--f-ui,system-ui,sans-serif);opacity:.8}
 #lock .lk-links{display:flex;flex-wrap:wrap;justify-content:center;gap:4px 16px}
+#lock .lk-rules{list-style:none;margin:0;padding:0 4px;text-align:left;font-size:13px;line-height:1.5;color:var(--ink-3,#6F7D78);display:flex;flex-direction:column;gap:2px}
+#lock .lk-rules li::before{content:"○";display:inline-block;width:1.5em}
+#lock .lk-rules li.ok{color:var(--accent,#0B6E5F)}
+#lock .lk-rules li.ok::before{content:"✓"}
+#lock .lk-tip{font-size:12px;line-height:1.5;text-align:left;color:var(--ink-2,#46534E);background:var(--surface,#fff);border:1px solid var(--rule,#DAE2DE);border-radius:10px;padding:10px 12px}
 #pd-bar .pd-actions{display:flex;gap:8px}
 body.pd-locked{overflow:hidden}
+body.pd-locked>:not(#lock){display:none!important}
 #pd-bar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;max-width:1240px;margin:28px auto 0;padding:14px 16px calc(14px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--rule,#DAE2DE);color:var(--ink-3,#6F7D78);font-size:12px}
 #pd-bar button{font:500 12px/1 var(--f-ui,system-ui,sans-serif);padding:8px 12px;border-radius:8px;border:1px solid var(--rule,#DAE2DE);background:var(--surface,#fff);color:var(--ink-2,#46534E);cursor:pointer}
 
 [data-testid=scan-gmail],[data-testid=factsheet-email],[data-testid=post-statement],[data-testid=csv-import],[data-testid=csv-import-input],[data-testid=save-marks],[data-testid=save-assets],[data-testid=save-settings]{display:none!important}
 </style></head><body class="pd-locked">
 <div id="lock" role="dialog" aria-modal="true" aria-label="Unlock portfolio"></div>
-<script>/* Live-site lock, one page for several portfolios. Each portfolio lives under p/<id>/: its figures are published encrypted
-   (data.enc.json) to that portfolio's public key; the matching private key is published only wrapped by that portfolio's
-   one-time setup key (keys.json, which also carries the password hash). A device that has been set up for a portfolio keeps
-   its private key wrapped by a non-extractable browser key, and opens it with the password or Face ID / fingerprint. */
+<script>/* Live-site lock, one page for several portfolios — device store v3.
+   Each portfolio lives under p/<id>/: its figures are published encrypted (data.enc.json) to that portfolio's public key; the
+   matching private key is published only wrapped by the portfolio's one-time setup key (keys.json — v3 files carry no
+   password hash; the device password never leaves the device, and a v2 file's `pw` field is ignored).
+   Once a device is set up it keeps the private key (PKCS8) in IndexedDB, 'dev:<id>', wrapped by AES-256-GCM under a key
+   derived from the device password (PBKDF2-SHA256, 310,000 iterations, a random 16-byte salt per device) with additional
+   data 'portfolio-device-v3'; and optionally a second wrapping, 'bio:<id>', under a key derived (HKDF-SHA256, info
+   'portfolio-bio-v3') from the WebAuthn PRF output of the device's platform passkey, so Face ID / Touch ID / fingerprint
+   really unlocks the key instead of just gating a screen (a device whose passkeys cannot do PRF gets no biometric option).
+   localStorage holds only bookkeeping: pd.dev.<id> = { v: 3, tries, at }, pd.bio.v3 = { cred } — no key material, no hash.
+   Ten wrong passwords remove the portfolio from the device; failing to download or decrypt the data never does. After a key
+   rotation (rotate_keys.py) the device's key no longer matches keys.json's public key: the page says so and the user removes
+   the old setup through the explicit "Forget" flow before entering the new setup key.
+   Locking (the Lock button, or 5 minutes in the background) drops the key and the decrypted documents from memory and blanks
+   the page; unlocking downloads the data again. Devices set up under v2 (private key wrapped by a non-extractable browser
+   key, password checked against the published hash) are migrated on first use without the setup key: the key is read with
+   the browser key and the user chooses a real password. */
 (function(){
   'use strict';
-  const MAX_TRIES = 10, RELOCK_MS = 5 * 60e3, REFRESH_MS = 30 * 60e3, CUR_LS = 'pd.current', BIO_LS = 'pd.bio.v1', LEGACY_LS = 'pd.device.v1';
+  const MAX_TRIES = 10, RELOCK_MS = 5 * 60e3, REFRESH_MS = 30 * 60e3, PBKDF2_ITER = 310000;
+  const CUR_LS = 'pd.current', BIO_LS = 'pd.bio.v3', OLD_BIO_LS = 'pd.bio.v1', LEGACY_LS = 'pd.device.v1';
+  const DEV_AD = 'portfolio-device-v3', BIO_INFO = 'portfolio-bio-v3';
   const enc = new TextEncoder(), dec = new TextDecoder();
   const b64 = (u) => btoa(String.fromCharCode(...new Uint8Array(u)));
   const ub64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
   const rnd = (n) => crypto.getRandomValues(new Uint8Array(n));
-  const hex = (u) => [...new Uint8Array(u)].map((b) => b.toString(16).padStart(2, '0')).join('');
   const $l = (s) => document.querySelector('#lock ' + s);
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
-  const bio = (() => { const u = navigator.userAgent; if (/iPhone|iPad/.test(u)) return 'Face ID'; if (/Macintosh/.test(u)) return 'Touch ID'; if (/Android/.test(u)) return 'fingerprint'; if (/Windows/.test(u)) return 'Windows Hello'; return 'Face ID / fingerprint'; })();
+  const UA = navigator.userAgent;
+  const bio = (() => { if (/iPhone|iPad/.test(UA)) return 'Face ID'; if (/Macintosh/.test(UA)) return 'Touch ID'; if (/Android/.test(UA)) return 'fingerprint'; if (/Windows/.test(UA)) return 'Windows Hello'; return 'Face ID / fingerprint'; })();
   const ls = { get: (k) => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } }, set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }, del: (k) => { try { localStorage.removeItem(k); } catch (e) {} } };
+  // iOS/iPadOS Safari as a browser tab (not an installed Home Screen app) evicts a site's storage after 7 days without a visit
+  const iosSafariTab = () => { const ios = /iPhone|iPad|iPod/.test(UA) || (/Macintosh/.test(UA) && navigator.maxTouchPoints > 1);
+    return ios && /Safari/.test(UA) && !/CriOS|FxiOS|EdgiOS|OPiOS|OPT\//.test(UA) && 'standalone' in navigator && navigator.standalone === false; };
+  const safariTip = () => (iosSafariTab() ? '<p class="lk-tip" data-testid="live-safari-tip">Tip: add this site to your Home Screen (Share → Add to Home Screen) so Safari keeps it set up. Safari deletes a website\'s saved setup after 7 days without a visit; a Home Screen app keeps it.</p>' : '');
 
   /* ---------- portfolios ---------- */
   let PORTFOLIOS = [], CUR = null, OPENED = null;   // CUR: {id, name}; OPENED: id whose data is on the page
   const base = () => 'p/' + CUR.id + '/';
   const devLS = () => 'pd.dev.' + CUR.id;
 
-  /* ---------- device storage (per portfolio; the Face ID credential is shared by the device) ---------- */
+  /* ---------- device storage (per portfolio; the passkey is shared by the device, its PRF salt is per portfolio) ---------- */
   const idb = (mode, fn) => new Promise((res, rej) => { const o = indexedDB.open('pd-lock', 1); o.onupgradeneeded = () => o.result.createObjectStore('k'); o.onerror = () => rej(o.error);
     o.onsuccess = () => { const t = o.result.transaction('k', mode); const r = fn(t.objectStore('k')); t.oncomplete = () => res(r && r.result); t.onerror = () => rej(t.error); }; });
+  const idbGet = (k) => idb('readonly', (s) => s.get(k));
+  const idbPut = (k, v) => idb('readwrite', (s) => s.put(v, k));
+  const idbDel = async (k) => { try { await idb('readwrite', (s) => s.delete(k)); } catch (e) {} };
   const getDev = () => ls.get(devLS());
   const putDev = (d) => ls.set(devLS(), d);
-  const getBio = () => ls.get(BIO_LS) || {};
-  async function forget() { ls.del(devLS()); try { await idb('readwrite', (s) => s.delete('dev:' + CUR.id)); } catch (e) {} }
-  async function migrateLegacy() {   // devices set up before the site held more than one portfolio
+  const isV3 = (d) => !!d && d.v === 3;
+  const isOld = (d) => !!d && d.v !== 3 && !!d.ct;   // v2: {iv, ct, tries, at} in localStorage + a CryptoKey in IndexedDB
+  const notSetUp = () => Object.assign(new Error('This device is not set up'), { code: 'not_set_up' });
+  // the ONLY callers: MAX_TRIES wrong passwords, and the explicit "Forget this portfolio" flow
+  async function forget() { ls.del(devLS()); await idbDel('dev:' + CUR.id); await idbDel('bio:' + CUR.id); }
+  async function migrateLegacy() {   // devices set up before the site held more than one portfolio (single-portfolio v1 layout)
     const d = ls.get(LEGACY_LS); if (!d) return;
-    try { const dk = await idb('readonly', (s) => s.get('device')); if (dk) await idb('readwrite', (s) => s.put(dk, 'dev:khaled')); } catch (e) {}
-    ls.set('pd.dev.khaled', { iv: d.iv, ct: d.ct, tries: d.tries || 0, at: d.at });
-    if (d.cred) ls.set(BIO_LS, { cred: d.cred });
+    try { const dk = await idbGet('device'); if (dk) { await idbPut('dev:khaled', dk); await idbDel('device'); } } catch (e) {}
+    ls.set('pd.dev.khaled', { iv: d.iv, ct: d.ct, tries: d.tries || 0, at: d.at });   // old format; select() migrates it to v3
     if (!ls.get(CUR_LS)) ls.set(CUR_LS, 'khaled');
     ls.del(LEGACY_LS);
+  }
+  async function pwKey(password, salt, usages) {
+    const k0 = await crypto.subtle.importKey('raw', enc.encode(password.trim()), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: PBKDF2_ITER }, k0, { name: 'AES-GCM', length: 256 }, false, usages);
+  }
+  async function storeV3(pk8, password) {   // (re)wrap the private key under the password; replaces any older store for this portfolio
+    const salt = rnd(16), iv = rnd(12), at = new Date().toISOString();
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc.encode(DEV_AD) }, await pwKey(password, salt, ['encrypt']), pk8);
+    await idbPut('dev:' + CUR.id, { v: 3, salt: b64(salt), iv: b64(iv), ct: b64(ct), at });
+    putDev({ v: 3, tries: 0, at });
+  }
+  async function openV3(password) {   // -> PK8 bytes; a wrong password surfaces as an OperationError from AES-GCM
+    const r = await idbGet('dev:' + CUR.id);
+    if (!r || r.v !== 3 || !r.ct) throw notSetUp();
+    return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ub64(r.iv), additionalData: enc.encode(DEV_AD) }, await pwKey(password, ub64(r.salt), ['decrypt']), ub64(r.ct)));
+  }
+  async function openOld() {   // v2 store: no password involved — the browser key alone opens it
+    const d = getDev(), dk = await idbGet('dev:' + CUR.id);
+    if (!d || !d.ct || !dk || !(dk instanceof CryptoKey)) throw notSetUp();
+    return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ub64(d.iv) }, dk, ub64(d.ct)));
   }
 
   /* ---------- keys ---------- */
@@ -81,16 +131,14 @@ body.pd-locked{overflow:hidden}
     const k = await crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt: ub64(w.salt), iterations: w.iter }, k0, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
     return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ub64(w.iv), additionalData: enc.encode('portfolio-key-v1') }, k, ub64(w.ct)));
   }
-  async function storeOnDevice(pk8) {
-    const dk = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
-    const iv = rnd(12), ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, dk, pk8);
-    await idb('readwrite', (s) => s.put(dk, 'dev:' + CUR.id));
-    putDev({ iv: b64(iv), ct: b64(ct), tries: 0, at: new Date().toISOString() });
-  }
-  async function loadFromDevice() {
-    const d = getDev(), dk = await idb('readonly', (s) => s.get('dev:' + CUR.id));
-    if (!d || !dk) throw new Error('This device is not set up');
-    return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ub64(d.iv) }, dk, ub64(d.ct)));
+  // does the device's private key belong to the public key the site currently publishes? (false after a key rotation)
+  async function keyMatches(pk8) {
+    try {
+      if (!KEYS || !KEYS.pub) return true;
+      const k = await crypto.subtle.importKey('pkcs8', pk8, { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+      const j = await crypto.subtle.exportKey('jwk', k), u = (s) => atob(s.replace(/-/g, '+').replace(/_/g, '/') + '=='.slice(0, (4 - s.length % 4) % 4));
+      return btoa('\x04' + u(j.x) + u(j.y)) === KEYS.pub;
+    } catch (e) { console.error(e); return true; }   // never block an unlock on this check itself failing
   }
 
   /* ---------- data ---------- */
@@ -115,6 +163,7 @@ body.pd-locked{overflow:hidden}
   let EXPORTS = null;
   window.pdExports = async () => { if (EXPORTS) return EXPORTS; try { const r = await fetch(base() + 'exports/index.json?t=' + Date.now(), { cache: 'no-store' }); EXPORTS = r.ok ? await r.json() : []; } catch (e) { EXPORTS = []; } return EXPORTS; };
   window.pdDownloadExport = async (month) => {
+    if (!PK8) throw new Error('The portfolio is locked. Unlock it first.');
     const list = await window.pdExports(); const x = list.find((e) => e.month === month); if (!x) throw new Error('No workbook published for ' + month);
     const r = await fetch(base() + x.file + '?t=' + Date.now(), { cache: 'no-store' }); if (!r.ok) throw new Error('Could not download the workbook (' + r.status + ')');
     const e = await r.json(); const bytes = await unseal(e, 'portfolio-file-v1');
@@ -172,7 +221,8 @@ body.pd-locked{overflow:hidden}
     LIVE = { asOf: new Date().toISOString(), source: 'TradingView scanner (15-min delayed), fetched by this browser', quotes, index,
       fx: fx ? { USDEGP: { price: fx[0], chg: +(fx[1] || 0).toFixed(4), prevMonthClose: fx[2], date: today } } : prev.fx || {},
       gold: fx && xau ? { XAUUSD: xau[0], gram24kEgp: +(xau[0] * fx[0] / 31.1035).toFixed(2), date: today } : prev.gold || {}, missing };
-    liveAt = Date.now(); DOCS['market/latest'] = LIVE; listeners.forEach(fire);
+    liveAt = Date.now();
+    if (PK8) { DOCS['market/latest'] = LIVE; listeners.forEach(fire); }   // never repopulate a locked page
     return Object.keys(quotes).length;
   }
   window.pdRefreshPrices = async (btn, toast) => {
@@ -194,23 +244,68 @@ body.pd-locked{overflow:hidden}
     });
   }
   const whenReady = (fn) => { if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn, { once: true }); else fn(); };
-
-  /* ---------- WebAuthn (Face ID / Touch ID / fingerprint) ---------- */
-  const canBio = async () => { try { return !!(window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()); } catch (e) { return false; } };
-  async function enrollBio() {
-    const c = await navigator.credentials.create({ publicKey: {
-      rp: { name: 'Stock Market Portfolio Tracker' }, user: { id: rnd(16), name: 'portfolio', displayName: 'Portfolio' }, challenge: rnd(32),
-      pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
-      authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'preferred' }, timeout: 60000, attestation: 'none' } });
-    ls.set(BIO_LS, { cred: b64(c.rawId) });
+  // Lock means locked: drop the key and every decrypted document, tell the page (its state is rebuilt from the snapshots it
+  // receives, so it renders its empty state) and blank whatever it had drawn. LIVE (public market prices) is kept for reuse.
+  function blank() {
+    for (const id of ['main', 'tape', 'feed', 'period', 'pf-name-text', 'pf-menu', 'pd-updated', 'pd-who']) { const el = document.getElementById(id); if (el) el.textContent = ''; }
+    const t = document.getElementById('toast'); if (t) { t.hidden = true; t.textContent = ''; }
   }
-  async function verifyBio() {
-    const b = getBio(), challenge = rnd(32);
-    const a = await navigator.credentials.get({ publicKey: { challenge, allowCredentials: [{ type: 'public-key', id: ub64(b.cred), transports: ['internal', 'hybrid'] }], userVerification: 'required', timeout: 60000 } });
-    const cd = JSON.parse(dec.decode(a.response.clientDataJSON));
-    const want = b64(challenge).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-    const flags = new Uint8Array(a.response.authenticatorData)[32];
-    if (cd.type !== 'webauthn.get' || cd.challenge !== want || cd.origin !== location.origin || !(flags & 4)) throw new Error('verification failed');
+  function lock(auto) {
+    PK8 = null; DOCS = {}; DATA_AT = null; lastFetch = 0; EXPORTS = null;
+    document.title = 'Stock Market Portfolio Tracker';
+    listeners.forEach(fire); blank();
+    if (!CUR) return chooseScreen();
+    const d = getDev();
+    if (isV3(d)) unlockScreen(auto); else if (isOld(d)) migrateScreen(); else setupScreen();
+  }
+
+  /* ---------- WebAuthn with PRF: the passkey's PRF output is what wraps the private key ---------- */
+  async function canBio() {
+    try {
+      if (!window.PublicKeyCredential || !(await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable())) return false;
+      if (PublicKeyCredential.getClientCapabilities) { const c = await PublicKeyCredential.getClientCapabilities(); if (c && c['extension:prf'] === false) return false; }
+      return true;   // browsers without getClientCapabilities: PRF support is only known once a credential is created
+    } catch (e) { return false; }
+  }
+  const noPrf = () => Object.assign(new Error(`This device cannot unlock the portfolio securely with ${bio}; use the password.`), { code: 'no_prf' });
+  const bioReady = async () => { const b = ls.get(BIO_LS); if (!b || !b.cred) return false; try { const r = await idbGet('bio:' + CUR.id); return !!(r && r.v === 3 && r.ct); } catch (e) { return false; } };
+  async function prfSecret(credId, salt) {   // get() with prf eval -> the 32-byte PRF output for this salt
+    const challenge = rnd(32);
+    const a = await navigator.credentials.get({ publicKey: { challenge, allowCredentials: [{ type: 'public-key', id: credId, transports: ['internal', 'hybrid'] }], userVerification: 'required', timeout: 60000,
+      extensions: { prf: { eval: { first: salt } } } } });
+    const x = a.getClientExtensionResults(), out = x.prf && x.prf.results && x.prf.results.first;
+    if (!out) throw noPrf();
+    const cd = JSON.parse(dec.decode(a.response.clientDataJSON)), want = b64(challenge).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    if (cd.type !== 'webauthn.get' || cd.challenge !== want || cd.origin !== location.origin) throw new Error('verification failed');
+    return new Uint8Array(out);
+  }
+  async function bioKey(secret, salt, usages) {
+    const hk = await crypto.subtle.importKey('raw', secret, 'HKDF', false, ['deriveKey']);
+    return crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt, info: enc.encode(BIO_INFO) }, hk, { name: 'AES-GCM', length: 256 }, false, usages);
+  }
+  async function enrollBio(pk8) {
+    const bioSalt = rnd(32); let b = ls.get(BIO_LS), credId, secret;
+    if (!b || !b.cred) {   // first portfolio on this device: create the passkey, requiring PRF
+      const c = await navigator.credentials.create({ publicKey: {
+        rp: { name: 'Stock Market Portfolio Tracker' }, user: { id: rnd(16), name: 'portfolio', displayName: 'Portfolio' }, challenge: rnd(32),
+        pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+        authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'preferred' }, timeout: 60000, attestation: 'none',
+        extensions: { prf: { eval: { first: bioSalt } } } } });
+      const x = c.getClientExtensionResults();
+      if (!x.prf || !x.prf.enabled) throw noPrf();
+      credId = new Uint8Array(c.rawId); ls.set(BIO_LS, { cred: b64(c.rawId), at: new Date().toISOString() });
+      if (x.prf.results && x.prf.results.first) secret = new Uint8Array(x.prf.results.first);   // some authenticators answer at creation, iOS does not
+    } else credId = ub64(b.cred);
+    if (!secret) secret = await prfSecret(credId, bioSalt);
+    const iv = rnd(12);
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc.encode(BIO_INFO) }, await bioKey(secret, bioSalt, ['encrypt']), pk8);
+    await idbPut('bio:' + CUR.id, { v: 3, bioSalt: b64(bioSalt), iv: b64(iv), ct: b64(ct), at: new Date().toISOString() });
+  }
+  async function bioOpen() {   // -> PK8 bytes, or throws (the caller falls back to the password)
+    const b = ls.get(BIO_LS), r = await idbGet('bio:' + CUR.id);
+    if (!b || !b.cred || !r || r.v !== 3) throw new Error('not enrolled');
+    const salt = ub64(r.bioSalt), secret = await prfSecret(ub64(b.cred), salt);
+    return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ub64(r.iv), additionalData: enc.encode(BIO_INFO) }, await bioKey(secret, salt, ['decrypt']), ub64(r.ct)));
   }
 
   /* ---------- screens ---------- */
@@ -219,66 +314,158 @@ body.pd-locked{overflow:hidden}
   function screen(html) { const l = lockEl(); l.hidden = false; document.body.classList.add('pd-locked'); l.innerHTML = '<div class="lk">' + MARK + html + '</div>'; }
   function open() { const l = lockEl(); l.hidden = true; l.innerHTML = ''; document.body.classList.remove('pd-locked'); }
   const err = (m) => { const e = $l('.lk-err'); if (e) e.textContent = m || ''; };
-  const switchLink = () => (PORTFOLIOS.length > 1 ? '<button class="lk-link" id="lk-switch" data-testid="live-switch">Switch portfolio</button>' : '');
+  const switchLink = () => (PORTFOLIOS.length > 1 ? '<button type="button" class="lk-link" id="lk-switch" data-testid="live-switch">Switch portfolio</button>' : '');
   const wireSwitch = () => { const b = $l('#lk-switch'); if (b) b.onclick = () => chooseScreen(); };
 
   function chooseScreen() {
     screen(`<h1>Stock Market Portfolio Tracker</h1><p>Choose whose portfolio to open.</p><div class="lk-list">${PORTFOLIOS.map((p) => { const set = !!ls.get('pd.dev.' + p.id);
       return `<button class="lk-btn ${set ? '' : 'ghost'}" data-pick="${esc(p.id)}" data-testid="live-pick-${esc(p.id)}">${esc(p.name)}<small>${set ? 'ready on this device' : 'needs its setup key'}</small></button>`; }).join('')}</div>
-      <p class="lk-foot">Each portfolio has its own setup key and password. Ask the owner for theirs to add it here.</p>`);
+      <p class="lk-foot">Each portfolio has its own setup key; each device gets its own password. Ask the owner for their setup key to add a portfolio here.</p>`);
     document.querySelectorAll('#lock [data-pick]').forEach((b) => { b.onclick = () => select(PORTFOLIOS.find((p) => p.id === b.dataset.pick)); });
   }
   async function select(p) {
     if (OPENED && OPENED !== p.id) { ls.set(CUR_LS, p.id); location.reload(); return; }   // the page already shows another portfolio: start clean
     CUR = p; ls.set(CUR_LS, p.id); KEYS = null; PK8 = null; EXPORTS = null;
     try { KEYS = await (await fetch(base() + 'keys.json', { cache: 'no-store' })).json(); } catch (e) { return screen('<h1>Offline</h1><p>The portfolio could not load. Check your connection and reload.</p>'); }
-    if (getDev()) unlockScreen(true); else setupScreen();
+    const d = getDev();
+    if (isV3(d)) unlockScreen(true); else if (isOld(d)) migrateScreen(); else setupScreen();
   }
   function setupScreen(note) {
-    screen(`<h1>Set up ${esc(CUR.name)}</h1><p>Enter this portfolio's setup key once on each new phone or computer. After that you unlock with its password or ${esc(bio)}.</p>
+    screen(`<h1>Set up ${esc(CUR.name)}</h1><p>Enter this portfolio's setup key once on each new phone or computer. Then you choose a password for this device; ${esc(bio)} can be added after that.</p>
       <form id="lk-setup" autocomplete="off"><input id="lk-code" data-testid="live-setup-key" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX" autocapitalize="characters" spellcheck="false" aria-label="Setup key">
       <button class="lk-btn" data-testid="live-setup-submit">Continue</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>
-      ${switchLink()}<p class="lk-foot">The figures are encrypted. Without the setup key this page shows nothing.</p>`);
+      ${safariTip()}${switchLink()}<p class="lk-foot">The figures are encrypted. Without the setup key this page shows nothing.</p>`);
     $l('#lk-code').focus(); wireSwitch();
     $l('#lk-setup').onsubmit = async (ev) => { ev.preventDefault(); const b = $l('.lk-btn'); b.disabled = true; err('Checking…');
-      try { const pk8 = await unwrapWithSetupKey($l('#lk-code').value); await storeOnDevice(pk8); PK8 = pk8; await start(); await offerBio(); }
+      try { const pk8 = await unwrapWithSetupKey($l('#lk-code').value);
+        passwordScreen({ title: 'Choose a password for this device', intro: `It unlocks ${esc(CUR.name)} on this device only, and nothing here can recover it: if you forget it, you set the device up again with the setup key.`,
+          done: async (pw) => { await storeV3(pk8, pw); await afterSetup(pk8); } }); }
       catch (e) { console.error(e); b.disabled = false; err(e && e.name === 'OperationError' ? 'That setup key is not right. Check it and try again.' : 'Could not set up: ' + (e.message || e)); } };
   }
-  async function offerBio() {
-    if (getBio().cred || !(await canBio())) return open();
+  // password rules: at least 8 characters; not the portfolio name, its first word (with or without the possessive), the
+  // portfolio id or "password" (compared trimmed and case-insensitively); both fields equal. The password is used as typed
+  // (trimmed, never lowercased).
+  function pwRules(pw, rep) {
+    const p = pw.trim(), low = p.toLowerCase(), first = CUR.name.trim().split(/\s+/)[0] || '', bare = first.replace(/[^a-z0-9].*$/i, '');
+    const banned = new Set([CUR.name, first, bare, CUR.id, 'password'].map((s) => s.trim().toLowerCase()).filter(Boolean));
+    return [{ ok: p.length >= 8, text: 'At least 8 characters' },
+      { ok: p.length > 0 && !banned.has(low), text: `Not the portfolio name, "${bare || first}" or "password"` },
+      { ok: p.length > 0 && rep.trim() === p, text: 'Both fields match' }];
+  }
+  function passwordScreen({ title, intro, done, back }) {
+    screen(`<h1>${title}</h1><p>${intro}</p>
+      <form id="lk-choose" autocomplete="off"><input id="lk-new" type="password" data-testid="live-new-password" placeholder="Password" aria-label="Password" autocomplete="new-password">
+      <input id="lk-rep" type="password" data-testid="live-new-password-repeat" placeholder="Repeat the password" aria-label="Repeat the password" autocomplete="new-password">
+      <ul class="lk-rules" id="lk-rules" data-testid="live-password-rules"></ul>
+      <button class="lk-btn" id="lk-choose-go" data-testid="live-password-continue" disabled>Continue</button><div class="lk-err" role="alert"></div></form>
+      ${safariTip()}${back ? '<div class="lk-links"><button type="button" class="lk-link" id="lk-choose-back" data-testid="live-password-back">Back</button></div>' : ''}`);
+    const nw = $l('#lk-new'), rp = $l('#lk-rep'), go = $l('#lk-choose-go'), ul = $l('#lk-rules');
+    const check = () => { const rs = pwRules(nw.value, rp.value); ul.innerHTML = rs.map((r) => `<li class="${r.ok ? 'ok' : ''}">${esc(r.text)}</li>`).join(''); go.disabled = !rs.every((r) => r.ok); return !go.disabled; };
+    nw.oninput = rp.oninput = check; check(); nw.focus();
+    if (back) $l('#lk-choose-back').onclick = back;
+    $l('#lk-choose').onsubmit = async (ev) => { ev.preventDefault(); if (!check()) return; go.disabled = true; err('Saving…');
+      try { await done(nw.value); } catch (e) { console.error(e); err('Could not save the password: ' + (e.message || e)); check(); } };
+  }
+  async function afterSetup(pk8) {   // the device store is written: open the data, then offer biometrics
+    if (!(await keyMatches(pk8))) return rotatedScreen();   // a migrated v2 device may hold a key the site has since rotated
+    PK8 = pk8;
+    try { await start(); } catch (e) { console.error(e); return dataErrorScreen(e); }
+    await offerBio(pk8);
+  }
+  async function migrateScreen() {   // v2 device store -> v3: the browser key opens the old store, then the user chooses a real password
+    let pk8;
+    try { pk8 = await openOld(); }
+    catch (e) {   // only a store that is really gone sends the user back to the setup key; anything else keeps it for a retry
+      console.error(e);
+      if (e && e.code === 'not_set_up') { ls.del(devLS()); await idbDel('dev:' + CUR.id); return setupScreen('This portfolio needs to be set up again on this device.'); }
+      return screen(`<h1>${esc(CUR.name)}</h1><p>This device's saved setup could not be opened just now. Nothing was removed.</p><button class="lk-btn" id="lk-mig-retry" data-testid="live-migrate-retry">Try again</button>`), ($l('#lk-mig-retry').onclick = () => migrateScreen());
+    }
+    passwordScreen({ title: 'Choose a password for this device', intro: `${esc(CUR.name)} is already set up here. The site now protects it with a password that only this device knows, so pick one now; the old password no longer applies. ${esc(bio)} can be turned on again afterwards.`,
+      done: async (pw) => { await storeV3(pk8, pw); ls.del(OLD_BIO_LS); await idbDel('bio:' + CUR.id); await afterSetup(pk8); } });
+  }
+  async function offerBio(pk8) {
+    if (await bioReady() || !(await canBio())) return open();
     screen(`<h1>Use ${esc(bio)}?</h1><p>Unlock with ${esc(bio)} on this device. The password still works as a backup.</p>
       <button class="lk-btn" id="lk-bio-on" data-testid="live-bio-enable">Turn on ${esc(bio)}</button><button class="lk-btn ghost" id="lk-bio-no" data-testid="live-bio-skip">Not now</button><div class="lk-err" role="alert"></div>`);
     $l('#lk-bio-no').onclick = open;
-    $l('#lk-bio-on').onclick = async () => { try { await enrollBio(); open(); } catch (e) { console.error(e); err(bio + ' was not turned on. You can use the password instead.'); } };
+    $l('#lk-bio-on').onclick = async () => { const b = $l('#lk-bio-on'); b.disabled = true; err('');
+      try { await enrollBio(pk8); open(); }
+      catch (e) { console.error(e); b.disabled = false; err(e && e.code === 'no_prf' ? e.message : bio + ' was not turned on. You can use the password instead.'); } };
   }
-  function unlockScreen(auto) {
-    const cred = getBio().cred;
+  // a wrong password: count it, forget the device after MAX_TRIES. Returns true when the device was forgotten.
+  async function wrongPassword() {
+    const dv = getDev() || { v: 3, tries: 0 }; dv.tries = (dv.tries || 0) + 1; putDev(dv);
+    if (dv.tries >= MAX_TRIES) { await forget(); setupScreen('Too many wrong passwords. This portfolio was removed from the device; enter its setup key.'); return true; }
+    err(`Wrong password. ${MAX_TRIES - dv.tries} ${MAX_TRIES - dv.tries === 1 ? 'try' : 'tries'} left before this portfolio is removed from the device.`); return false;
+  }
+  const rightPassword = () => { const dv = getDev(); if (dv) { dv.tries = 0; putDev(dv); } };
+  async function unlockScreen(auto) {
+    const hasBio = await bioReady();
     screen(`<h1>${esc(CUR.name)}</h1><p>Unlock to see the portfolio.</p>
-      ${cred ? `<button class="lk-btn" id="lk-bio" data-testid="live-bio-unlock">Unlock with ${esc(bio)}</button><div class="lk-sep">or</div>` : ''}
+      ${hasBio ? `<button class="lk-btn" id="lk-bio" data-testid="live-bio-unlock">Unlock with ${esc(bio)}</button><div class="lk-sep">or</div>` : ''}
       <form id="lk-pass" autocomplete="off"><input id="lk-pw" type="password" data-testid="live-password" placeholder="Password" aria-label="Password" autocomplete="current-password">
-      <button class="lk-btn ${cred ? 'ghost' : ''}" data-testid="live-password-submit">Unlock</button><div class="lk-err" role="alert"></div></form>
-      <div class="lk-links">${switchLink()}<button class="lk-link" id="lk-forget" data-testid="live-forget-device">Forget this portfolio on this device</button></div>`);
+      <button class="lk-btn ${hasBio ? 'ghost' : ''}" data-testid="live-password-submit">Unlock</button><div class="lk-err" role="alert"></div></form>
+      <div class="lk-links">${switchLink()}<button type="button" class="lk-link" id="lk-change" data-testid="live-change-password">Change password</button><button type="button" class="lk-link" id="lk-forget" data-testid="live-forget-device">Forget this portfolio on this device</button></div>`);
     wireSwitch();
-    if (cred) { $l('#lk-bio').onclick = () => bioUnlock(); if (auto) bioUnlock(true); } else $l('#lk-pw').focus();
-    $l('#lk-pass').onsubmit = async (ev) => { ev.preventDefault();
-      const h = hex(await crypto.subtle.digest('SHA-256', enc.encode('pd-v1:' + $l('#lk-pw').value.trim().toLowerCase())));
-      const dv = getDev();
-      if (h !== KEYS.pw) { dv.tries = (dv.tries || 0) + 1; putDev(dv); $l('#lk-pw').value = '';
-        if (dv.tries >= MAX_TRIES) { await forget(); return setupScreen('Too many wrong passwords. This portfolio was removed from the device; enter its setup key.'); }
-        return err(`Wrong password. ${MAX_TRIES - dv.tries} tries left before this portfolio is removed from the device.`); }
-      dv.tries = 0; putDev(dv); await unlocked(); };
-    $l('#lk-forget').onclick = () => { screen(`<h1>Forget ${esc(CUR.name)}?</h1><p>You will need its setup key to open it here again.</p>
-      <button class="lk-btn" id="lk-f-yes" data-testid="live-forget-confirm">Forget it on this device</button><button class="lk-btn ghost" id="lk-f-no">Cancel</button>`);
-      $l('#lk-f-yes').onclick = async () => { await forget(); ls.del(CUR_LS); location.reload(); }; $l('#lk-f-no').onclick = () => unlockScreen(false); };
+    if (hasBio) { $l('#lk-bio').onclick = () => bioUnlock(); if (auto) bioUnlock(true); } else $l('#lk-pw').focus();
+    $l('#lk-pass').onsubmit = async (ev) => { ev.preventDefault(); const pw = $l('#lk-pw').value; if (!pw.trim()) return; const b = $l('[data-testid=live-password-submit]'); b.disabled = true; err('Checking…');
+      try { const pk8 = await openV3(pw); rightPassword(); await unlocked(pk8); }
+      catch (e) { $l('#lk-pw').value = ''; b.disabled = false;
+        if (e && e.name === 'OperationError') await wrongPassword();
+        else if (e && e.code === 'not_set_up') { console.error(e); ls.del(devLS()); setupScreen('This portfolio needs to be set up again on this device.'); }   // the store is gone (storage cleared); nothing to forget
+        else { console.error(e); err('Could not unlock: ' + (e.message || e)); } } };
+    $l('#lk-change').onclick = () => changePasswordScreen();
+    $l('#lk-forget').onclick = () => forgetScreen(() => unlockScreen(false));
   }
-  async function bioUnlock(quiet) { try { await verifyBio(); await unlocked(); } catch (e) { if (!quiet) err(bio + ' did not unlock. Try again or use the password.'); } }
-  async function unlocked() {
-    try { if (!PK8) { PK8 = await loadFromDevice(); await start(); } else if (Date.now() - lastFetch > REFRESH_MS) refresh(); open(); }
-    catch (e) { console.error(e); if (/not set up/.test(e.message) || e.name === 'OperationError') { await forget(); setupScreen('This portfolio needs to be set up again on this device.'); } else err(e.message); }
+  // the explicit "Forget this portfolio" flow: the one place, besides MAX_TRIES, that removes a portfolio from the device
+  function forgetScreen(back, why) {
+    screen(`<h1>Forget ${esc(CUR.name)}?</h1><p>${why || ''}You will need its setup key to open it here again.</p>
+      <button class="lk-btn" id="lk-f-yes" data-testid="live-forget-confirm">Forget it on this device</button><button class="lk-btn ghost" id="lk-f-no" data-testid="live-forget-cancel">Cancel</button>`);
+    $l('#lk-f-yes').onclick = async () => { await forget(); ls.del(CUR_LS); location.reload(); }; $l('#lk-f-no').onclick = back;
+  }
+  // the site's keys were rotated (rotate_keys.py): this device's key no longer opens the data. Nothing is forgotten here —
+  // the user chooses to remove the old setup (the same explicit flow as "Forget this portfolio") and enters the new key.
+  function rotatedScreen() {
+    screen(`<h1>${esc(CUR.name)}</h1><p data-testid="live-key-rotated">This portfolio's setup key was changed, so the key saved on this device no longer opens it. Ask the owner for the new setup key, then remove the old setup here and enter it.</p>
+      <button class="lk-btn" id="lk-rot" data-testid="live-key-rotated-forget">Remove the old setup and enter the new key</button><div class="lk-links">${switchLink()}<button type="button" class="lk-link" id="lk-rot-lock" data-testid="live-key-rotated-lock">Lock</button></div>`);
+    wireSwitch(); $l('#lk-rot-lock').onclick = () => lock(false);
+    $l('#lk-rot').onclick = () => forgetScreen(rotatedScreen, 'The old setup on this device is useless now. ');
+  }
+  function changePasswordScreen() {
+    screen(`<h1>Change password</h1><p>Enter the current password for ${esc(CUR.name)} on this device first.</p>
+      <form id="lk-cur" autocomplete="off"><input id="lk-cur-pw" type="password" data-testid="live-current-password" placeholder="Current password" aria-label="Current password" autocomplete="current-password">
+      <button class="lk-btn" data-testid="live-current-password-submit">Continue</button><div class="lk-err" role="alert"></div></form>
+      <div class="lk-links"><button type="button" class="lk-link" id="lk-cur-back" data-testid="live-change-back">Back</button></div>`);
+    $l('#lk-cur-pw').focus(); $l('#lk-cur-back').onclick = () => unlockScreen(false);
+    $l('#lk-cur').onsubmit = async (ev) => { ev.preventDefault(); const pw = $l('#lk-cur-pw').value; if (!pw.trim()) return; const b = $l('.lk-btn'); b.disabled = true; err('Checking…');
+      try { const pk8 = await openV3(pw); rightPassword();
+        passwordScreen({ title: 'Choose a new password', intro: `The new password replaces the old one on this device only. ${esc(bio)}, if turned on, keeps working.`, back: () => unlockScreen(false),
+          done: async (npw) => { await storeV3(pk8, npw); await unlocked(pk8); } }); }
+      catch (e) { $l('#lk-cur-pw').value = ''; b.disabled = false;
+        if (e && e.name === 'OperationError') await wrongPassword();
+        else if (e && e.code === 'not_set_up') { console.error(e); ls.del(devLS()); setupScreen('This portfolio needs to be set up again on this device.'); }
+        else { console.error(e); err('Could not check the password: ' + (e.message || e)); } } };
+  }
+  async function bioUnlock(quiet) {
+    try { const pk8 = await bioOpen(); rightPassword(); await unlocked(pk8); }
+    catch (e) { if (!quiet) console.error(e); if (!quiet) err(bio + ' did not unlock. Try again or use the password.'); const i = $l('#lk-pw'); if (i) i.focus(); }
+  }
+  // the device is authenticated: download the data and open the page. A data failure is reported and NEVER forgets the device.
+  async function unlocked(pk8) {
+    if (!(await keyMatches(pk8))) return rotatedScreen();
+    PK8 = pk8;
+    try { await start(); } catch (e) { console.error(e); return dataErrorScreen(e); }
+    open();
+  }
+  function dataErrorScreen(e) {
+    screen(`<h1>${esc(CUR.name)}</h1><p data-testid="live-data-error">The portfolio data could not be read. Try again later; if it keeps happening, tell Claude.</p><p class="lk-foot">${esc((e && e.message) || e || '')}</p>
+      <button class="lk-btn" id="lk-retry" data-testid="live-data-retry">Try again</button><div class="lk-links">${switchLink()}<button type="button" class="lk-link" id="lk-relock" data-testid="live-data-lock">Lock</button></div>`);
+    wireSwitch(); $l('#lk-relock').onclick = () => lock(false);
+    $l('#lk-retry').onclick = async () => { const b = $l('#lk-retry'); b.disabled = true; b.textContent = 'Trying…'; if (!PK8) return lock(false); await unlocked(PK8); };
   }
   async function start() { publish(await fetchData()); dbResolve(db); livePrices().catch((e) => console.warn('live prices unavailable', e)); }
-  async function refresh() { try { const b = await fetchData(); if (b.exportedAt !== DATA_AT) publish(b); } catch (e) { console.warn('refresh failed', e); } }
-  window.pdLock = () => { if (CUR && getDev()) unlockScreen(false); };
+  async function refresh() { if (!PK8) return; try { const b = await fetchData(); if (b.exportedAt !== DATA_AT) publish(b); } catch (e) { console.warn('refresh failed', e); } }
+  window.pdLock = () => { if (CUR) lock(false); };
   window.pdSwitch = () => chooseScreen();
   window.pdSelect = (id) => { const p = PORTFOLIOS.find((x) => x.id === id); if (p && !(CUR && CUR.id === p.id)) select(p); };
 
@@ -287,19 +474,22 @@ body.pd-locked{overflow:hidden}
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) { hiddenAt = Date.now(); return; }
     if (!PK8 || !lockEl().hidden) return;
-    if (Date.now() - hiddenAt > RELOCK_MS) unlockScreen(true); else if (Date.now() - lastFetch > REFRESH_MS) refresh();
+    if (Date.now() - hiddenAt > RELOCK_MS) return lock(true);
+    if (Date.now() - lastFetch > REFRESH_MS) refresh();
     if (Date.now() - liveAt > 10 * 60e3) livePrices().catch(() => {});
   });
   (async () => {
     if (!window.crypto || !crypto.subtle || !window.DecompressionStream) return screen('<h1>Browser too old</h1><p>Update your browser (Safari 16.4+, Chrome 80+) to open the portfolio.</p>');
     try { PORTFOLIOS = await (await fetch('portfolios.json', { cache: 'no-store' })).json(); } catch (e) { return screen('<h1>Offline</h1><p>The portfolio could not load. Check your connection and reload.</p>'); }
     await migrateLegacy();
+    ls.del(OLD_BIO_LS);   // the pre-v3 passkey only gated a screen; v3 enrols afresh with PRF
     whenReady(() => { const sw = document.getElementById('pd-switch'); if (sw && PORTFOLIOS.length > 1) sw.hidden = false; });
     const last = PORTFOLIOS.find((p) => p.id === ls.get(CUR_LS));
     if (last) select(last); else if (PORTFOLIOS.length === 1) select(PORTFOLIOS[0]); else chooseScreen();
   })();
 })();
 </script>
+<meta name="pd-build" content="aba400b08eca 2026-09-28 07:58">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=Public+Sans:wght@400;500;600;700&family=Spectral:wght@500;600&display=swap">
@@ -366,6 +556,8 @@ nav.tabs button{border:0;background:none;padding:8px 12px;border-radius:8px;colo
 nav.tabs button:hover{background:var(--surface-2);color:var(--ink)}
 nav.tabs button[aria-selected="true"]{background:var(--ink);color:var(--bg)}
 @media (max-width:860px){nav.tabs{margin-left:0;width:100%;padding-bottom:8px}}
+/* phones: the seven tabs wrap onto two rows instead of scrolling or clipping */
+@media (max-width:520px){nav.tabs{flex-wrap:wrap;overflow:visible;gap:2px 0;padding-bottom:6px}nav.tabs button{padding:7px 10px;font-size:13px}}
 
 /* tape */
 .tape{display:flex;gap:22px;overflow-x:auto;min-width:0;max-width:100%;padding-block:10px;border-bottom:1px solid var(--rule);scrollbar-width:none;font-size:12.5px}
@@ -412,7 +604,15 @@ section.view{display:grid;gap:18px;padding-top:12px}
 .kpi.hero .pos,.kpi.hero .neg{color:var(--accent-ink)}
 
 /* tables */
-.tbl{overflow-x:auto;margin-inline:-4px}
+.tbl{overflow-x:auto;margin-inline:-4px;position:relative}
+/* the row label stays put while a wide table is swiped: first column sticky, on the table's own background, with a rule */
+.tbl th:first-child,.tbl td:first-child{position:sticky;left:0;z-index:2;background:var(--surface);border-right:1px solid var(--rule)}
+@media (max-width:520px){.tbl th:first-child,.tbl td:first-child{max-width:140px;white-space:normal;overflow-wrap:anywhere}}
+input:disabled,select:disabled,textarea:disabled{color:var(--ink-2);-webkit-text-fill-color:var(--ink-2)}
+.tbl th:first-child{z-index:3}
+.tbl tbody tr:hover td:first-child{background:var(--surface-2)}
+/* a table wider than its box says so until it has been scrolled (class set by markScrollables) */
+.tbl.can-scroll::after{content:"swipe →";position:sticky;left:calc(100% - 70px);display:inline-block;margin:6px 0 2px;padding:2px 8px;border-radius:999px;background:var(--surface-2);color:var(--ink-3);font-size:11px;letter-spacing:.04em;pointer-events:none}
 table{border-collapse:collapse;width:100%;font-size:13px}
 th{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);font-weight:600;text-align:left;padding:8px 10px;border-bottom:1px solid var(--rule);white-space:nowrap;position:sticky;top:0;background:var(--surface)}
 td{padding:8px 10px;border-bottom:1px solid var(--grid);white-space:nowrap;vertical-align:middle}
@@ -531,6 +731,8 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
   const TYPES = ['Deposit', 'Withdrawal', 'Buy', 'Sell', 'Dividend', 'Fee', 'Rebate', 'Bonus'];
   // Same-day order. Thndr prints a "Sell Same Day" before the buy it closes, so money in → buys → income → sells → money out.
   const DAY_ORDER = { Deposit: 0, Buy: 1, Bonus: 1, Dividend: 2, Rebate: 2, Fee: 2, Sell: 3, Withdrawal: 4 };
+  // Sectors that hold parked cash rather than positions (same set as engine2.js); their round trips are not "trades".
+  const CASH_LIKE = new Set(['Cash & Savings', 'Mutual Funds', 'Cash']);
 
   // ---------- date helpers ----------
   const pad = (n) => String(n).padStart(2, '0');
@@ -686,7 +888,51 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     const openRows = rows.filter((r) => r.status === 'Open');
     const mvTotal = sum(openRows.map((r) => r.mv || 0));
     openRows.forEach((r) => { r.weight = mvTotal ? (r.mv || 0) / mvTotal : 0; });
-    return { rows, open: openRows, mvTotal };
+    const trips = roundTrips(ledger, byName, thr, period);
+    const tripCount = {}; trips.forEach((t) => { tripCount[t.name] = (tripCount[t.name] || 0) + 1; });
+    rows.forEach((r) => { r.trips = tripCount[r.name] || 0; });
+    return { rows, open: openRows, mvTotal, trips };
+  }
+
+  // Closed round trips: a trip starts at the first Buy/Bonus while the position is flat (open ≤ threshold) and ends at the Sell
+  // that brings it back to flat. A stock bought, sold out and bought again later is two trips (pos.rows keeps one row per name).
+  // Dividends dated inside [firstBuy, lastSell] belong to that trip; one paid while the position is flat (Thndr pays days
+  // to months after the ex-date, often after the shares were sold) goes to the trip that closed most recently before it,
+  // while one paid while shares are held stays with the open position. A Sell with no open trip (the savings fund's
+  // interest-only sells after full redemption) is folded into that asset's previous trip. Newest first (by lastSell).
+  function roundTrips(ledger, byName, thr, period) {
+    const trips = [], cur = {}, held = {}, last = {};
+    const symOf = {}; Object.keys(byName).forEach((n) => { if (byName[n].symbol) symOf[byName[n].symbol] = n; });
+    const finish = (tr) => {
+      tr.realized = tr.proceeds - tr.soldBasis; tr.total = tr.realized + tr.divs;
+      tr.roi = tr.buyCost > 0 ? tr.total / tr.buyCost : 0;
+      tr.outcome = tr.total > 0 ? 'WIN' : 'LOSS';
+      tr.holdDays = dayNum(tr.lastSell) - dayNum(tr.firstBuy);
+      tr.closedInPeriod = !!(period && tr.lastSell >= `${period.from}-01` && tr.lastSell <= eom(period.to));
+    };
+    ledger.forEach((t) => {
+      if (!t.a || (t.t !== 'Buy' && t.t !== 'Sell' && t.t !== 'Bonus' && t.t !== 'Dividend')) return;
+      const name = t.t === 'Dividend' && !byName[t.a] && symOf[t.a] ? symOf[t.a] : t.a, a = byName[name] || {};
+      const h = held[name] || 0;
+      if (t.t === 'Dividend') {
+        const tr = cur[name] || (h <= thr ? last[name] : null);
+        if (tr) { tr.divs += t.amt || 0; if (tr !== cur[name]) finish(tr); }
+      } else if (t.t === 'Buy' || t.t === 'Bonus') {
+        if (!cur[name] && h <= thr) cur[name] = { name, symbol: a.symbol || '', sector: a.sector || 'Unclassified', trip: (last[name] ? last[name].trip : 0) + 1, firstBuy: t.d, lastSell: null, bought: 0, bonus: 0, sold: 0, buyCost: 0, proceeds: 0, soldBasis: 0, divs: 0 };
+        const tr = cur[name];
+        if (tr) { if (t.t === 'Buy') { tr.bought += t.q || 0; tr.buyCost += Math.abs(t.amt || 0); } else tr.bonus += t.q || 0; }
+        held[name] = h + (t.q || 0);
+      } else {
+        held[name] = h - (t.q || 0);
+        let tr = cur[name];
+        if (!tr) { tr = last[name]; if (!tr) return; } // orphan sell → previous trip
+        tr.sold += t.q || 0; tr.proceeds += t.amt || 0; tr.soldBasis += t.basis || 0;
+        if (!tr.lastSell || t.d > tr.lastSell) tr.lastSell = t.d;
+        if (tr === cur[name]) { if (held[name] <= thr) { finish(tr); trips.push(tr); last[name] = tr; delete cur[name]; } }
+        else finish(tr);
+      }
+    });
+    return trips.sort((x, y) => (x.lastSell < y.lastSell ? 1 : x.lastSell > y.lastSell ? -1 : y.trip - x.trip));
   }
 
   // ---------- monthly engine (⚙️ Model §A) ----------
@@ -695,6 +941,12 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
   // opts.flowTiming: 'dietz' (default) — Modified Dietz, each flow weighted by the fraction of the month it was invested
   //                  (start-of-day: a deposit on the 1st counts fully, on the 16th of a 31-day month 16/31);
   //                  'start' — the workbook's legacy formula, every flow assumed on day 1. row.retSimple always keeps the legacy figure.
+  // Gaps: a month with no value keeps has=false, ret=null and is marked gap=true (spans=0). The next month WITH a value
+  // measures its return over the whole span since the last valued month: opening = that month's value, flows and activity
+  // (deposits, withdrawals, netFlow, weightedFlow, dividends, buys, sells, trades) summed over every month of the span,
+  // Modified Dietz weights over the span's total calendar days, benchmark/FX/CPI compounded over the span; row.spans = months
+  // covered (1 normally), row.spanFrom = first month of the span. A gap row keeps its own month's activity for display only —
+  // it is never in a period's rows, so nothing double-counts.
   function monthly(settings, marks, ledger, live, opts) {
     const dietz = !(opts && opts.flowTiming === 'start');
     const out = [];
@@ -703,7 +955,7 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     let last = keys.length ? keys[keys.length - 1] : inc;
     if (live && live.month > last) last = live.month;
     const n = monthsBetween(inc, last) + 1;
-    let prev = null;
+    let prev = null; // the last VALUED row (or null before the first one)
     for (let i = 0; i < n; i++) {
       const m = addMonths(inc, i);
       let mk = { ...(marks[m] || {}) };
@@ -715,15 +967,18 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
         isLive = true;
       }
       const has = typeof mk.cash === 'number' && typeof mk.securities === 'number';
-      const from = `${m}-01`, to = eom(m);
+      // the span this row's return covers: this month alone, or everything since the last valued month
+      const spanFrom = has ? (prev ? addMonths(prev.month, 1) : inc) : m;
+      const spans = has ? monthsBetween(spanFrom, m) + 1 : 0;
+      const from = `${spanFrom}-01`, to = eom(m);
       const inM = ledger.filter((t) => t.d >= from && t.d <= to);
       const s = (type) => sum(inM.filter((t) => t.t === type).map((t) => t.amt || 0));
       const deposits = Math.abs(s('Deposit')), withdrawals = Math.abs(s('Withdrawal'));
-      // day-weighted net flow (Modified Dietz): w = (days in month − day + 1) / days in month
-      const CD = +to.slice(8);
-      const weightedFlow = sum(inM.filter((t) => t.t === 'Deposit' || t.t === 'Withdrawal').map((t) => ((CD - +t.d.slice(8) + 1) / CD) * (t.amt || 0)));
+      // day-weighted net flow (Modified Dietz): w = (D − dayIndex + 1) / D over the span's D calendar days (one month normally)
+      const D = dayNum(to) - dayNum(from) + 1;
+      const weightedFlow = sum(inM.filter((t) => t.t === 'Deposit' || t.t === 'Withdrawal').map((t) => ((D - (dayNum(t.d) - dayNum(from) + 1) + 1) / D) * (t.amt || 0)));
       const row = {
-        month: m, has, cash: mk.cash, securities: mk.securities, value: has ? mk.cash + mk.securities : null,
+        month: m, has, gap: !has, spans, spanFrom, cash: mk.cash, securities: mk.securities, value: has ? mk.cash + mk.securities : null,
         deposits, withdrawals, netFlow: deposits - withdrawals, weightedFlow, dividends: s('Dividend'),
         buys: Math.abs(s('Buy')), sells: s('Sell'), trades: inM.filter((t) => t.t === 'Buy' || t.t === 'Sell').length,
         provisional: !!mk.provisional, live: isLive, note: mk.note || '',
@@ -733,19 +988,23 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
       row.opening = prev ? prev.value : settings.openingValue;
       row.retSimple = has && row.opening != null && row.opening + row.netFlow > 0 ? row.value / (row.opening + row.netFlow) - 1 : null;
       row.ret = dietz && has && row.opening != null && row.opening + weightedFlow > 0 ? (row.value - row.opening - row.netFlow) / (row.opening + weightedFlow) : row.retSimple;
-      // benchmark: closes win over typed %, as in the workbook
-      const prevClose = isLive && live.prevBenchClose ? live.prevBenchClose : (prev ? prev.benchClose : settings.benchCloseStart || null);
+      // the marks of the months inside the span (typed benchmark % and CPI are compounded across them)
+      const spanMarks = spans > 1 ? Array.from({ length: spans }, (_, k) => (marks && marks[addMonths(spanFrom, k)]) || {}) : [mk];
+      const compound = (key) => (spanMarks.every((x) => typeof x[key] === 'number') ? spanMarks.reduce((a, x) => a * (1 + x[key]), 1) - 1 : null);
+      // benchmark: closes win over typed %, as in the workbook; over a span the ratio is to the last valued month's close
+      const prevClose = isLive && live.prevBenchClose && spans === 1 ? live.prevBenchClose : (prev ? prev.benchClose : settings.benchCloseStart || null);
       if (!has) row.bench = null;
       else if (row.benchClose && prevClose) row.bench = row.benchClose / prevClose - 1;
-      else row.bench = typeof mk.benchReturn === 'number' ? mk.benchReturn : null;
+      else row.bench = spans > 1 ? compound('benchReturn') : typeof mk.benchReturn === 'number' ? mk.benchReturn : null;
       if (isLive && live.prevBenchClose && !(prev && prev.benchClose)) row.prevBenchClose = live.prevBenchClose;
       row.alpha = row.ret != null && row.bench != null ? row.ret - row.bench : null;
       const prevFx = prev ? prev.usdegp : settings.fxStart;
       row.fxFactor = has && row.usdegp && prevFx ? prevFx / row.usdegp : null;
       row.usdRet = row.fxFactor != null && row.ret != null ? (1 + row.ret) * row.fxFactor - 1 : null;
-      row.realRet = row.ret != null && row.cpi != null ? (1 + row.ret) / (1 + row.cpi) - 1 : null;
+      row.cpiSpan = has ? compound('cpi') : null; // == cpi for a one-month row; null if any month of the span has no CPI
+      row.realRet = row.ret != null && row.cpiSpan != null ? (1 + row.ret) / (1 + row.cpiSpan) - 1 : null;
       out.push(row);
-      prev = row;
+      if (has) prev = row;
     }
     return out;
   }
@@ -776,15 +1035,22 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
   const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const fmtMonth = (m) => `${MON[+m.slice(5, 7) - 1]}-${m.slice(2, 4)}`;
 
-  function periodStats(months, range, ledger, settings, pos) {
-    const P = months.filter((r) => r.has && r.month >= range.from && r.month <= range.to);
+  // opts.closedTrades: 'trip' (default) — closed-trade stats per round trip (pos.trips), cash-like sectors excluded;
+  //                    'name' — legacy: one row per stock name (pos.rows), as the workbook counted them.
+  // Months with no value are not in S.rows: their return is inside the next valued month (row.spans > 1). n counts the
+  // available returns (vol, Sharpe, beta, hit rates); monthsElapsed counts the calendar months of the range (annualization).
+  function periodStats(months, range, ledger, settings, pos, opts) {
+    const inRange = months.filter((r) => r.month >= range.from && r.month <= range.to);
+    const P = inRange.filter((r) => r.has && r.ret != null);
     const n = P.length;
     const S = { n, label: n ? fmtMonth(range.from) + (range.from === range.to ? '' : ' to ' + fmtMonth(range.to)) : 'No data for selection' };
     if (!n) return S;
+    S.monthsElapsed = monthsBetween(range.from, range.to) + 1;
+    S.gaps = inRange.filter((r) => r.gap).map((r) => r.month);
     const first = P[0], last = P[n - 1];
     let cf = 1, cb = 1, cu = 1, cc = 1, peak = 1;
     P.forEach((r) => {
-      cf *= 1 + r.ret; cb *= 1 + (r.bench ?? 0); cu *= 1 + (r.usdRet ?? 0); cc *= 1 + (r.cpi ?? 0);
+      cf *= 1 + r.ret; cb *= 1 + (r.bench ?? 0); cu *= 1 + (r.usdRet ?? 0); cc *= 1 + (r.cpiSpan ?? 0);
       r.pCum = cf - 1; r.pBench = cb - 1;
       peak = Math.max(peak, cf); r.dd = cf / peak - 1;
     });
@@ -801,7 +1067,7 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     S.best = { month: best.month, ret: best.ret }; S.worst = { month: worst.month, ret: worst.ret };
     S.avg = mean(rets); S.vol = n > 1 ? stdevS(rets) : 0;
     S.risk = n < 2 ? 'n/a' : S.vol < settings.volLow ? 'Low' : S.vol < settings.volHigh ? 'Moderate' : 'High';
-    S.annualized = n >= 12 ? Math.pow(1 + S.twr, 12 / n) - 1 : null;
+    S.annualized = S.monthsElapsed >= 12 ? Math.pow(1 + S.twr, 12 / S.monthsElapsed) - 1 : null;
     const rfM = Math.pow(1 + settings.riskFree, 1 / 12) - 1;
     S.sharpe = n >= 3 && S.vol ? ((S.avg - rfM) / S.vol) * Math.sqrt(12) : null;
     const bp = P.filter((r) => r.bench != null);
@@ -812,20 +1078,20 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     const mdd = P.reduce((a, r) => (r.dd < a.dd ? r : a));
     S.maxDD = Math.min(0, mdd.dd); S.maxDDMonth = S.maxDD < 0 ? mdd.month : null;
     // USD & real
-    const fxStartIdx = months.findIndex((r) => r.month === range.from);
-    S.fxStart = fxStartIdx <= 0 ? settings.fxStart : months[fxStartIdx - 1].usdegp;
+    const before = months.filter((r) => r.has && r.month < range.from); // FX at the start = the last valued month before the range
+    S.fxStart = before.length ? before[before.length - 1].usdegp : settings.fxStart;
     S.fxEnd = last.usdegp;
     S.usdComplete = !!S.fxStart && P.every((r) => r.usdRet != null);
     S.usdTwr = S.usdComplete ? cu - 1 : null;
     S.egpVsUsd = S.fxStart && S.fxEnd ? S.fxStart / S.fxEnd - 1 : null;
-    S.cpiComplete = P.every((r) => r.cpi != null);
+    S.cpiComplete = P.every((r) => r.cpiSpan != null);
     S.inflation = S.cpiComplete ? cc - 1 : null;
     S.realTwr = S.cpiComplete ? (1 + S.twr) / (1 + S.inflation) - 1 : null;
     // when the latest months have no CPI yet, report the real return through the last month that does
-    let k = 0; while (k < n && P[k].cpi != null) k++;
+    let k = 0; while (k < n && P[k].cpiSpan != null) k++;
     if (!S.cpiComplete && k > 0) {
       const Q = P.slice(0, k);
-      const tw = Q.reduce((a, r) => a * (1 + r.ret), 1) - 1, inf = Q.reduce((a, r) => a * (1 + r.cpi), 1) - 1;
+      const tw = Q.reduce((a, r) => a * (1 + r.ret), 1) - 1, inf = Q.reduce((a, r) => a * (1 + r.cpiSpan), 1) - 1;
       S.realThrough = Q[k - 1].month; S.realTwrPartial = (1 + tw) / (1 + inf) - 1; S.inflationPartial = inf;
     } else { S.realThrough = S.cpiComplete ? last.month : null; S.realTwrPartial = null; S.inflationPartial = null; }
     // downside risk and capture ratios (monthly, CFA-style definitions)
@@ -850,8 +1116,11 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     // realized trading P/L (sells in window minus their average-cost basis)
     const inW = ledger.filter((t) => t.t === 'Sell' && t.d >= `${range.from}-01` && t.d <= d1);
     S.realized = sum(inW.map((t) => t.amt || 0)) - sum(inW.map((t) => t.basis));
-    // closed-trade stats
-    const closed = pos.rows.filter((r) => r.closedInPeriod);
+    // closed-trade stats: per round trip (default), leaving out cash-like funds — parking money in the savings fund is not a trade
+    const byName = !!(opts && opts.closedTrades === 'name');
+    const closedAll = byName ? pos.rows.filter((r) => r.closedInPeriod) : (pos.trips || []).filter((r) => r.closedInPeriod);
+    const closed = byName ? closedAll : closedAll.filter((r) => !CASH_LIKE.has(r.sector));
+    S.closedTrades = byName ? 'name' : 'trip'; S.closedCashLike = closedAll.length - closed.length;
     const wins = closed.filter((r) => r.total > 0), losses = closed.filter((r) => r.total <= 0);
     S.closed = closed; S.closedCount = closed.length; S.wins = wins.length; S.losses = losses.length;
     S.winRate = closed.length ? wins.length / closed.length : 0;
@@ -922,12 +1191,14 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     const missing = pos.open.filter((r) => r.price == null);
     add(`Prices updated within ${settings.staleDays} days`, missing.length ? 'error' : stale.length ? 'warn' : 'ok', missing.length ? `No price: ${missing.map((r) => r.name).join(', ')}` : stale.length ? `Stale: ${stale.map((r) => r.symbol || r.name).join(', ')}` : `${pos.open.length} held positions priced`);
     const diff = settings.cash - ledgerCash;
-    add('Broker cash reconciles to ledger', Math.abs(diff) < 1 ? 'ok' : 'warn', `Broker ${fmtNum(settings.cash)} vs ledger ${fmtNum(ledgerCash)}${settings.cashDate ? ` on ${settings.cashDate}` : ''} (diff ${fmtNum(diff)} EGP)${settings.cashSource ? ` · broker figure from ${settings.cashSource}` : ''}`);
+    // only a Thndr statement can confirm the ledger; a figure copied from a workbook or typed by hand is labelled as such
+    const fromStatement = /statement/i.test(settings.cashSource || '');
+    add('Broker cash reconciles to ledger', Math.abs(diff) < 1 && fromStatement ? 'ok' : 'warn', `Broker ${fmtNum(settings.cash)} vs ledger ${fmtNum(ledgerCash)}${settings.cashDate ? ` on ${settings.cashDate}` : ''} (diff ${fmtNum(diff)} EGP)${fromStatement ? ` · broker figure from ${settings.cashSource}` : ` · the broker figure is not from a Thndr statement (${settings.cashSource || 'no source'}), so this check cannot confirm the ledger`}`);
     return out;
   }
   const fmtNum = (x) => (x == null ? '—' : x.toLocaleString('en-US', { maximumFractionDigits: 2, minimumFractionDigits: 2 }));
 
-  // One call that runs the whole model. opts: {today, live, fallback, flowTiming: 'dietz' | 'start', sameDay: 'type' | 'ledger'}
+  // One call that runs the whole model. opts: {today, live, fallback, flowTiming: 'dietz' | 'start', sameDay: 'type' | 'ledger', closedTrades: 'trip' | 'name'}
   function run(data, sel, opts) {
     opts = opts || {};
     const today = opts.today || cairoToday();
@@ -961,15 +1232,15 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     const months = monthly(settings, data.marks || {}, ledger, live, { flowTiming: opts.flowTiming });
     const range = periodRange(sel, settings, months);
     const pos = positions(ledger, assets, market, settings, today, range, opts.fallback);
-    const stats = periodStats(months, range, ledger, settings, pos);
+    const stats = periodStats(months, range, ledger, settings, pos, { closedTrades: opts.closedTrades });
     return {
-      today, settings, ledger, months, range, pos, stats, ledgerCash, ledgerCashAt, liveCash, live, flowTiming: opts.flowTiming || 'dietz', sameDay: opts.sameDay || 'type',
+      today, settings, ledger, months, range, pos, stats, ledgerCash, ledgerCashAt, liveCash, live, flowTiming: opts.flowTiming || 'dietz', sameDay: opts.sameDay || 'type', closedTrades: opts.closedTrades || 'trip',
       sectors: sectors(pos), conc: concentration(pos, settings),
       checks: checks({ tx, ledger, months, range, pos, settings, today, ledgerCash: ledgerCashAt, sameDay: opts.sameDay }),
     };
   }
 
-  const api = { run, runLedger, positions, monthly, periodRange, periodStats, sectors, xirr, eom, addMonths, fmtMonth, monthOf, dayNum, cairoToday, effectivePrice, TYPES, PERIOD_TYPES, DAY_ORDER, sortLedger };
+  const api = { run, runLedger, positions, monthly, periodRange, periodStats, sectors, xirr, eom, addMonths, monthsBetween, fmtMonth, monthOf, dayNum, cairoToday, effectivePrice, TYPES, PERIOD_TYPES, DAY_ORDER, CASH_LIKE, sortLedger };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.PE = api;
 })(this);
 
@@ -1180,11 +1451,17 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
       const price = makePricer(assets, ledger, pb);
       const H = holdingsAt(ledger, assets, pb, eom(addMonths(r.month, -1)));
       const cashW = Math.max(0, H.cash);
-      const total = H.mv + cashW; if (total <= 0) return;
+      // A month that starts from nothing (the inception month, funded during the month) is kept, not dropped — skipping it
+      // would leave the Carino chain one month short of the period's TWR. It is treated as 100% cash at 0%: no stock
+      // weights, Rh = 0, trading = R (all of the return came from trades made during the month), allocation = −B* (out of
+      // the market while the index moved) and selection = 0, so the month's effects still add up to R − B. startValue = 0.
+      const total = Math.max(0, H.mv + cashW);
       const sec = {};
       const addP = (s, w, ret) => { const x = sec[s] || (sec[s] = { wp: 0, wr: 0, wb: 0, wbr: 0 }); x.wp += w; x.wr += w * ret; };
-      H.rows.forEach((h) => { if (!h.mv) return; const p1 = price(h.name, d1); const ret = p1 && h.price ? p1.p / h.price - 1 : 0; addP(h.sector, h.mv / total, ret); });
-      if (cashW) addP('Cash & Savings', cashW / total, 0);
+      if (total > 0) {
+        H.rows.forEach((h) => { if (!h.mv) return; const p1 = price(h.name, d1); const ret = p1 && h.price ? p1.p / h.price - 1 : 0; addP(h.sector, h.mv / total, ret); });
+        if (cashW) addP('Cash & Savings', cashW / total, 0);
+      } else addP('Cash & Savings', 1, 0);
       const bw = benchWeights(bench, pb, d0) || [];
       bw.forEach((m) => { const p1 = pb.at(m.s, d1); const ret = p1 ? p1 * actionFactor(acts, m.s, d0, d1) / m.p - 1 : 0; const x = sec[m.sector] || (sec[m.sector] = { wp: 0, wr: 0, wb: 0, wbr: 0 }); x.wb += m.w; x.wbr += m.w * ret; });
       const Bs = sum(Object.values(sec).map((x) => x.wbr));
@@ -1355,6 +1632,52 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     head.replace(/\r?\n[ \t]+/g, ' ').split(/\r?\n/).forEach((l) => { const i = l.indexOf(':'); if (i > 0) headers[l.slice(0, i).trim().toLowerCase()] = l.slice(i + 1).trim(); });
     return { headers, body };
   }
+  // ---------- sender verification ----------
+  // Top-level headers of the RAW message only (they end at the first blank line; continuation lines are unfolded).
+  // dkim is 'pass' only when an Authentication-Results header written by the receiving host (the topmost one; any
+  // later header with the same authserv-id counts too, headers other hosts stamped earlier do not) reports dkim=pass
+  // for a signing domain (header.i / header.d) aligned with the From domain or its parent (thndr.app for
+  // system.thndr.app); 'fail' when the receiver reports another dkim result; 'none' when it reports no DKIM at all.
+  // ok = the From address is at system.thndr.app (or another *.thndr.app host) AND dkim === 'pass'. A display
+  // name that merely looks like the Thndr address ("no-reply@system.thndr.app" <x@elsewhere>) never passes.
+  function topHeaders(rawB64url) {
+    const text = bytesToLatin1(b64ToBytes(rawB64url));
+    const cut = text.search(/\r?\n\r?\n/);
+    const head = (cut < 0 ? text : text.slice(0, cut)).replace(/\r?\n[ \t]+/g, ' ');
+    const list = [];
+    head.split(/\r?\n/).forEach((l) => { const i = l.indexOf(':'); if (i > 0) list.push({ name: l.slice(0, i).trim().toLowerCase(), value: l.slice(i + 1).trim() }); });
+    return list;
+  }
+  function authCheck(rawB64url) {
+    const hs = topHeaders(rawB64url);
+    const get = (n) => hs.filter((h) => h.name === n).map((h) => h.value);
+    const fromRaw = get('from')[0] || '';
+    const am = fromRaw.match(/<([^<>\s]+@[^<>\s]+)>\s*$/) || fromRaw.match(/([^\s"<>,]+@[^\s"<>,]+)/);
+    const from = am ? am[1].trim() : fromRaw.trim();
+    const fromDomain = from.includes('@') ? from.slice(from.lastIndexOf('@') + 1).toLowerCase().replace(/[>\s]+$/, '') : '';
+    const parent = fromDomain.split('.').length > 2 ? fromDomain.slice(fromDomain.indexOf('.') + 1) : null;
+    const aligned = (d) => { d = (d || '').toLowerCase().replace(/^@/, ''); return !!d && [fromDomain, parent].some((x) => x && (d === x || d.endsWith('.' + x))); };
+    const results = get('authentication-results');
+    // only the topmost header counts: it is the one the receiving host (Gmail) added last; a later header that merely
+    // repeats the same authserv-id could have been written by the sender
+    const own = results.length ? [results[0]] : [];
+    let dkim = 'none', spf = 'none';
+    own.forEach((r) => {
+      r.split(';').forEach((clause) => {
+        const m = clause.trim().match(/^dkim=(\w+)(.*)$/i);
+        if (m) {
+          const props = m[2]; const dom = (props.match(/header\.i=\s*([^\s;]+)/i) || [])[1], sd = (props.match(/header\.d=\s*([^\s;]+)/i) || [])[1];
+          const ok = /^pass$/i.test(m[1]) && (aligned(dom) || aligned(sd));
+          if (ok) dkim = 'pass'; else if (dkim !== 'pass') dkim = 'fail';
+        }
+        const s = clause.trim().match(/^spf=(\w+)/i);
+        if (s && spf === 'none') spf = s[1].toLowerCase();
+      });
+    });
+    const ok = !!fromDomain && (fromDomain === 'system.thndr.app' || fromDomain.endsWith('.thndr.app')) && dkim === 'pass';
+    return { from, fromDomain, dkim, spf, results, ok };
+  }
+
   function attachments(rawB64url) {
     const text = bytesToLatin1(b64ToBytes(rawB64url));
     const out = [];
@@ -1492,9 +1815,13 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     if (acct[1]) { out.mf = acct[1]; out.mf.kind = 'mf'; }
     if (!out.cash) return out;
     out.from = out.cash.from; out.to = out.cash.to; out.month = out.cash.to ? out.cash.to.slice(0, 7) : null;
-    out.fullMonth = !!(out.from && out.to && out.from.endsWith('-01') && +out.to.slice(8) >= 28);
+    // a month is final only when the statement covers the whole calendar month: from the 1st to its last day
+    // (a requested statement to the 28th/29th is a part-month statement)
+    out.fullMonth = !!(out.from && out.to && out.from.endsWith('-01') && out.to === eom(out.to));
     return out;
   }
+  // last calendar day of the month of a YYYY-MM(-DD) string, as YYYY-MM-DD
+  function eom(d) { const y = +d.slice(0, 4), m = +d.slice(5, 7); return `${d.slice(0, 7)}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, '0')}`; }
 
   // ---------- reconciliation against the ledger ----------
   const days = (a, b) => Math.abs((Date.parse(a) - Date.parse(b)) / 864e5);
@@ -1574,7 +1901,7 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
     const trueUp = Math.round((kick - ledgerReb) * 100) / 100;
     if (st.fullMonth && Math.abs(trueUp) >= 0.05) fresh.push({ d: to, t: 'Rebate', amt: trueUp, acc: 'Main', src: 'statement', note: `Commission kickbacks true-up (statement ${kick.toFixed(2)} vs ledger ${ledgerReb.toFixed(2)})` });
     // holdings check at the snapshot date
-    let holdings = null;
+    let holdings = null; const aliases = [];
     if (st.snapshot) {
       const sh = {};
       tx.concat(fresh).forEach((t) => { if (t.d <= to && t.a && (t.t === 'Buy' || t.t === 'Sell' || t.t === 'Bonus')) sh[t.a] = (sh[t.a] || 0) + (t.t === 'Sell' ? -1 : 1) * (t.q || 0); });
@@ -1583,9 +1910,25 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
         const name = a ? a.name : h.ticker;
         const ledgerQty = sh[name] || 0;
         const o = { ticker: h.ticker, name, kind: h.kind, statementQty: h.qty, ledgerQty, value: h.value, ok: h.kind === 'fund' ? null : Math.abs(ledgerQty - h.qty) < 0.5 };
+        if (!a) o.unresolved = true;
         if (o.ok === false) { const bh = bonusHint(h.qty, ledgerQty); if (bh) o.bonusHint = bh; }
         return o;
       });
+      // A stock first seen on an invoice is booked under the invoice's wording with no ticker; the snapshot prints its
+      // ticker and a different name. When a snapshot holding resolves to nothing and exactly one symbol-less ledger
+      // stock holds the same share count on the snapshot date (and no other unresolved holding claims it), they are
+      // the same security: the row is accepted and the alias is reported so the ticker can be recorded.
+      const taken = new Set(holdings.filter((h) => !h.unresolved).map((h) => h.name));
+      const loose = Object.keys(sh).filter((n) => { const a = byLower[n.toLowerCase()] || {}; return sh[n] > 0.5 && !taken.has(n) && !a.symbol && !a.fund && !a.proxy && !/^thndr/i.test(n); });
+      const claims = {};
+      holdings.forEach((h, i) => { if (h.unresolved && h.kind !== 'fund') { const c = loose.filter((n) => Math.abs(sh[n] - h.statementQty) < 0.5); if (c.length === 1) (claims[c[0]] = claims[c[0]] || []).push(i); } });
+      Object.keys(claims).forEach((n) => {
+        if (claims[n].length !== 1) return; // two snapshot rows would claim the same ledger stock: leave both unresolved
+        const h = holdings[claims[n][0]], snapshotName = st.snapshot.holdings.find((x) => x.ticker === h.ticker).name || '';
+        Object.assign(h, { name: n, ledgerQty: sh[n], ok: true, resolvedFrom: n }); delete h.bonusHint;
+        aliases.push({ name: n, ticker: h.ticker, snapshotName });
+      });
+      holdings.forEach((h) => { delete h.unresolved; });
       Object.keys(sh).forEach((n) => { const a = byLower[n.toLowerCase()] || {}; if (sh[n] > 0.5 && !holdings.some((h) => h.name === n) && a.symbol !== 'SAVINGS' && !a.fund && !a.proxy) holdings.push({ ticker: a.symbol || n, name: n, kind: 'stock', statementQty: 0, ledgerQty: sh[n], value: 0, ok: false }); });
     }
     const month = st.month;
@@ -1606,7 +1949,7 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
       Object.keys(u).forEach((n) => { if (u[n] > 0.5 && px[n]) { fundRows.push({ name: n, units: u[n], nav: px[n], value: u[n] * px[n] }); fundValue += u[n] * px[n]; } });
     }
     const markProposal = st.fullMonth ? { month, cash: st.cash.end, securities: st.snapshot ? Math.round((st.snapshot.total + fundValue) * 100) / 100 : null, stocks: st.snapshot ? st.snapshot.total : null, fundValue, fundRows, fundsFromLedger: !!(st.snapshot && !snapHasFunds) } : null;
-    return { month, from, to, fullMonth: st.fullMonth, fresh, matched, unknown, conflicts, ledgerOnly, trueUp, kick, holdings, markProposal,
+    return { month, from, to, fullMonth: st.fullMonth, fresh, matched, unknown, conflicts, ledgerOnly, trueUp, kick, holdings, aliases, markProposal,
       markDiff: markProposal ? { cash: mk.cash != null ? markProposal.cash - mk.cash : null, securities: mk.securities != null && markProposal.securities != null ? markProposal.securities - mk.securities : null, current: mk } : null,
       newAssets: fresh.filter((r) => r.newAsset).map((r) => r.newAsset) };
   }
@@ -1628,28 +1971,37 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
   // ---------- account lock ----------
   // A Thndr document is used only when its header names THIS portfolio's account: statements and position snapshots carry
   // "Unified Code <customer number>" and the holder's name; invoices carry the holder's name on their first line.
-  // settings.account = { unifiedCode, holder }. The code is definitive when both sides have one; otherwise every word of the
-  // holder's name must appear in the header. A portfolio with neither set imports nothing.
-  function accountOf(docs) {
+  // settings.account = { unifiedCode, holder }. The code is definitive when both sides have one; otherwise the holder's
+  // whole name must appear in the header as one contiguous phrase (whitespace-normalised, case-insensitive; the words
+  // scattered around the header are not enough). Thndr's account statement prints the name in a left column with
+  // "Start Balance n" / "Name" / "End Balance n" from the right column interleaved between its lines, so those fixed
+  // labels are removed before the phrase test. A portfolio with neither set imports nothing.
+  const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  function holderSeenIn(head, holder) {
+    const h = norm(head.replace(/\b(Start|End) Balance\s*-?[\d,]+(?:\.\d+)?/gi, ' ').replace(/(^|\s)Name(?=\s|$)/g, ' '));
+    const want = norm(holder);
+    return !!want && (' ' + h + ' ').includes(' ' + want + ' ');
+  }
+  function accountOf(docs, holder) {
     const heads = (docs || []).map((d) => ((d && d.lines) || d || []).slice(0, 10).join(' ').replace(/\s+/g, ' '));
     const codes = [...new Set(heads.map((h) => (h.match(/Unified Code\s*(\d{4,})/i) || [])[1]).filter(Boolean))];
-    return { codes, code: codes[0] || null, head: heads.join(' | ') };
+    const head = heads.join(' | ');
+    return { codes, code: codes[0] || null, head, holderSeen: holderSeenIn(head, holder) };
   }
   function ownerCheck(docs, settings) {
     const acc = (settings && settings.account) || {};
     const code = String(acc.unifiedCode || '').trim(), holder = String(acc.holder || '').trim();
-    const a = accountOf(docs);
-    const r = { code: a.code, error: null };
-    const nameOk = () => { const h = a.head.toLowerCase(); return !holder.toLowerCase().split(/\s+/).filter((w) => w && !h.includes(w)).length; };
+    const a = accountOf(docs, holder);
+    const r = { code: a.code, holderSeen: a.holderSeen, error: null };
     if (!code && !holder) r.error = 'cannot be used: this portfolio has no Thndr account holder set (Inputs → Settings → Thndr account)';
     else if (a.codes.length > 1) r.error = `mixes Thndr accounts ${a.codes.join(' and ')}`;
     else if (code && a.code) { if (a.code !== code) r.error = `belongs to Thndr account ${a.code}, not this portfolio's account ${code}`; }
-    else if (holder) { if (!nameOk()) r.error = `is not in the name of ${holder} (its header reads "${a.head.slice(0, 100)}")`; }
+    else if (holder) { if (!a.holderSeen) r.error = `is not in the name of ${holder} (its header reads "${a.head.slice(0, 100)}")`; }
     else r.error = 'has no Unified Code in its header, so the account could not be confirmed';
     return r;
   }
 
-  const api = { attachments, pdfLines, parseDoc, parseStatement, reconcile, classify, accountRows, accountOf, ownerCheck };
+  const api = { attachments, pdfLines, parseDoc, parseStatement, reconcile, classify, accountRows, accountOf, ownerCheck, authCheck, eom };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.TS = api;
 })(this);
 
@@ -1742,8 +2094,17 @@ function renderTab(force){
   const views = TAB_VIEWS[S.tab];
   const nav = views.length>1 ? `<nav class="subnav" aria-label="On this page"><span class="muted">On this page</span>${views.map(([id,label])=>`<a href="#${id}" data-sec="${id}" data-testid="sec-${id}">${esc(label)}</a>`).join('')}</nav>` : '';
   $('#main').innerHTML = `<section class="view">${nav}${views.map(([id,label,fn],i)=>`<div class="tsec" id="sec-${id}">${views.length>1&&i>0?`<h2 class="secttl">${esc(label)}</h2>`:''}${fn()}</div>`).join('')}</section>`;
-  mountCharts();
+  mountCharts(); disableReadOnlyForms(); markScrollables();
 }
+// Wide tables on a phone: flag every .tbl that overflows its container so CSS can show a "swipe →" hint; the hint goes once scrolled.
+function markScrollables(){
+  document.querySelectorAll('#main .tbl').forEach(el=>{
+    const can = el.scrollWidth > el.clientWidth + 40;
+    el.classList.toggle('can-scroll', can && !el.dataset.scrolled);
+    if(can && !el._swipeWired){ el._swipeWired=true; el.addEventListener('scroll', ()=>{ if(el.scrollLeft>4){ el.dataset.scrolled='1'; el.classList.remove('can-scroll'); } }, {passive:true}); }
+  });
+}
+window.addEventListener('resize', ()=>{ clearTimeout(markScrollables._t); markScrollables._t=setTimeout(markScrollables,150); });
 
 // ---------- tape (index & feed status) ----------
 function feedStatus(){
@@ -1903,11 +2264,22 @@ function briefPanel(){
   const R=S.R, st=R.stats, rows=st.rows, last=rows[rows.length-1]; const cash=R.liveCash??R.settings.cash; const total=cash+R.pos.mvTotal;
   const c=contributors(); const s=[];
   s.push(`<b>${esc(st.label)}</b>: the portfolio returned <b class="${sgn(st.twr)}">${pct(st.twr)}</b> against <b>${pct(st.benchTwr)}</b> for EGX30 Capped, ${st.alpha>=0?'ahead of the index by':'behind the index by'} <b class="${sgn(st.alpha)}">${pct(Math.abs(st.alpha),1,false)}</b>${st.n>1?`, with ${st.posMonths} of ${st.n} months positive and a worst month of ${pct(st.worst.ret)} (${M(st.worst.month)})`:''}.`);
-  s.push(`${M(last.month)}${last.live?' so far':''}: <b class="${sgn(last.ret)}">${pct(last.ret)}</b> vs ${pct(last.bench)} for the index.`);
+  // the latest-month sentence only when the period is longer than that month (a one-month period already said it above)
+  if(rows.length>1) s.push(`${M(last.month)}${last.live?' so far':''}: <b class="${sgn(last.ret)}">${pct(last.ret)}</b> vs ${pct(last.bench)} for the index.`);
   s.push(`Today the portfolio is worth <b>${egp(total)} EGP</b>, of which ${egp(cash)} EGP is cash, across ${R.pos.open.length} positions; the largest is ${esc(R.conc.largest)} at ${pct(R.conc.largestWeight,1,false)}.`);
   if(c.length) s.push(`Since inception the biggest contributors are ${c.slice(0,3).map(x=>`${esc(x.sym)} +${egp(x.total)}`).join(', ')}${c.some(x=>x.total<0)?`; the biggest detractor is ${esc(c[c.length-1].sym)} −${egp(Math.abs(c[c.length-1].total))}`:''} (EGP, realized + unrealized + dividends).`);
-  if(st.xirr!=null) s.push(`Money-weighted, your own capital has compounded at ${pct(st.xirr)} a year${st.realTwr!=null||st.realTwrPartial!=null?`, or ${pct(st.realTwr??st.realTwrPartial)} after Egyptian inflation`:''}.`);
+  s.push(...moneyWeightedSentences(R));
   return `<div class="panel brief" data-testid="brief"><div class="eyebrow">In brief</div><p>${s.join(' ')} <a href="#analysis" data-go="analysis">Read the full review on the Analysis tab →</a></p></div>`;
+}
+// Calendar months covered by the selected period (used to decide whether an annual XIRR is meaningful).
+function periodMonths(range){ const [y1,m1]=range.from.split('-').map(Number), [y2,m2]=range.to.split('-').map(Number); return (y2-y1)*12+(m2-m1)+1; }
+// One sentence per basis: the money-weighted figure (annualized only for 12+ month periods), then the real time-weighted one.
+function moneyWeightedSentences(R){
+  const st=R.stats, out=[]; const pm=periodMonths(R.range);
+  if(st.xirr!=null){ if(pm>=12) out.push(`Money-weighted, your own capital has compounded at ${pct(st.xirr)} a year.`); else if(st.mwrPeriod!=null) out.push(`Money-weighted, your own capital returned ${pct(st.mwrPeriod)} over the period.`); }
+  const real = st.realTwr ?? st.realTwrPartial;
+  if(real!=null) out.push(`After Egyptian inflation the portfolio's time-weighted return is ${pct(real)}${st.realThrough?` (through ${M(st.realThrough)})`:''}.`);
+  return out;
 }
 function contributors(){ return S.R.pos.rows.filter(r=>r.bought>0).map(r=>({sym:r.symbol||r.name,name:r.name,total:r.total,status:r.status,realized:r.realized,unreal:r.unreal||0,divs:r.divs})).sort((a,b)=>b.total-a.total); }
 function contributorsList(){ const c=contributors(); if(!c.length) return '<p class="note" style="margin-top:8px">No trades yet.</p>';
@@ -2021,9 +2393,20 @@ function trailingStrip(){ const R=S.R; const tr=PA.trailing(R.months, R.range.to
 function rets(st,k){ const v=st.rows.map(r=>r[k]).filter(x=>x!=null); return v.reduce((a,b)=>a+b,0)/Math.max(1,v.length); }
 
 // ---------- Closed trades ----------
+const CASH_LIKE = (()=>{ const c=PE.CASH_LIKE||PA.CASH_LIKE; return c ? (c instanceof Set ? c : new Set(c)) : new Set(['Cash & Savings','Mutual Funds','Cash']); })();
+const isCashLike = (r) => CASH_LIKE.has(r.sector) || r.cashLike===true;
 function vTrades(){
-  const R=S.R, st=R.stats; const rows=(st.closed||[]).slice().sort((a,b)=>b.lastSell.localeCompare(a.lastSell));
-  const allClosed=R.pos.rows.filter(r=>r.status==='Closed');
+  const R=S.R, st=R.stats;
+  // Round trips (engine pos.trips: one row per buy → fully-sold cycle) when the engine provides them; otherwise today's per-name closed rows.
+  const trips = Array.isArray(R.pos.trips) ? R.pos.trips : null;
+  const inPeriod = (t) => t.closedInPeriod!=null ? !!t.closedInPeriod : (t.lastSell>=`${R.range.from}-01` && t.lastSell<=PE.eom(R.range.to));
+  const period = trips ? trips.filter(inPeriod) : (st.closed||[]).slice();
+  // the legacy per-name stats count cash-like funds, so only the trip engine splits them out (keeps the table equal to the tiles)
+  const rows = (trips ? period.filter(t=>!isCashLike(t)) : period).sort((a,b)=>String(b.lastSell||'').localeCompare(String(a.lastSell||'')));
+  const cashRows = (trips ? period.filter(isCashLike) : []).sort((a,b)=>String(b.lastSell||'').localeCompare(String(a.lastSell||'')));
+  const cashN = st.closedCashLike ?? cashRows.length;
+  const allClosed = trips ? trips.length : R.pos.rows.filter(r=>r.status==='Closed').length;
+  const tripRow=(r)=>`<tr><td><span class="sym">${esc(r.symbol||'—')}</span><div class="muted" style="font-size:11.5px;line-height:1.3;max-width:240px;overflow:hidden;text-overflow:ellipsis" title="${esc(r.name)}">${esc(r.name)}</div></td><td>${dfmt(r.firstBuy)}</td><td>${dfmt(r.lastSell)}</td><td class="n">${num(r.holdDays,0)}d</td><td class="n">${egp(r.buyCost)}</td><td class="n">${egp(r.proceeds)}</td><td class="n">${egp(r.divs)}</td><td class="n ${sgn(r.total)}">${egp(r.total)}</td><td class="n ${sgn(r.roi)}">${pct(r.roi)}</td><td><span class="pill ${r.outcome==='WIN'?'win':'loss'}">${r.outcome==='WIN'?'Win':'Loss'}</span></td></tr>`;
   return `
   <div class="kpis">
     ${kpi('Trades closed', st.closedCount||0, `in ${esc(st.label)}`)}
@@ -2033,10 +2416,12 @@ function vTrades(){
     ${kpi('Average win / loss', `<span class="pos">${short(st.avgWin)}</span> <span class="muted">/</span> <span class="neg">${short(st.avgLoss)}</span>`, `payoff ${st.avgLoss?num(Math.abs(st.avgWin/st.avgLoss),1)+'×':'n/a'}`)}
     ${kpi('Average hold', num(st.avgHold,0), `best ${short(st.bestTrade)} · worst ${short(st.worstTrade)}`, '', 'days')}
   </div>
-  <div class="panel"><div class="phead"><div><h2>Positions fully exited in the period</h2><div class="sub">A position counts once it is fully sold; P/L covers every lot since the first buy</div></div><span class="note">${allClosed.length} closed since inception</span></div>
-  <div class="tbl"><table data-testid="closed-trades-table"><thead><tr><th>Position</th><th>First buy</th><th>Last sell</th><th class="n">Hold</th><th class="n">Buy cost</th><th class="n">Sell proceeds</th><th class="n">Dividends</th><th class="n">Total P/L</th><th class="n">ROI</th><th>Outcome</th></tr></thead><tbody>
-  ${rows.length? rows.map(r=>`<tr><td><span class="sym">${esc(r.symbol||'—')}</span><div class="muted" style="font-size:11.5px;line-height:1.3;max-width:240px;overflow:hidden;text-overflow:ellipsis" title="${esc(r.name)}">${esc(r.name)}</div></td><td>${dfmt(r.firstBuy)}</td><td>${dfmt(r.lastSell)}</td><td class="n">${r.holdDays}d</td><td class="n">${egp(r.buyCost)}</td><td class="n">${egp(r.proceeds)}</td><td class="n">${egp(r.divs)}</td><td class="n ${sgn(r.total)}">${egp(r.total)}</td><td class="n ${sgn(r.roi)}">${pct(r.roi)}</td><td><span class="pill ${r.outcome==='WIN'?'win':'loss'}">${r.outcome==='WIN'?'Win':'Loss'}</span></td></tr>`).join('') : `<tr><td colspan="10" class="muted">No positions were fully exited in this period.</td></tr>`}
-  </tbody></table></div></div>`;
+  <div class="panel"><div class="phead"><div><h2>${trips?'Round trips closed in the period':'Positions fully exited in the period'}</h2><div class="sub">${trips?'One row per round trip: a position bought, fully sold, and possibly bought again later. Cash-like funds are listed separately.':'A position counts once it is fully sold; P/L covers every lot since the first buy'}</div></div><span class="note">${allClosed} ${trips?'round trips':'closed'} since inception</span></div>
+  <div class="tbl"><table data-testid="closed-trades-table"><thead><tr><th>Position</th><th>Bought</th><th>Sold</th><th class="n">Days held</th><th class="n">Cost</th><th class="n">Proceeds</th><th class="n">Dividends</th><th class="n">P/L</th><th class="n">ROI</th><th>Outcome</th></tr></thead><tbody>
+  ${rows.length? rows.map(tripRow).join('') : `<tr><td colspan="10" class="muted">No ${trips?'round trip was closed':'positions were fully exited'} in this period.</td></tr>`}
+  </tbody></table></div>
+  ${cashN||cashRows.length?`<details style="margin-top:12px" data-testid="closed-cashlike"><summary class="eyebrow" style="cursor:pointer;padding:6px 0">Cash-like funds · ${cashN} round trip${cashN===1?'':'s'} not counted in the trade statistics</summary>
+    <div class="tbl"><table data-testid="closed-cashlike-table"><thead><tr><th>Fund</th><th>Bought</th><th>Sold</th><th class="n">Days held</th><th class="n">Cost</th><th class="n">Proceeds</th><th class="n">Dividends</th><th class="n">P/L</th><th class="n">ROI</th><th>Outcome</th></tr></thead><tbody>${cashRows.length?cashRows.map(tripRow).join(''):`<tr><td colspan="10" class="muted">${cashN} cash-like round trip${cashN===1?'':'s'} in the period (details not available from this engine build).</td></tr>`}</tbody></table></div></details>`:''}</div>`;
 }
 
 // ---------- Ledger ----------
@@ -2123,15 +2508,26 @@ function vInputs(){
   const assets=Object.values(S.assets).sort((a,b)=>{ const oa=R.pos.open.some(r=>r.name===a.name), ob=R.pos.open.some(r=>r.name===b.name); return (ob-oa)||a.name.localeCompare(b.name); });
   const cur=PE.monthOf(R.today);
   const mk=(m)=>S.marks[m]||{};
-  const cell=(m,f,v,step='any',ph)=>`<td class="in-cell"><input type="number" step="${step}" data-m="${m}" data-f="${f}" value="${v==null?'':v}" id="mk-${m}-${f}"${ph!=null?` placeholder="${ph}" title="Estimated ${ph}"`:''}></td>`;
+  const ro=S.readOnly;
+  // A cell of the marks grid. On the Claude page it is an input; on the published site it is plain text (nothing there can be edited).
+  // For an estimate row (closed month, no statement yet) the ESTIMATE is what shows: as the value on the site, as the placeholder of
+  // an empty input on the page, with any stored placeholder number kept in the tooltip so the row cannot be misread as a real mark.
+  const cell=(m,f,v,step='any',ph,stored)=>{
+    const showEst = ph!=null; const txt=(x)=> x==null ? '' : typeof x==='number' ? num(x, x%1?2:0) : esc(String(x));
+    if(ro) return `<td class="n" data-m="${m}" data-f="${f}"${showEst?` title="Estimated${stored!=null?` · typed placeholder: ${esc(String(stored))}`:''}"`:''}>${showEst?`<span class="muted" title="Estimated${stored!=null?` · typed placeholder: ${esc(String(stored))}`:''}">${txt(ph)}</span>`:txt(v)}</td>`;
+    const title = showEst ? (stored!=null ? `Estimated ${ph} · typed placeholder: ${esc(String(stored))}` : `Estimated ${ph}`) : '';
+    return `<td class="in-cell"><input type="number" step="${step}" data-m="${m}" data-f="${f}" value="${showEst?'':v==null?'':v}" id="mk-${m}-${f}"${showEst?` placeholder="${ph}" title="${title}"`:''}></td>`; };
   return `
-  <div class="panel"><div class="phead"><div><h2>Month-end marks</h2><div class="sub">Enter values from each Thndr month-end statement. The EGX30 Capped close is filled automatically; a typed % is used only where closes are missing.</div></div>
+  ${ro?`<div class="banner" data-testid="readonly-banner" style="background:var(--surface-2);color:var(--ink-2)"><span><b>View only</b> — this is the published site. Edit on the Claude page; changes appear here after the next daily update.</span></div>`:''}
+  <div class="panel"><div class="phead"><div><h2>Month-end marks</h2><div class="sub">${ro?'Values from each Thndr month-end statement, as recorded on the Claude page.':'Enter values from each Thndr month-end statement. The EGX30 Capped close is filled automatically; a typed % is used only where closes are missing.'}</div></div>
     <div class="row"><button class="btn primary" id="save-marks" data-testid="save-marks" ${S.readOnly?'disabled':''}>Save changes</button></div></div>
-    <div class="tbl grid-in"><table data-testid="marks-table"><thead><tr><th>Month</th><th class="n">Cash (EGP)</th><th class="n">Securities (EGP)</th><th class="n">EGX30 Capped close</th><th class="n">EGX30 Capped %</th><th class="n">USD/EGP (CBE mid)</th><th class="n">CPI MoM</th><th>Note</th><th>Status</th></tr></thead><tbody>
+    <div class="tbl ${ro?'':'grid-in'}"><table data-testid="marks-table"><thead><tr><th>Month</th><th class="n">Cash (EGP)</th><th class="n">Securities (EGP)</th><th class="n">EGX30 Capped close</th><th class="n">EGX30 Capped %</th><th class="n">USD/EGP (CBE mid)</th><th class="n">CPI MoM</th><th>Note</th><th>Status</th></tr></thead><tbody>
     ${(()=>{ const seen=new Set(months.map(r=>r.month)); const extra=Object.keys(S.marks).filter(m=>m>=st.inception&&!seen.has(m)).map(m=>({month:m})); if(!seen.has(cur)) extra.push({month:cur}); return months.concat(extra).sort((a,b)=>a.month<b.month?-1:1); })().map(r=>{ const m=r.month, k=mk(m); const liveRow=R.live&&R.live.month===m; const estRow=!!r.estimate&&!liveRow;
-      const est=(f)=>estRow&&k[f]==null&&typeof r[f]==='number'?+r[f].toFixed(2):null;
-      return `<tr data-testid="marks-row-${m}">
-      <td>${M(m)}</td>${cell(m,'cash',k.cash,'any',est('cash'))}${cell(m,'securities',k.securities,'any',est('securities'))}${cell(m,'benchClose',k.benchClose,'any',est('benchClose'))}${cell(m,'benchReturn',k.benchReturn!=null?+(k.benchReturn*100).toFixed(4):null)}${cell(m,'usdegp',k.usdegp,'any',est('usdegp'))}${cell(m,'cpi',k.cpi!=null?+(k.cpi*100).toFixed(4):null)}<td class="in-cell"><input class="txt" type="text" data-m="${m}" data-f="note" value="${esc(k.note||'')}" id="mk-${m}-note"></td>
+      // the engine's estimate for this month (cash from the ledger, holdings at the month's last closes) replaces whatever placeholder was typed
+      const est=(f)=> estRow && typeof r[f]==='number' && (f==='cash'||f==='securities'||k[f]==null) ? +r[f].toFixed(2) : null;
+      const stored=(f)=> estRow && (f==='cash'||f==='securities') && k[f]!=null ? k[f] : null;
+      return `<tr data-testid="marks-row-${m}"${estRow?' data-estimate="1"':''}>
+      <td>${M(m)}</td>${cell(m,'cash',k.cash,'any',est('cash'),stored('cash'))}${cell(m,'securities',k.securities,'any',est('securities'),stored('securities'))}${cell(m,'benchClose',k.benchClose,'any',est('benchClose'),stored('benchClose'))}${cell(m,'benchReturn',k.benchReturn!=null?+(k.benchReturn*100).toFixed(4):null)}${cell(m,'usdegp',k.usdegp,'any',est('usdegp'),stored('usdegp'))}${cell(m,'cpi',k.cpi!=null?+(k.cpi*100).toFixed(4):null)}<td class="${ro?'wrap':'in-cell'}">${ro?esc(k.note||''):`<input class="txt" type="text" data-m="${m}" data-f="note" value="${esc(k.note||'')}" id="mk-${m}-note">`}</td>
       <td>${estRow? `<span class="pill stale" data-testid="marks-estimate-pill" title="Cash from the ledger and holdings at the last closing prices of the month. Post the Thndr statement to replace it.">Estimated · awaiting statement</span>` : k.provisional||liveRow? `<span class="pill prov">${liveRow?'Live':'Provisional'}</span> ${S.readOnly?'':`<button class="btn sm" data-confirm="${m}" data-testid="confirm-month">Confirm</button>`}` : k.cash==null?'<span class="pill loss">Missing</span>' : k.source==='statement'?'<span class="pill win">From statement</span>' : k.source==='price-estimate'?`<span class="pill stale" title="${esc(k.estimateNote||'')}">Price estimate</span>` : k.source==='reconstructed'?`<span class="pill auto" title="${esc(k.estimateNote||'')}">Rebuilt from statements</span>`:'<span class="pill man">Typed</span>'}</td></tr>`; }).join('')}
     </tbody></table></div>
     <p class="note" style="margin:10px 0 0">EGX30 Capped % and CPI are entered as percentages (4.2 = 4.2%). Confirming a live month copies the current live cash and holdings value into it; overwrite them with the statement figures before or after confirming.</p></div>
@@ -2139,11 +2535,15 @@ function vInputs(){
   <div class="panel"><div class="phead"><div><h2>Assets & prices</h2><div class="sub">Automatic prices come from TradingView after each EGX session (15-min delayed). A manual price wins only if its date is newer.</div></div>
     <div class="row"><button class="btn primary" id="save-assets" data-testid="save-assets" ${S.readOnly?'disabled':''}>Save changes</button></div></div>
     ${(()=>{ const assetRow=(a,i)=>{ const q=auto[a.symbol]; const held=R.pos.open.find(r=>r.name===a.name);
+      if(ro) return `<tr><td>${esc(a.name)}</td><td><span class="sym">${esc(a.symbol||'')}</span></td><td class="ink2">${esc(a.sector||'')}</td>
+      <td class="n">${q?`${num(q.price)} <span class="muted">${dfmt(q.date)}</span>`:'<span class="muted">—</span>'}</td>
+      <td class="n">${a.price!=null?num(a.price):''}</td><td>${a.priceDate?dfmt(a.priceDate):''}</td><td class="n">${a.target!=null?num(a.target):''}</td><td class="n">${a.stop!=null?num(a.stop):''}</td>
+      <td>${held?`<span class="pill auto">${num(held.open,0)} sh</span>`:''}</td></tr>`;
       return `<tr><td>${esc(a.name)}</td><td class="in-cell"><input class="txt" style="min-width:90px" type="text" data-a="${esc(a.name)}" data-f="symbol" value="${esc(a.symbol||'')}" id="as-${i}-symbol"></td><td class="in-cell"><input class="txt" type="text" data-a="${esc(a.name)}" data-f="sector" value="${esc(a.sector||'')}" id="as-${i}-sector"></td>
       <td class="n">${q?`${num(q.price)} <span class="muted">${dfmt(q.date)}</span>`:'<span class="muted">—</span>'}</td>
       <td class="in-cell"><input type="number" step="any" data-a="${esc(a.name)}" data-f="price" value="${a.price??''}" id="as-${i}-price"></td><td class="in-cell"><input class="txt" style="min-width:120px" type="date" data-a="${esc(a.name)}" data-f="priceDate" value="${esc(a.priceDate||'')}" id="as-${i}-pd"></td>
       <td class="in-cell"><input type="number" step="any" data-a="${esc(a.name)}" data-f="target" value="${a.target??''}" id="as-${i}-target"></td><td class="in-cell"><input type="number" step="any" data-a="${esc(a.name)}" data-f="stop" value="${a.stop??''}" id="as-${i}-stop"></td>
-      <td>${held?`<span class="pill auto">${num(held.open,0)} sh</span>`:''}</td></tr>`; }; const isHeld=(a)=>R.pos.open.some(r=>r.name===a.name); const heldA=assets.filter(isHeld), closedA=assets.filter(a=>!isHeld(a)); const tbl=(rows,off,tid)=>`<div class="tbl grid-in"><table data-testid="${tid}"><thead><tr><th>Asset (exact ledger name)</th><th>Symbol</th><th>Sector</th><th class="n">Auto price</th><th class="n">Manual price</th><th>Manual date</th><th class="n">Target</th><th class="n">Stop loss</th><th>Held</th></tr></thead><tbody>${rows.map((a,i)=>assetRow(a,i+off)).join('')}</tbody></table></div>`; return tbl(heldA,0,'assets-table')+(closedA.length?`<details style="margin-top:12px" data-testid="assets-closed"><summary class="eyebrow" style="cursor:pointer;padding:6px 0">Closed positions · ${closedA.length} assets not currently held</summary>${tbl(closedA,heldA.length,'assets-table-closed')}</details>`:''); })()}
+      <td>${held?`<span class="pill auto">${num(held.open,0)} sh</span>`:''}</td></tr>`; }; const isHeld=(a)=>R.pos.open.some(r=>r.name===a.name); const heldA=assets.filter(isHeld), closedA=assets.filter(a=>!isHeld(a)); const tbl=(rows,off,tid)=>`<div class="tbl ${ro?'':'grid-in'}"><table data-testid="${tid}"><thead><tr><th>Asset (exact ledger name)</th><th>Symbol</th><th>Sector</th><th class="n">Auto price</th><th class="n">Manual price</th><th>Manual date</th><th class="n">Target</th><th class="n">Stop loss</th><th>Held</th></tr></thead><tbody>${rows.map((a,i)=>assetRow(a,i+off)).join('')}</tbody></table></div>`; return tbl(heldA,0,'assets-table')+(closedA.length?`<details style="margin-top:12px" data-testid="assets-closed"><summary class="eyebrow" style="cursor:pointer;padding:6px 0">Closed positions · ${closedA.length} assets not currently held</summary>${tbl(closedA,heldA.length,'assets-table-closed')}</details>`:''); })()}
     <form class="form" id="asset-form" style="margin-top:14px" data-testid="add-asset-form" ${S.readOnly?'hidden':''}>
       <label style="grid-column:span 2">New asset name<input type="text" id="na-name" required class="inp" placeholder="As written in the Thndr statement"></label>
       <label>Symbol<input type="text" id="na-sym" class="inp" placeholder="e.g. COMI"></label>
@@ -2152,8 +2552,8 @@ function vInputs(){
     <datalist id="sector-list">${[...new Set(Object.values(S.assets).map(a=>a.sector).filter(Boolean))].sort().map(s=>`<option value="${esc(s)}">`).join('')}</datalist>
   </div>
 
-  <div class="panel"><div class="phead"><div><h2>Settings</h2><div class="sub">Every hard-coded assumption in the model lives here</div></div></div>
-    <form class="form" id="settings-form" data-testid="settings-form">
+  <div class="panel"><div class="phead"><div><h2>Settings</h2><div class="sub">Every hard-coded assumption in the model lives here${ro?' · view only on this site':''}</div></div></div>
+    <form class="form" id="settings-form" data-testid="settings-form"${ro?' data-readonly="1"':''}>
       <label>Portfolio name<input type="text" id="st-name" class="inp" value="${esc(st.name)}"></label>
       <label>Inception month<input type="month" id="st-inc" value="${esc(st.inception)}"></label>
       <label>Opening value before inception (EGP)<input type="number" step="any" id="st-open" class="inp" value="${st.openingValue}"></label>
@@ -2172,6 +2572,8 @@ function vInputs(){
       <button class="btn primary" type="submit" ${S.readOnly?'disabled':''} data-testid="save-settings">Save settings</button>
     </form></div>`;
 }
+// On the published site every form field is inert: disable them right after a render so nothing can turn blue/dirty there.
+function disableReadOnlyForms(){ if(!S.readOnly) return; document.querySelectorAll('#main form input, #main form select, #main form textarea, #main .grid-in input').forEach(el=>{ el.disabled=true; }); }
 
 // ---------- Checks & method ----------
 function extraChecks(){
@@ -2180,7 +2582,12 @@ function extraChecks(){
   const closed = S.R.months.filter(r=>r.has && !r.live);
   const src = (r)=> r.estimate ? 'price-estimate' : (r.source && r.source!=='typed' ? r.source : ((S.marks[r.month]||{}).source || ((S.imports||{})[r.month] ? 'statement' : 'typed')));
   const typed = closed.filter(r=>src(r)==='typed'), est = closed.filter(r=>src(r)==='price-estimate'), stm = closed.filter(r=>src(r)==='statement'), rec = closed.filter(r=>src(r)==='reconstructed');
-  out.push({label:'Month-ends sourced from Thndr statements', status: typed.length?'warn':'ok', detail: `${stm.length} from statements` + (rec.length?` · ${rec.map(r=>M(r.month)).join(', ')} rebuilt from the next statement`:'') + (est.length?` · ${est.length} closing-price estimates (${est.map(r=>M(r.month)).join(', ')}; no holdings list on those statements)`:'') + (typed.length?` · typed by hand: ${typed.map(r=>M(r.month)).join(', ')}`:'')});
+  // no closed month from a statement at all (a portfolio seeded from a workbook): every month-end is an estimate, say so
+  if(closed.length && !stm.length && !rec.length) out.push({label:'Month-ends sourced from Thndr statements', status:'warn', detail:'no month comes from a Thndr statement yet — every month-end is an estimate'});
+  else out.push({label:'Month-ends sourced from Thndr statements', status: typed.length||!stm.length?'warn':'ok', detail: `${stm.length} from statements` + (rec.length?` · ${rec.map(r=>M(r.month)).join(', ')} rebuilt from the next statement`:'') + (est.length?` · ${est.length} closing-price estimates (${est.map(r=>M(r.month)).join(', ')}; no holdings list on those statements)`:'') + (typed.length?` · typed by hand: ${typed.map(r=>M(r.month)).join(', ')}`:'')});
+  // account lock: statements and invoices are only accepted for this account; the Unified Code is definitive, the holder name is a fallback
+  const acct=(S.settings&&S.settings.account)||{}; const code=String(acct.unifiedCode||'').trim(), holder=String(acct.holder||'').trim();
+  out.push({label:'Thndr account lock', status: code?'ok':holder?'warn':'error', detail: code?`Unified Code recorded${holder?` · holder ${holder}`:''}`:holder?'Unified Code unknown until the first statement is posted; documents are matched by holder name only':'No account holder or Unified Code set: no statement or invoice can be matched to this portfolio. Set the holder under Settings.'});
   try{ PA.tradeChecks(S.R.ledger, S.assets, pbook(), S.bench && S.bench.actions).forEach(c=>out.push(c)); }catch(e){ console.error(e); }
   return out;
 }
@@ -2438,8 +2845,21 @@ function factsheetHTML(F){
     <table role="presentation" width="100%" style="border-collapse:collapse"><tr>${th('','left')}${th(M(F.m))}${th('YTD')}</tr>
     ${[['Dividends','div'],['Rebates','reb'],['Fees','fee']].map(([l,k])=>`<tr>${td(l,'left',`color:${ink2}`)}${td(egp(F.incM[k]))}${td(egp(F.incY[k]))}</tr>`).join('')}</table>
   </td></tr></table>
-  <div style="margin-top:22px;padding-top:10px;border-top:1px solid ${rule};font:11px/1.5 Arial;color:${ink3}">Month-end values from Thndr statements${(()=>{ const est=Object.keys(S.marks).sort().filter(k=>k<=F.m&&S.marks[k].source==='price-estimate'); const rec=Object.keys(S.marks).sort().filter(k=>k<=F.m&&S.marks[k].source==='reconstructed'); const pend=(F.R.months||[]).filter(r=>r.estimate&&r.month<=F.m&&!est.includes(r.month)).map(r=>r.month); const parts=[]; if(est.length) parts.push(`${est.map(M).join(', ')} estimated from closing prices; those statements carry no holdings list`); if(pend.length) parts.push(`${pend.map(M).join(', ')} estimated from closing prices while the statement is awaited`); if(rec.length) parts.push(`${rec.map(M).join(', ')} rebuilt from the following month's statement`); return parts.length?` (${parts.join('; ')})`:''; })()}; prices from TradingView closes (15-minute delayed). Attribution uses a free-float model of EGX30 Capped with a ${pct(S.bench?S.bench.capWeight:0.15,0,false)} single-stock cap. Past performance does not guarantee future results. Generated ${dfmt(S.R.today)}.</div>
+  <div style="margin-top:22px;padding-top:10px;border-top:1px solid ${rule};font:11px/1.5 Arial;color:${ink3}">${factsheetSourceNote(F)}; prices from TradingView closes (15-minute delayed). Attribution uses a free-float model of EGX30 Capped with a ${pct(S.bench?S.bench.capWeight:0.15,0,false)} single-stock cap. Past performance does not guarantee future results. Generated ${dfmt(S.R.today)}.</div>
   </div>`;
+}
+// Footer sentence on where the month-end values came from. When every closed month up to the factsheet month is a closing-price
+// estimate (no Thndr statement posted yet, e.g. a portfolio seeded from a workbook), say so instead of claiming statements.
+function factsheetSourceNote(F){
+  const marks=S.marks||{}; const closed=(F.R.months||[]).filter(r=>r.has&&!r.live&&r.month<=F.m);
+  const srcOf=(r)=> r.estimate ? 'price-estimate' : ((marks[r.month]||{}).source || 'typed');
+  if(closed.length && closed.every(r=>srcOf(r)==='price-estimate')) return 'Month-end values estimated from closing prices; no Thndr statements have been posted for this portfolio yet';
+  const est=Object.keys(marks).sort().filter(k=>k<=F.m&&marks[k].source==='price-estimate'); const rec=Object.keys(marks).sort().filter(k=>k<=F.m&&marks[k].source==='reconstructed');
+  const pend=closed.filter(r=>r.estimate&&!est.includes(r.month)).map(r=>r.month); const parts=[];
+  if(est.length) parts.push(`${est.map(M).join(', ')} estimated from closing prices; those statements carry no holdings list`);
+  if(pend.length) parts.push(`${pend.map(M).join(', ')} estimated from closing prices while the statement is awaited`);
+  if(rec.length) parts.push(`${rec.map(M).join(', ')} rebuilt from the following month's statement`);
+  return `Month-end values from Thndr statements${parts.length?` (${parts.join('; ')})`:''}`;
 }
 function vFactsheet(){
   const months = S.R.months.filter(r=>r.has).map(r=>r.month).reverse();
@@ -2451,7 +2871,7 @@ function vFactsheet(){
     <button class="btn" id="fs-dl" data-testid="factsheet-download">Download HTML</button>
     ${window.pdDownloadExport?`<button class="btn" id="fs-xlsx" data-testid="factsheet-excel" data-month="${S.fsMonth}">Download Excel</button>`:''}
     <button class="btn primary" id="fs-email" data-testid="factsheet-email" ${email?'':'disabled'} title="${email?'Send to '+esc(email):'Set an email address under Inputs → Settings'}">Email to me</button></div></div>
-    <p class="note" style="margin:0 0 14px">${S.readOnly?`Emailed to <span class="mono">${esc(email)}</span> automatically after each monthly statement is posted. Download it here any time.`:email?`Sends from your Gmail to <span class="mono">${esc(email)}</span>. Posting a monthly statement offers to send it automatically.`:'Add an email address under Inputs → Settings to send factsheets.'}</p>
+    <p class="note" style="margin:0 0 14px" data-testid="factsheet-note">${S.readOnly?`${S.sync&&email?`Emailed to <span class="mono">${esc(email)}</span> automatically after each monthly statement is posted. `:''}Download it here any time.`:email?`Sends from your Gmail to <span class="mono">${esc(email)}</span>. Posting a monthly statement offers to send it automatically.`:'Add an email address under Inputs → Settings to send factsheets.'}</p>
     <div style="overflow-x:auto;background:var(--surface-2);border-radius:10px;padding:14px 8px" data-testid="factsheet-preview">${factsheetHTML(F)}</div></div>`;
 }
 async function emailFactsheet(m, quiet){
@@ -2510,9 +2930,11 @@ function vStatements(){
   const T=S.stmt, imp=S.imports||{};
   const latest = T.list && T.list.find(x=>x.monthly);
   const rv=T.review;
-  const row=(x)=>{ const done=imp[x.month]; return `<tr><td><b>${M(x.month)}</b></td><td class="ink2">${x.monthly?'Monthly statement':'Requested statement'} · ${dfmt((x.date||'').slice(0,10))}</td><td>${done?`<span class="pill win">Posted ${dfmt((done.postedAt||'').slice(0,10))}</span>`:x.monthly?'<span class="pill prov">Not posted</span>':'<span class="pill man">Not posted</span>'}</td><td><button class="btn sm" data-review="${x.month}" data-testid="review-statement">${done?'Review again':'Review'}</button></td></tr>`; };
+  const row=(x)=>{ const done=imp[x.month]; const part=done&&done.fullMonth===false; return `<tr><td><b>${M(x.month)}</b></td><td class="ink2">${x.monthly?'Monthly statement':'Requested statement'} · ${dfmt((x.date||'').slice(0,10))}</td><td>${done?`<span class="pill ${part?'man':'win'}" title="${part?'A part-month statement was posted; the month-end still needs the monthly statement':''}">${part?'Part posted':'Posted'} ${dfmt((done.postedAt||'').slice(0,10))}</span>`:x.monthly?'<span class="pill prov">Not posted</span>':'<span class="pill man">Not posted</span>'}</td><td><button class="btn sm" data-review="${x.month}" data-testid="review-statement">${done?'Review again':'Review'}</button></td></tr>`; };
+  // The inbox job only exists for a portfolio that has a sync/state document; the other portfolio posts statements by hand.
+  const hasSync = !!S.sync;
   return `
-  <div class="panel"><div class="phead"><div><h2>Thndr statements</h2><div class="sub">An automatic job reads every new Thndr email twice a day. Trade invoices are booked straight away; any statement you request replaces the ledger for the dates it covers and updates your cash; the monthly statement with its positions snapshot rewrites the whole month and sets the month-end, then the factsheet is emailed to you. Nothing is saved unless the corrected month reconciles exactly (cash to the piaster, every share count); otherwise the email is held and sent to you for review here.</div></div>
+  <div class="panel"><div class="phead"><div><h2>Thndr statements</h2><div class="sub" data-testid="statements-intro">${hasSync?`An automatic job reads every new Thndr email twice a day. Trade invoices are booked straight away; any statement you request replaces the ledger for the dates it covers and updates your cash; the monthly statement with its positions snapshot rewrites the whole month and sets the month-end, then the factsheet is emailed to you. Nothing is saved unless the corrected month reconciles exactly (cash to the piaster, every share count); otherwise the email is held and sent to you for review here.`:`No automatic inbox sync is set up for this portfolio. Statements are posted by hand from this page (Check Gmail → Review → Post).`}</div></div>
     <button class="btn primary" id="scan-gmail" data-testid="scan-gmail" ${T.busy?'disabled':''}>${T.list?'Check Gmail again':'Check Gmail'}</button></div>
     ${T.busy?`<p class="note">${esc(T.busy)}</p>`:''}${T.error?`<div class="banner" style="background:var(--neg-bg);color:var(--neg)">${esc(T.error)}</div>`:''}
     ${T.list? (T.list.length? `<div class="tbl"><table data-testid="statements-table"><thead><tr><th>Month</th><th>Email</th><th>Status</th><th></th></tr></thead><tbody>${T.list.map(row).join('')}</tbody></table></div>` : '<p class="muted">No Thndr statement emails found.</p>') : S.readOnly?'':`<p class="muted">Thndr emails the monthly statement around the 3rd of each month with three PDFs: the account statement, the fund account, and a month-end positions snapshot. The first check asks your permission to read Gmail.</p>`}
@@ -2520,16 +2942,35 @@ function vStatements(){
   ${syncHistory()}
   ${rv? reviewPanel(rv) : ''}`;
 }
+// Every sync/state.seen entry whose status is 'hold' (id = Gmail message id), newest first.
+function heldEmails(){ const seen=(S.sync&&S.sync.seen)||{}; return Object.keys(seen).filter(id=>seen[id]&&seen[id].status==='hold').map(id=>({id, ...seen[id]})).sort((a,b)=>String(b.date||b.at||'').localeCompare(String(a.date||a.at||''))); }
+function toolShaLine(sy){ const t=sy&&sy.toolSha; if(!t) return '';
+  const parts = typeof t==='string' ? [String(t).slice(0,8)] : ['sync','statement','engine','engine2'].filter(k=>t[k]).map(k=>`${k}.js ${esc(String(t[k]).slice(0,8))}`).concat(Object.keys(t).filter(k=>!['sync','statement','engine','engine2','at'].includes(k)&&typeof t[k]==='string'&&/^[0-9a-f]{6,}$/i.test(t[k])).map(k=>`${esc(k)} ${esc(t[k].slice(0,8))}`));
+  return parts.length?`<div class="note" style="margin-top:6px" data-testid="sync-tool-sha">Sync tools: ${parts.join(' · ')}${t.at?` · as of ${esc(String(t.at).slice(0,16).replace('T',' '))} UTC`:''}</div>`:''; }
 function syncHistory(){
-  const imp=S.imports||{}, sy=S.sync||{}; const months=Object.keys(imp).sort().reverse();
-  const seen=Object.values(sy.seen||{}).sort((a,b)=>(b.date||'').localeCompare(a.date||'')).slice(0,8);
+  const imp=S.imports||{}, sy=S.sync||null; const months=Object.keys(imp).sort().reverse();
+  const seen=Object.values((sy&&sy.seen)||{}).sort((a,b)=>(b.date||'').localeCompare(a.date||'')).slice(0,8);
+  const held=heldEmails();
   const when=(iso)=>iso?new Date(iso).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit',hour12:true,timeZone:'Africa/Cairo'})+' Cairo':'—';
   const stLabel={applied:['win','Applied'],unchanged:['auto','Already in ledger'],hold:['loss','Needs review'],skip:['man','Skipped'],ignored:['man','Ignored']};
-  return `<div class="panel" data-testid="sync-history"><div class="phead"><div><h2>Automatic import history</h2><div class="sub">Last inbox check ${when(sy.lastRun)} · runs daily at 6:17 PM and 10:17 PM Cairo</div></div></div>
+  return `<div class="panel" data-testid="sync-history"><div class="phead"><div><h2>${sy?'Automatic import history':'Import history'}</h2><div class="sub">${sy?`Last inbox check ${when(sy.lastRun)} · runs daily at 6:17 PM and 10:17 PM Cairo`:'Statements posted by hand from this page; no inbox job runs for this portfolio'}</div>${sy?toolShaLine(sy):''}</div></div>
     <div class="grid g2"><div><h3 class="eyebrow" style="margin:0 0 8px">Months posted from monthly statements</h3>
-      ${months.length?`<div class="tbl"><table><thead><tr><th>Month</th><th>Posted</th><th class="n">Added</th><th class="n">Corrected</th><th class="n">Removed</th><th>By</th></tr></thead><tbody>${months.map(m=>{const x=imp[m]; return `<tr><td><b>${M(m)}</b></td><td>${dfmt((x.postedAt||'').slice(0,10))}</td><td class="n">${x.added??0}</td><td class="n">${x.corrected??x.replaced??0}</td><td class="n">${x.removed??0}</td><td class="ink2">${esc(x.postedBy||'you')}</td></tr>`;}).join('')}</tbody></table></div>`:'<p class="muted">None yet.</p>'}</div>
-    <div><h3 class="eyebrow" style="margin:0 0 8px">Recent Thndr emails handled</h3>
-      ${seen.length?`<div class="tbl"><table><thead><tr><th>Email</th><th>Result</th></tr></thead><tbody>${seen.map(e=>{const l=stLabel[e.status]||['man',e.status]; return `<tr><td class="wrap">${esc(e.subject)}</td><td><span class="pill ${l[0]}">${esc(l[1])}</span></td></tr>`;}).join('')}</tbody></table></div>`:'<p class="muted">The inbox job has not run yet.</p>'}</div></div></div>`;
+      ${months.length?`<div class="tbl"><table><thead><tr><th>Month</th><th>Posted</th><th class="n">Added</th><th class="n">Corrected</th><th class="n">Removed</th><th>By</th></tr></thead><tbody>${months.map(m=>{const x=imp[m]; return `<tr><td><b>${M(m)}</b>${x.fullMonth===false?' <span class="pill man" title="A requested (part-month) statement: the month-end still comes from the monthly statement">part</span>':''}</td><td>${dfmt((x.postedAt||'').slice(0,10))}</td><td class="n">${x.added??0}</td><td class="n">${x.corrected??x.replaced??0}</td><td class="n">${x.removed??0}</td><td class="ink2">${esc(x.postedBy||'you')}</td></tr>`;}).join('')}</tbody></table></div>`:'<p class="muted">None yet.</p>'}</div>
+    ${sy?`<div><h3 class="eyebrow" style="margin:0 0 8px">Recent Thndr emails handled</h3>
+      ${seen.length?`<div class="tbl"><table><thead><tr><th>Email</th><th>Result</th></tr></thead><tbody>${seen.map(e=>{const l=stLabel[e.status]||['man',e.status]; return `<tr><td class="wrap">${esc(e.subject)}</td><td><span class="pill ${l[0]}">${esc(l[1])}</span></td></tr>`;}).join('')}</tbody></table></div>`:'<p class="muted">The inbox job has not run yet.</p>'}</div>`:''}</div>
+    ${sy?`<div style="margin-top:16px" data-testid="held-emails"><div class="phead" style="margin-bottom:8px"><div><h3 class="eyebrow" style="margin:0">Held for review · ${held.length}</h3><div class="sub">${held.length?'Nothing from these emails was saved. Fix the cause (post the earlier month, add the missing asset) and retry: the next inbox run reads them again.':'No email is waiting for review.'}</div></div>
+      ${held.length&&!S.readOnly?`<button class="btn sm" id="retry-held" data-testid="retry-held">Retry held emails</button>`:''}</div>
+      ${held.length?`<div class="tbl"><table data-testid="held-emails-table"><thead><tr><th>Email</th><th>Date</th><th>Why it was held</th></tr></thead><tbody>${held.map(e=>`<tr><td class="wrap">${esc(e.subject||e.id)}</td><td>${dfmt(String(e.date||e.at||'').slice(0,10))}</td><td class="wrap">${(e.reasons&&e.reasons.length)?e.reasons.map(r=>esc(r)).join('<br>'):'<span class="muted">no reason stored</span>'}</td></tr>`).join('')}</tbody></table></div>`:''}</div>`:''}</div>`;
+}
+// Removes the held entries from sync/state.seen so the next inbox run processes those emails again.
+async function retryHeld(btn){
+  const held=heldEmails(); if(!held.length){ toast('No held emails to retry'); return; }
+  if(!S.db||S.readOnly){ toast('Retrying is only possible on the Claude page.','error'); return; }
+  if(btn){ btn.disabled=true; }
+  const seen={}; held.forEach(e=>{ seen[e.id]={'__delete__':true}; });
+  const n=held.length;
+  const ok = await save(()=>S.db.doc('sync/state').update({seen}), `${n} held email${n===1?'':'s'} will be read again at the next inbox check`);
+  if(!ok && btn) btn.disabled=false;
 }
 function reviewPanel(rv){
   const mp=rv.markProposal, md=rv.markDiff; const H=rv.holdings||[]; const bad=H.filter(h=>h.ok===false);
@@ -2547,9 +2988,22 @@ function reviewPanel(rv){
       <dt>Cash (statement end balance)</dt><dd>${egp(mp.cash,2)} <span class="note">${md.cash!=null?`now ${egp(md.current.cash,2)}`:'not set'}</span></dd>
       <dt>Securities (${mp.fundsFromLedger?'snapshot stocks + funds at last NAV':'positions snapshot'})</dt><dd>${mp.securities!=null?egp(mp.securities,2):'No snapshot in this email'} <span class="note">${md.securities!=null?`now ${egp(md.current.securities,2)} · diff ${egp(md.securities,2)}`:''}</span></dd></dl>
       ${mp.securities!=null?`<label style="display:flex;gap:8px;margin-top:8px"><input type="checkbox" id="apply-marks" ${rv.applyMarks?'checked':''}> Set ${M(rv.month)} month-end marks from the statement and mark the month confirmed</label>`:''}`:''}
+    <p class="note" style="margin-top:14px" data-testid="review-outcome">${postOutcome(rv).text}</p>
     <div class="row" style="margin-top:18px;justify-content:space-between"><label style="display:flex;gap:8px"><input type="checkbox" id="post-email" ${S.settings.factsheetEmail&&rv.fullMonth?'checked':''} ${S.settings.factsheetEmail?'':'disabled'}> Email me the ${M(rv.month)} factsheet afterwards</label>
       <div class="row"><button class="btn" id="review-close">Close</button><button class="btn primary" id="post-statement" data-testid="post-statement" ${S.readOnly?'disabled':''}>Post to portfolio</button></div></div>
   </div>`;
+}
+// What posting this review will do to the month: it is final (imports/<month>.fullMonth = true) only when the statement covers the
+// whole calendar month AND carried a positions snapshot AND the marks are being applied now. Anything else leaves the month open.
+function postOutcome(rv){
+  const snapshot = !!(rv.markProposal && rv.markProposal.securities!=null);
+  const applying = snapshot && !!rv.applyMarks;
+  const final = !!rv.fullMonth && snapshot && applying;
+  const text = !rv.fullMonth ? `This is a part-month statement: the month stays open for the monthly statement.`
+    : !snapshot ? `This statement carries no positions snapshot: the month stays open for the monthly statement.`
+    : !applying ? `Marks are not being applied: the month stays open until the statement's month-end figures are applied.`
+    : `Posting sets the ${M(rv.month)} month-end from this statement and closes the month.`;
+  return { final, marks: applying, text };
 }
 async function postStatement(){
   const rv=S.stmt.review; if(!rv) return;
@@ -2568,16 +3022,19 @@ async function postStatement(){
   // new assets
   const na={}; document.querySelectorAll('[data-nsym]').forEach(inp=>{ const n=inp.dataset.nsym; const sec=document.querySelector(`[data-nsec="${CSS.escape(n)}"]`); na[n]={name:n}; if(inp.value.trim()) na[n].symbol=inp.value.trim().toUpperCase(); if(sec&&sec.value.trim()) na[n].sector=sec.value.trim(); if(!na[n].symbol) na[n].fund=true; });
   if(ok && Object.keys(na).length) ok = await save(()=>S.db.doc('portfolio/assets').set({items:{...S.assets,...na}}));
-  const applyMarks = rv.markProposal && rv.markProposal.securities!=null && $('#apply-marks') && $('#apply-marks').checked;
+  rv.applyMarks = !!(rv.markProposal && rv.markProposal.securities!=null && $('#apply-marks') && $('#apply-marks').checked);
+  const outcome = postOutcome(rv); const applyMarks = outcome.marks;
   if(ok && applyMarks){ const cur=S.marks[rv.month]||{}; ok = await save(()=>S.db.doc('portfolio/marks').set({months:{...S.marks,[rv.month]:{...cur, cash:rv.markProposal.cash, securities:rv.markProposal.securities, provisional:false, source:'statement'}}})); }
   if(ok && rv.accountCode && S.settings.account && !S.settings.account.unifiedCode) ok = await save(()=>S.db.doc('portfolio/settings').set({...S.settings, account:{...S.settings.account, unifiedCode:rv.accountCode}}), `Thndr account ${rv.accountCode} recorded for this portfolio`);
-  if(ok) ok = await save(()=>S.db.doc('imports/'+rv.month).set({month:rv.month, messageId:rv.item.id, subject:rv.item.subject, postedAt:new Date().toISOString(), added:add.length, replaced:repl.length, marks:!!applyMarks, fullMonth:rv.fullMonth}));
+  // fullMonth is true only for a full-calendar-month statement with a snapshot whose marks were applied in this post; a requested
+  // (part-month) statement never marks the month final, so the monthly statement is still expected.
+  if(ok) ok = await save(()=>S.db.doc('imports/'+rv.month).set({month:rv.month, messageId:rv.item.id, subject:rv.item.subject, postedAt:new Date().toISOString(), added:add.length, replaced:repl.length, marks:applyMarks, fullMonth:outcome.final, statementFrom:rv.from||null, statementTo:rv.to||null}));
   if(ok){ toast(`${M(rv.month)} posted: ${add.length} added, ${repl.length} replaced${applyMarks?', marks updated':''}`); const wantEmail=$('#post-email')&&$('#post-email').checked; const m=rv.month; S.stmt.review=null; renderTab(true); if(wantEmail) setTimeout(()=>emailFactsheet(m), 1500); }
   else if(btn){ btn.disabled=false; btn.textContent='Post to portfolio'; }
 }
 function statementBanner(){
   const T=S.stmt; if(!T.list) return '';
-  const m = T.list.find(x=>x.monthly && !(S.imports||{})[x.month]);
+  const imp=S.imports||{}; const m = T.list.find(x=>x.monthly && !(imp[x.month] && imp[x.month].fullMonth!==false));   // a part-month post does not close the month
   return m ? `<div class="banner" data-testid="statement-banner"><b>Your ${M(m.month)} Thndr statement is ready to post.</b><span>Review it against the ledger and update the month-end marks.</span><button class="btn sm" data-go="statements">Review</button></div>` : '';
 }
 async function autoScan(){
@@ -2602,27 +3059,30 @@ function holdingRisk(){
     return {sym:sym||r.name, name:r.name, w:r.mv/tot, mv:r.mv, beta:b?b.beta:null, vol:b?b.vol:null, unreal:r.unreal, unrealPct:r.openCost?r.unreal/r.openCost:null, price:r.price, high, fromHigh:high&&r.price!=null?r.price/high-1:null};
   }).sort((a,b)=>b.w-a.w);
 }
+// Down months of the SELECTED period (S.R.stats.rows), so the Analysis tab agrees with Performance for any period.
 function downMonths(){
   const R=S.R, pb=pbook(), ledger=R.ledger, today=PE.cairoToday(), tx=allTx(), price=PA.makePricer(S.assets,ledger,pb);
-  return R.months.filter(r=>r.has&&r.bench!=null&&r.bench<0).map(r=>{
+  return (R.stats.rows||[]).filter(r=>r.has&&r.bench!=null&&r.bench<0).map(r=>{
     const start=PE.eom(PE.addMonths(r.month,-1)), end=r.live?today:PE.eom(r.month); const H=PA.holdingsAt(ledger,S.assets,pb,start); const tot=H.mv+Math.max(0,H.cash);
     const rows=H.rows.filter(h=>h.shares>0.5).map(h=>{ const p0=price(h.name,start), p1=price(h.name,end); if(!p0||!p1||!p0.p) return null; return {sym:h.symbol||h.name, w:tot?h.mv/tot:0, ret:p1.p/p0.p-1, contrib:tot?h.shares*(p1.p-p0.p)/tot:0}; }).filter(Boolean).sort((a,b)=>a.contrib-b.contrib);
     const buys=tx.filter(t=>t.t==='Buy'&&t.d>start&&t.d<=end).length, sells=tx.filter(t=>t.t==='Sell'&&t.d>start&&t.d<=end).length;
     return {month:r.month, live:r.live, ret:r.ret, bench:r.bench, diff:r.ret-r.bench, cashPct:tot?Math.max(0,H.cash)/tot:0, rows, buys, sells};
   });
 }
+// whyText returns HTML-safe text: every symbol is escaped here, so callers must not escape it again.
 function whyText(d){ const bad=d.rows.filter(x=>x.contrib<0).slice(0,2); if(!bad.length) return d.diff>=0?'Nothing fell much; the portfolio held up.':'Losses were spread across many stocks.';
   const w=bad.reduce((s,x)=>s+x.w,0);
-  if(d.diff>=0){ const good=d.rows.filter(x=>x.contrib>0).sort((a,b)=>b.contrib-a.contrib)[0]; return `Held up${good?`: ${good.sym} ${pct(good.ret,0)} offset ${bad.map(x=>`${x.sym} ${pct(x.ret,0)}`).join(' and ')}`:''}.`; }
-  return `${bad.map(x=>`${x.sym} ${pct(x.ret,0)}`).join(' and ')} ${bad.length>1?'were':'was'} ${pct(w,0,false)} of the portfolio${d.cashPct<0.02?', with no cash to cushion it':''}${d.buys>=8?`; ${d.buys} buys were made as it fell`:''}.`; }
+  if(d.diff>=0){ const good=d.rows.filter(x=>x.contrib>0).sort((a,b)=>b.contrib-a.contrib)[0]; return `Held up${good?`: ${esc(good.sym)} ${pct(good.ret,0)} offset ${bad.map(x=>`${esc(x.sym)} ${pct(x.ret,0)}`).join(' and ')}`:''}.`; }
+  return `${bad.map(x=>`${esc(x.sym)} ${pct(x.ret,0)}`).join(' and ')} ${bad.length>1?'were':'was'} ${pct(w,0,false)} of the portfolio${d.cashPct<0.02?', with no cash to cushion it':''}${d.buys>=8?`; ${d.buys} buys were made as it fell`:''}.`; }
 function vAnalysis(){
   const R=S.R, st=R.stats, dm=downMonths(), H=holdingRisk(), cash=R.liveCash??R.settings.cash, tot=R.pos.mvTotal+Math.max(0,cash);
-  const up=R.months.filter(r=>r.has&&r.bench>0), dn=R.months.filter(r=>r.has&&r.bench<0);
-  const chain=(rows,k)=>rows.reduce((a,r)=>a*(1+r[k]),1)-1; const upC=up.length?chain(up,'ret')/chain(up,'bench'):null, dnC=dn.length?chain(dn,'ret')/chain(dn,'bench'):null;
+  if(!st.n) return `<div class="panel empty"><h2>No data for this selection</h2></div>`;
+  // capture ratios, up/down month counts and beta come from the period stats: the same figures Performance shows
+  const upN=st.upMonths||0, dnN=st.downMonths||0, upC=st.upCapture??null, dnC=st.downCapture??null;
   const top3=H.slice(0,3).reduce((s,h)=>s+h.w,0);
   return `
-  ${analysisPanel({R,st,dm,H,cash,tot,up,dn,upC,dnC,top3})}
-  <div class="panel" data-testid="risk-capture"><div class="phead"><div><h2>How you behave when the index moves</h2><div class="sub">Since inception · EGX30 Capped had ${up.length} up months and ${dn.length} down months</div></div></div>
+  ${analysisPanel({R,st,dm,H,cash,tot,upN,dnN,upC,dnC,top3})}
+  <div class="panel" data-testid="risk-capture"><div class="phead"><div><h2>How you behave when the index moves</h2><div class="sub">${esc(st.label)} · EGX30 Capped had ${upN} up month${upN===1?'':'s'} and ${dnN} down month${dnN===1?'':'s'}</div></div></div>
     <div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr))">
       ${kpi('In up months you captured', upC!=null?pct(upC,0,false):'—', 'of the index gain · above 100% is good')}
       ${kpi('In down months you took', dnC!=null?`<span class="${dnC>1?'neg':'pos'}">${pct(dnC,0,false)}</span>`:'—', 'of the index loss · under 100% is better')}
@@ -2633,8 +3093,8 @@ function vAnalysis(){
   </div>
   <div class="panel" data-testid="risk-downmonths"><div class="phead"><div><h2>When the index fell</h2><div class="sub">Each down month: how you did, what you held going in, and what did the damage</div></div></div>
     ${dm.length?`<div class="tbl"><table><thead><tr><th>Month</th><th class="n">Index</th><th class="n">You</th><th class="n">Difference</th><th class="n">Cash going in</th><th class="n">Trades</th><th>What did it</th></tr></thead><tbody>
-    ${dm.map(d=>`<tr><td>${M(d.month)}${d.live?' <span class="pill prov">so far</span>':''}</td><td class="n neg">${pct(d.bench)}</td><td class="n ${sgn(d.ret)}">${pct(d.ret)}</td><td class="n ${sgn(d.diff)}">${pct(d.diff)}</td><td class="n">${pct(d.cashPct,1,false)}</td><td class="n">${d.buys} buys · ${d.sells} sells</td><td>${esc(whyText(d))}</td></tr>`).join('')}
-    </tbody></table></div>`:'<p class="note">The index has not had a down month yet.</p>'}
+    ${dm.map(d=>`<tr><td>${M(d.month)}${d.live?' <span class="pill prov">so far</span>':''}</td><td class="n neg">${pct(d.bench)}</td><td class="n ${sgn(d.ret)}">${pct(d.ret)}</td><td class="n ${sgn(d.diff)}">${pct(d.diff)}</td><td class="n">${pct(d.cashPct,1,false)}</td><td class="n">${d.buys} buys · ${d.sells} sells</td><td class="wrap">${whyText(d)}</td></tr>`).join('')}
+    </tbody></table></div>`:`<p class="note">The index had no down month in ${esc(st.label)}.</p>`}
   </div>
   <div class="panel" data-testid="risk-holdings"><div class="phead"><div><h2>Each holding's risk</h2><div class="sub">Beta and volatility from the last 12 months of daily closes · "from its high" is against the highest close since you first bought</div></div></div>
     <div class="tbl"><table><thead><tr><th>Stock</th><th class="n">Weight</th><th class="n">Beta</th><th class="n">Volatility</th><th class="n">Unrealized</th><th class="n">From its high</th></tr></thead><tbody>
@@ -2646,40 +3106,44 @@ function vAnalysis(){
 
 // The written review: what the numbers say, why, and what you could do about it. Suggestions only; nothing is tracked or enforced.
 function analysisPanel(c){
-  const {R,st,dm,H,cash,tot,up,dn,upC,dnC,top3}=c; const cashPct=tot?Math.max(0,cash)/tot:0; const G={cash:0.10,max:0.10,top3:0.30,high:0.15,beta:1.2};
+  const {R,st,dm,H,cash,tot,upN,dnN,upC,dnC,top3}=c; const cashPct=tot?Math.max(0,cash)/tot:0; const G={cash:0.10,max:0.10,top3:0.30,high:0.15,beta:1.2};
   const over=H.filter(h=>h.w>G.max), excess=over.reduce((s,h)=>s+(h.w-G.max)*tot,0), cashAfter=tot?(Math.max(0,cash)+excess)/tot:0;
   const below=H.filter(h=>h.fromHigh!=null&&h.fromHigh<-G.high), hiB=H.filter(h=>h.beta!=null&&h.beta>G.beta), hiBw=hiB.reduce((s,h)=>s+h.w,0);
   const lost=dm.filter(d=>d.diff<0), n=st.n, turnover=st.n?st.sells/Math.max(1,(st.opening+st.closing)/2)*12/st.n:null;
   const winners=H.filter(h=>h.unreal>0).sort((a,b)=>b.unreal-a.unreal), losers=H.filter(h=>h.unreal<0).sort((a,b)=>a.unreal-b.unreal);
-  const list=(arr,f)=>arr.map(f).join(', ');
-  // 1. where you stand
-  const stand=[`Since ${M(st.rows[0].month)} the portfolio has returned <b class="${sgn(st.twr)}">${pct(st.twr)}</b> against <b>${pct(st.benchTwr)}</b> for EGX30 Capped, so it is ${st.alpha>=0?'ahead of':'behind'} the index by <b>${pct(Math.abs(st.alpha),1,false)}</b>.`,
-    upC!=null&&dnC!=null?`In the index's ${up.length} up months you captured ${pct(upC,0,false)} of its gains; in its ${dn.length} down months you took ${pct(dnC,0,false)} of its losses. ${dnC>1&&upC<1?'You are paid less on the way up and charged more on the way down, and that gap is most of the shortfall.':dnC<=1&&upC>=1?'You gain more than the index when it rises and lose less when it falls: that is what beating it looks like.':dnC<=1?'You hold up better than the index when it falls; the shortfall comes from lagging it in up months.':'You keep up in rising months but lose more than the index when it falls.'}`:'',
-    `Money-weighted, your own capital has compounded at ${pct(st.xirr)} a year${st.realTwr!=null||st.realTwrPartial!=null?`, ${pct(st.realTwr??st.realTwrPartial)} after Egyptian inflation`:''}.`].filter(Boolean);
+  const list=(arr,f)=>arr.map(f).join(', ');   // every f() below escapes what it interpolates (symbols come from user-typed asset names)
+  const sym=(h)=>esc(h.sym);
+  const single = st.rows.length===1;
+  // 1. where you stand (the selected period, same label as the period bar)
+  const stand=[`${single?`In ${M(st.rows[0].month)}${st.rows[0].live?' so far':''}`:`From ${M(st.rows[0].month)} to ${M(st.rows[st.rows.length-1].month)}`} the portfolio ${single?'returned':'has returned'} <b class="${sgn(st.twr)}">${pct(st.twr)}</b> against <b>${pct(st.benchTwr)}</b> for EGX30 Capped, so it is ${st.alpha>=0?'ahead of':'behind'} the index by <b>${pct(Math.abs(st.alpha),1,false)}</b>.`,
+    upC!=null&&dnC!=null?`In the index's ${upN} up month${upN===1?'':'s'} you captured ${pct(upC,0,false)} of its gains; in its ${dnN} down month${dnN===1?'':'s'} you took ${pct(dnC,0,false)} of its losses. ${dnC>1&&upC<1?'You are paid less on the way up and charged more on the way down, and that gap is most of the shortfall.':dnC<=1&&upC>=1?'You gain more than the index when it rises and lose less when it falls: that is what beating it looks like.':dnC<=1?'You hold up better than the index when it falls; the shortfall comes from lagging it in up months.':'You keep up in rising months but lose more than the index when it falls.'}`
+    : upC!=null?`The index only rose in this period (${upN} up month${upN===1?'':'s'}); you captured ${pct(upC,0,false)} of its gains.`
+    : dnC!=null?`The index only fell in this period (${dnN} down month${dnN===1?'':'s'}); you took ${pct(dnC,0,false)} of its losses.`:'',
+    ...moneyWeightedSentences(R)].filter(Boolean);
   // 2. why
   const why=[];
   if(lost.length) why.push(`The months that hurt were ${list(lost,d=>`${M(d.month)} (${pct(d.ret)} against ${pct(d.bench)})`)}. ${lost.map(d=>`${M(d.month)}: ${whyText(d)}`).join(' ')}`);
-  why.push(`Today the three largest positions (${list(H.slice(0,3),h=>h.sym)}) are ${pct(top3,0,false)} of the portfolio and cash is ${pct(cashPct,1,false)}. ${top3>G.top3?'When one of those three has a bad month, the whole portfolio has a bad month; that is the mechanism behind the down-month numbers above.':'Concentration is moderate.'}${cashPct<0.02?' With no cash, nothing cushions a fall and there is nothing to buy a dip with except by selling something else.':''}`);
-  if(hiB.length) why.push(`${list(hiB,h=>`${h.sym} (beta ${num(h.beta)})`)} ${hiB.length>1?'move':'moves'} more than the index and ${hiB.length>1?'are':'is'} ${pct(hiBw,0,false)} of the book, so on a bad index day the portfolio falls more than the index does.`);
+  why.push(`Today the three largest positions (${list(H.slice(0,3),sym)}) are ${pct(top3,0,false)} of the portfolio and cash is ${pct(cashPct,1,false)}. ${top3>G.top3?'When one of those three has a bad month, the whole portfolio has a bad month; that is the mechanism behind the down-month numbers above.':'Concentration is moderate.'}${cashPct<0.02?' With no cash, nothing cushions a fall and there is nothing to buy a dip with except by selling something else.':''}`);
+  if(hiB.length) why.push(`${list(hiB,h=>`${sym(h)} (beta ${num(h.beta)})`)} ${hiB.length>1?'move':'moves'} more than the index and ${hiB.length>1?'are':'is'} ${pct(hiBw,0,false)} of the book, so on a bad index day the portfolio falls more than the index does.`);
   if(turnover!=null) why.push(`Turnover runs at about ${num(turnover,1)}× the portfolio's value a year (${st.trades} trades in the period). Every round trip costs fees and spread, and the Attribution section below shows whether trading during the month has added or cost you.`);
   // 3. what you could do
   const could=[];
-  if(over.length) could.push(`<b>Bring each position to ${pct(G.max,0,false)} or less.</b> ${list(over,h=>`${h.sym} is ${pct(h.w,1,false)} (about ${egp((h.w-G.max)*tot)} EGP over)`)}. Trimming them all raises about ${egp(excess)} EGP and would put cash at ${pct(cashAfter,0,false)}. Sell winners and losers alike; selling only winners to keep funding losers is how losers become the largest positions.`);
+  if(over.length) could.push(`<b>Bring each position to ${pct(G.max,0,false)} or less.</b> ${list(over,h=>`${sym(h)} is ${pct(h.w,1,false)} (about ${egp((h.w-G.max)*tot)} EGP over)`)}. Trimming them all raises about ${egp(excess)} EGP and would put cash at ${pct(cashAfter,0,false)}. Sell winners and losers alike; selling only winners to keep funding losers is how losers become the largest positions.`);
   else could.push(`<b>Position sizes are already under ${pct(G.max,0,false)} each.</b> Keep new buys there.`);
   could.push(cashPct<G.cash?`<b>Hold about ${pct(G.cash,0,false)} cash</b> (${egp(G.cash*tot)} EGP at today's size). It softens a fall by roughly a tenth and, more importantly, it is what you buy a dip with instead of selling something at the bottom.`:`<b>Cash is at ${pct(cashPct,0,false)}</b>, which already gives you a cushion and dry powder.`);
-  if(below.length) could.push(`<b>Make one decision on each stock well below its high.</b> ${list(below,h=>`${h.sym} is ${pct(h.fromHigh,0)} from its high (${h.unreal<0?'−':'+'}${egp(Math.abs(h.unreal))} EGP unrealized)`)}. For each, ask: would I buy it today at this price with fresh money? If yes, keep it at ${pct(G.max,0,false)} or less and write the reason in its note under Settings. If no, sell. Not deciding is what turns a −10% stock into a −20% one.`);
-  if(hiB.length) could.push(`<b>Size the high-beta ${hiB.length>1?'names':'name'} smaller.</b> ${list(hiB,h=>h.sym)} can stay, but as ${hiB.length>1?'the smaller positions':'a smaller position'} rather than ${hiB.length>1?'the largest':'one of the largest'}.`);
+  if(below.length) could.push(`<b>Make one decision on each stock well below its high.</b> ${list(below,h=>`${sym(h)} is ${pct(h.fromHigh,0)} from its high (${h.unreal<0?'−':'+'}${egp(Math.abs(h.unreal))} EGP unrealized)`)}. For each, ask: would I buy it today at this price with fresh money? If yes, keep it at ${pct(G.max,0,false)} or less and write the reason in its note under Settings. If no, sell. Not deciding is what turns a −10% stock into a −20% one.`);
+  if(hiB.length) could.push(`<b>Size the high-beta ${hiB.length>1?'names':'name'} smaller.</b> ${list(hiB,sym)} can stay, but as ${hiB.length>1?'the smaller positions':'a smaller position'} rather than ${hiB.length>1?'the largest':'one of the largest'}.`);
   could.push(`<b>Three habits for every future buy:</b> buy only with cash, never by selling something else the same day; no buy takes a stock above ${pct(G.max,0,false)}; write the price at which you would be wrong (the stop field on each asset) before you buy, and act the week it is hit.`);
   if(turnover!=null&&turnover>2) could.push(`<b>Trade less.</b> One decision day a week and a calendar rebalance (monthly or quarterly, back to your target sizes) removes most reactive trades.`);
   could.push(`<b>Add ballast.</b> One or two low-beta dividend payers (telecom, food, utilities) or a slice in the Thndr savings fund so the whole book is not cyclicals and financials.`);
   could.push(`<b>Monthly, ten minutes, after the statement posts:</b> open this tab, read the first paragraph, check cash and the top three, and trim anything that drifted over ${pct(G.max,0,false)}.`);
   const expect = dnC!=null&&dnC>1 ? `Done this way, the down-month capture should drift toward 90–100% within a couple of down months, mostly from sizing. You give up a little in strong up months because ${pct(G.cash,0,false)} sits in cash and the winners are smaller; on your numbers the worst down month alone cost more against the index than a cash buffer costs in a year of average months.` : `The main thing to protect is the down-month record; keep sizes even and cash on hand and it should hold.`;
-  return `<div class="panel brief" data-testid="analysis"><div class="phead"><div><h2>What the numbers say</h2><div class="sub">A written review of the portfolio as it stands today · guideline figures used here: ${pct(G.cash,0,false)} cash, ${pct(G.max,0,false)} per stock, ${pct(G.top3,0,false)} for the top three, a decision at ${pct(G.high,0,false)} below a stock's high · these are suggestions, nothing is tracked or enforced</div></div></div>
+  return `<div class="panel brief" data-testid="analysis"><div class="phead"><div><h2>What the numbers say</h2><div class="sub" data-testid="analysis-period">${esc(st.label)} · a written review of the portfolio as it stands today · guideline figures used here: ${pct(G.cash,0,false)} cash, ${pct(G.max,0,false)} per stock, ${pct(G.top3,0,false)} for the top three, a decision at ${pct(G.high,0,false)} below a stock's high · these are suggestions, nothing is tracked or enforced</div></div></div>
     <h3 class="eyebrow" style="margin-top:14px">Where you stand</h3><p>${stand.join(' ')}</p>
     <h3 class="eyebrow" style="margin-top:14px">Why</h3><p>${why.join(' ')}</p>
     <h3 class="eyebrow" style="margin-top:14px">What you could do</h3><ol style="margin:8px 0 0 20px;padding:0;display:grid;gap:8px;max-width:80ch;line-height:1.55">${could.map(x=>`<li>${x}</li>`).join('')}</ol>
     <h3 class="eyebrow" style="margin-top:14px">What to expect</h3><p>${expect}</p>
-    ${winners.length||losers.length?`<p class="note" style="margin-top:10px">Unrealized today: ${winners.length?`winners ${list(winners.slice(0,3),h=>`${h.sym} +${egp(h.unreal)}`)}`:''}${winners.length&&losers.length?' · ':''}${losers.length?`losers ${list(losers.slice(0,3),h=>`${h.sym} −${egp(Math.abs(h.unreal))}`)}`:''} (EGP).</p>`:''}
+    ${winners.length||losers.length?`<p class="note" style="margin-top:10px">Unrealized today: ${winners.length?`winners ${list(winners.slice(0,3),h=>`${sym(h)} +${egp(h.unreal)}`)}`:''}${winners.length&&losers.length?' · ':''}${losers.length?`losers ${list(losers.slice(0,3),h=>`${sym(h)} −${egp(Math.abs(h.unreal))}`)}`:''} (EGP).</p>`:''}
   </div>`;
 }
 
@@ -2724,6 +3188,7 @@ document.addEventListener('click', async e=>{
   if(e.target.id==='scan-gmail'){ scanGmail(false); return; }
   const rvb=e.target.closest('[data-review]'); if(rvb){ const it=S.stmt.list.find(x=>x.month===rvb.dataset.review); if(it) reviewStatement(it); return; }
   if(e.target.id==='review-close'){ S.stmt.review=null; renderTab(true); return; }
+  if(e.target.id==='retry-held'){ retryHeld(e.target); return; }
   if(e.target.id==='post-statement'){ postStatement(); return; }
   if(e.target.id==='fs-xlsx'){ const b=e.target, m=b.dataset.month; b.disabled=true; b.textContent='Preparing…'; try{ const list=await window.pdExports(); if(!list.some(x=>x.month===m)){ const have=list.map(x=>M(x.month)).join(', '); toast(`No Excel workbook for ${M(m)} yet. Workbooks are published with each monthly statement${have?` (available: ${have})`:''}.`,'error'); } else { await window.pdDownloadExport(m); toast(`Excel workbook for ${M(m)} saved`); } }catch(err){ toast('Could not download the workbook: '+(err.message||err),'error'); } b.disabled=false; b.textContent='Download Excel'; return; }
   if(e.target.id==='fs-email'){ e.target.disabled=true; await emailFactsheet(S.fsMonth); e.target.disabled=false; return; }
@@ -2732,7 +3197,7 @@ document.addEventListener('click', async e=>{
 document.addEventListener('input', e=>{ if(e.target.matches('.grid-in input')) e.target.classList.add('dirty');
   if(['lf-q'].includes(e.target.id)){ S.ledgerFilter.q=e.target.value; clearTimeout(vLedger._t); vLedger._t=setTimeout(()=>{ const pos=e.target.selectionStart; renderTab(true); const el=$('#lf-q'); if(el){ el.focus(); el.setSelectionRange(pos,pos);} },250); }
   if(e.target.id==='tx-q'||e.target.id==='tx-p'){ const q=parseFloat($('#tx-q').value), p=parseFloat($('#tx-p').value); if(isFinite(q)&&isFinite(p)) $('#tx-hint').textContent=`Gross ${egp(q*p,2)} EGP. Enter the net amount from the statement, which includes commission.`; } });
-document.addEventListener('change', e=>{ if(e.target.dataset.pick!=null&&S.stmt.review){ S.stmt.review.pick[+e.target.dataset.pick]=e.target.checked; } if(e.target.dataset.use!=null&&S.stmt.review){ S.stmt.review.use[+e.target.dataset.use]=e.target.checked; } if(e.target.id==='apply-marks'&&S.stmt.review){ S.stmt.review.applyMarks=e.target.checked; } if(e.target.id==='fs-month'){ S.fsMonth=e.target.value; renderTab(true); } if(e.target.id==='lf-type'){ S.ledgerFilter.type=e.target.value; renderTab(true); } if(e.target.id==='lf-year'){ S.ledgerFilter.year=e.target.value; renderTab(true); } });
+document.addEventListener('change', e=>{ if(e.target.dataset.pick!=null&&S.stmt.review){ S.stmt.review.pick[+e.target.dataset.pick]=e.target.checked; } if(e.target.dataset.use!=null&&S.stmt.review){ S.stmt.review.use[+e.target.dataset.use]=e.target.checked; } if(e.target.id==='apply-marks'&&S.stmt.review){ S.stmt.review.applyMarks=e.target.checked; const o=$('[data-testid=review-outcome]'); if(o) o.textContent=postOutcome(S.stmt.review).text; } if(e.target.id==='fs-month'){ S.fsMonth=e.target.value; renderTab(true); } if(e.target.id==='lf-type'){ S.ledgerFilter.type=e.target.value; renderTab(true); } if(e.target.id==='lf-year'){ S.ledgerFilter.year=e.target.value; renderTab(true); } });
 document.addEventListener('submit', async e=>{
   e.preventDefault();
   if(e.target.id==='tx-form'){ let t; try{ t=normTx({d:$('#tx-d').value,t:$('#tx-t').value,a:$('#tx-a').value,q:$('#tx-q').value,p:$('#tx-p').value,amt:$('#tx-amt').value,acc:$('#tx-acc').value}); }catch(err){ toast(err.message,'error'); return; }
