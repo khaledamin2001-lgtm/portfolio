@@ -240,6 +240,46 @@ tr.note-row td{background:var(--surface-2)}
 .jobs .dot{margin-right:6px}
 .heads{display:grid;gap:6px;margin:8px 0 0;padding:0;list-style:none}
 .heads li{display:flex;gap:8px;align-items:baseline;font-size:13.5px;line-height:1.45}
+/* What if (Analysis): trade-plan lines. Desktop one row per line; phones stack side/mode, stock, amount and the summary */
+.wilines{display:grid;gap:8px}
+.wiline{display:grid;grid-template-columns:22px 86px minmax(150px,1.5fr) 128px minmax(90px,.8fr) minmax(200px,2fr) 36px;grid-template-areas:"n side stock mode amt info del";gap:8px 10px;align-items:center;padding:8px 10px;border:1px solid var(--rule);border-radius:10px;background:var(--surface)}
+.wiline.dep{grid-template-areas:"n side amt amt amt info del"}
+.wiline .wi-n{grid-area:n;font:600 12px var(--f-mono);color:var(--ink-3)}
+.wiline .wi-side{grid-area:side} .wiline .wi-stock{grid-area:stock;min-width:0} .wiline .wi-mode{grid-area:mode} .wiline .wi-amt{grid-area:amt;min-width:0} .wiline .wi-info{grid-area:info} .wiline .wi-del{grid-area:del;justify-self:end}
+.wiline select,.wiline input{width:100%;min-width:0}
+.wiline input[data-wi-f]{color:#2256c7}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .wiline input[data-wi-f]{color:#8db8ff}}
+:root[data-theme="dark"] .wiline input[data-wi-f]{color:#8db8ff}
+.wi-deplbl{font-weight:600;font-size:13px;color:var(--ink-2)}
+.wi-info{font-size:12.5px;line-height:1.4;color:var(--ink-2);min-width:0;overflow-wrap:anywhere}
+.wi-info b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
+.wi-msg{color:var(--warn)}
+.wi-cash{font-size:13px;color:var(--ink-2)}
+.wi-cash b{color:var(--ink)} .wi-cash b.neg{color:var(--neg)}
+.wi-warn{margin-top:8px;background:var(--neg-bg);color:var(--neg)}
+.wi-mnote{font-size:11.5px;white-space:normal}
+.wi-bars{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:18px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+@media (max-width:760px){
+  .wiline{grid-template-columns:minmax(0,1fr) minmax(0,1fr) 40px;grid-template-areas:"n n del" "side mode mode" "stock stock stock" "amt amt amt" "info info info";padding:10px 12px}
+  .wiline.dep{grid-template-areas:"n n del" "side amt amt" "info info info"}
+  .wiline .wi-n::before{content:"Line "}
+  .wiline select,.wiline input{min-height:40px;font-size:16px}
+}
+@media (max-width:520px){.wi-hname{display:none}.wikpis{grid-template-columns:repeat(2,minmax(0,1fr))}.wikpis .kpi{padding:12px}.wikpis .kpi .v{font-size:21px}}
+.dcgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,250px),1fr));gap:10px}
+.dcm{border:1px solid var(--rule);border-radius:10px;padding:10px 12px;background:var(--surface);min-width:0}
+.dcm.none{background:var(--surface-2);border-style:dashed}
+.dcm-h{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.dcm-h .num{font-weight:600;font-variant-numeric:tabular-nums} .dcm-h small{color:var(--ink-3);font-weight:500;font-size:11px}
+.dcm-s{font-size:12px;color:var(--ink-3);margin-top:2px}
+.dcm ul{list-style:none;margin:6px 0 0;padding:0;display:grid;gap:6px}
+.dcl{display:grid;grid-template-columns:auto 1fr;gap:0 8px;font-size:12.5px}
+.dcl-v{text-align:right;font-weight:600}
+.dcl-d{grid-column:1/-1;color:var(--ink-3);font-size:11.5px;line-height:1.45}
+.dcun{margin-top:10px}
+.dcl-d .pill{white-space:nowrap}
+@media (max-width:520px){.dcgrid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.dcm:not(.none){grid-column:1/-1}.dcm.none{padding:8px 10px}.dcm.none .dcm-s{display:none}.dckpis{grid-template-columns:repeat(2,minmax(0,1fr))}.dckpis .kpi{padding:12px}.dckpis .kpi .v{font-size:21px}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 /* Daily P/L calendar (Performance → Daily P/L): one cell per EGX session, Sun–Thu */
 .plnav{display:flex;align-items:center;gap:6px}
@@ -370,14 +410,25 @@ function recompute(){
 }
 function renderEmpty(){ $('#main').innerHTML = `<div class="empty"><h2>No portfolio data yet</h2><p>The database for this page is empty. Ask Claude to load your workbook into it.</p></div>`; $('#period').innerHTML=''; }
 
+// Live or saved copy: on the site, lock.js sets #pd-offline data-state to 'online' | 'offline' | 'saved'; 'offline' and 'saved'
+// mean the figures are the copy saved on this device, so nothing is labelled live. The Claude page has no #pd-offline: live.
+function pricesLive(){ const el=document.getElementById('pd-offline'); const st=el&&el.dataset.state; return !(st==='offline'||st==='saved'); }
+const livePill = () => pricesLive() ? '<span class="pill prov" data-testid="live-pill" data-live="1">Live</span>' : '<span class="pill stale" data-testid="live-pill" data-live="0" title="From the copy saved on this device, not live prices">Saved</span>';
+const liveParen = () => pricesLive() ? ' (live)' : ' (saved)';
+let liveShown = null;
+function onLiveState(){ setTimeout(()=>{ const now=pricesLive(); if(now===liveShown||!S.R) return; renderTape(); renderPeriod(); renderTab(false); }, 0); }
+window.addEventListener('online', onLiveState); window.addEventListener('offline', onLiveState);
+// lock.js also flips the state after a refetch without any window event: watch the attribute once the element exists
+function watchLiveState(){ const el=document.getElementById('pd-offline'); if(!el||el._pdWatched) return; el._pdWatched=true; new MutationObserver(onLiveState).observe(el,{attributes:true,attributeFilter:['data-state']}); }
+
 // ---------- tabs ----------
 // Seven tabs; the older, finer-grained names still work as links and jump to their section inside the merged tab.
-const TAB_ALIAS = {dailypl:'performance', attribution:'analysis', risk:'analysis', income:'holdings', watchlist:'holdings', trades:'activity', ledger:'activity', statements:'settings', factsheet:'reports', inputs:'settings', checks:'settings'};
+const TAB_ALIAS = {dailypl:'performance', attribution:'analysis', risk:'analysis', whatif:'analysis', income:'holdings', watchlist:'holdings', trades:'activity', ledger:'activity', statements:'settings', factsheet:'reports', inputs:'settings', checks:'settings'};
 const TAB_VIEWS = {
   overview: [['overview','Overview',()=>vOverview()]],
   holdings: [['holdings','Holdings',()=>vHoldings()],['watchlist','Watchlist',()=>vWatchlist()],['income','Income & dividends',()=>vIncome()]],
   performance: [['performance','Performance',()=>vPerformance()],['dailypl','Daily P/L',()=>vDailyPL()]],
-  analysis: [['analysis','What the numbers say',()=>vAnalysis()],['attribution','Attribution vs EGX30 Capped',()=>vAttribution()]],
+  analysis: [['analysis','What the numbers say',()=>vAnalysis()],['whatif','What if',()=>vWhatIf()],['attribution','Attribution vs EGX30 Capped',()=>vAttribution()]],
   activity: [['trades','Closed trades',()=>vTrades()],['ledger','Ledger',()=>vLedger()]],
   reports: [['factsheet','Monthly factsheet & Excel',()=>vFactsheet()]],
   settings: [['inputs','Inputs & settings',()=>vInputs()],['statements','Statements & imports',()=>vStatements()],['checks','Checks',()=>vChecks()]],
@@ -398,7 +449,7 @@ function renderTab(force){
   const views = TAB_VIEWS[S.tab];
   const nav = views.length>1 ? `<nav class="subnav" aria-label="On this page"><span class="muted">On this page</span>${views.map(([id,label])=>`<a href="#${id}" data-sec="${id}" data-testid="sec-${id}">${esc(label)}</a>`).join('')}</nav>` : '';
   $('#main').innerHTML = `<section class="view">${nav}${views.map(([id,label,fn],i)=>`<div class="tsec" id="sec-${id}">${views.length>1&&i>0?`<h2 class="secttl">${esc(label)}</h2>`:''}${fn()}</div>`).join('')}</section>`;
-  mountCharts(); disableReadOnlyForms(); markScrollables();
+  mountCharts(); disableReadOnlyForms(); markScrollables(); liveShown=pricesLive(); watchLiveState();
 }
 // Wide tables on a phone: flag every .tbl that overflows its container so CSS can show a "swipe →" hint; the hint goes once scrolled.
 function markScrollables(){
@@ -415,6 +466,7 @@ window.addEventListener('resize', ()=>{ clearTimeout(markScrollables._t); markSc
 function feedStatus(){
   const m=S.market; if(!m||!m.asOf) return {cls:'err', text:'No automatic prices yet'};
   const ageH = (Date.now()-Date.parse(m.asOf))/36e5;
+  if(!pricesLive()) return {cls: ageH<80?'warn':'err', text:`Saved copy · prices ${cairoAt(m.asOf)}`};
   return {cls: ageH<30?'ok': ageH<80?'warn':'err', text:`Prices ${cairoAt(m.asOf)}`};
 }
 function renderTape(){
@@ -427,7 +479,7 @@ function renderTape(){
     item('s','EGX70 EWI',ix.EGX70EWI&&ix.EGX70EWI.close,ix.EGX70EWI&&ix.EGX70EWI.chg,1)+
     item('f','USD/EGP',m.fx&&m.fx.USDEGP&&m.fx.USDEGP.price,m.fx&&m.fx.USDEGP&&m.fx.USDEGP.chg,2)+
     item('g','GOLD 24K /g',m.gold&&m.gold.gram24kEgp,null,0);
-  $('#feed').innerHTML = `<span class="dot ${fs.cls}"></span><span class="muted">${esc(fs.text)}</span>${REFRESH_TRIGGER_ID?` <button class="btn sm" id="refresh-prices" data-testid="refresh-prices" title="Fetch the latest prices, EGX30 Capped, USD/EGP and gold now">Refresh now</button>`:''}`;
+  $('#feed').innerHTML = `<span class="dot ${fs.cls}" data-testid="feed-dot" data-live="${pricesLive()?1:0}"></span><span class="muted">${esc(fs.text)}</span>${REFRESH_TRIGGER_ID?` <button class="btn sm" id="refresh-prices" data-testid="refresh-prices" title="Fetch the latest prices, EGX30 Capped, USD/EGP and gold now">Refresh now</button>`:''}`;
 }
 
 // ---------- period selector ----------
@@ -436,7 +488,7 @@ const PT = [['Month','This month'],['Quarter','This quarter'],['YTD','This year'
 function renderPeriod(){
   const R=S.R; const months=R.months.filter(r=>r.has).map(r=>r.month).reverse();
   const asOf = R.range.asOf;
-  const opt=(m,sel)=>`<option value="${m}" ${m===sel?'selected':''}>${M(m)}${R.months.find(r=>r.month===m&&r.live)?' (live)':''}</option>`;
+  const opt=(m,sel)=>`<option value="${m}" ${m===sel?'selected':''}>${M(m)}${R.months.find(r=>r.month===m&&r.live)?liveParen():''}</option>`;
   $('#period').innerHTML = `
     <div class="label">${esc(R.stats.label)}</div>
     <div class="seg" role="group" aria-label="Analysis period">${PT.map(([v,l])=>`<button data-pt="${v}" aria-pressed="${S.sel.type===v}">${l}</button>`).join('')}</div>
@@ -558,7 +610,8 @@ function vOverview(){
   const ht=headTwr(st), cc=cashCum(rows);
   return `${statementBanner()}
   <div class="kpis">
-    ${kpi('Total value · live', egp(total), `<span class="${sgn(dp.pl)}">${dp.pct!=null?`${dp.pl>=0?'+':'−'}${egp(Math.abs(dp.pl))} EGP last session (${pct(dp.pct,2)})`:'No session change yet'}</span>`,'hero','EGP')}
+    <div data-testid="total-value-tile" data-live="${pricesLive()?1:0}" style="display:contents">${pricesLive() ? kpi('Total value · live', egp(total), `<span class="${sgn(dp.pl)}">${dp.pct!=null?`${dp.pl>=0?'+':'−'}${egp(Math.abs(dp.pl))} EGP last session (${pct(dp.pct,2)})`:'No session change yet'}</span>`,'hero','EGP')
+      : kpi('Total value · saved copy', egp(total), `the copy saved on this device, not live prices${dp.pct!=null?` · <span class="${sgn(dp.pl)}">${dp.pl>=0?'+':'−'}${egp(Math.abs(dp.pl))} EGP</span> in its last session`:''}`,'','EGP')}</div>
     ${kpi(`Time-weighted return${ht.daily?' · daily-linked':''}`, `<span class="${sgn(ht.v)}" data-testid="headline-twr" data-method="${ht.daily?'daily':'dietz'}">${pct(ht.v)}</span>`, ht.daily ? `daily-linked · monthly ${pct(st.twr)} · ${benchLabel} ${pct(st.benchTwr)}` : `${benchLabel} ${pct(st.benchTwr)} · alpha <span class="${sgn(st.alpha)}">${pct(st.alpha)}</span>`)}
     ${kpi('Money-weighted (XIRR)', `<span class="${sgn(st.xirr)}">${pct(st.xirr)}</span>`, `annualized · period ${pct(st.mwrPeriod)}`)}
     ${kpi('Return in USD', st.usdTwr!=null?`<span class="${sgn(st.usdTwr)}">${pct(st.usdTwr)}</span>`:'—', st.egpVsUsd!=null?`EGP vs USD ${pct(st.egpVsUsd)}`:'Enter USD/EGP marks')}
@@ -582,7 +635,7 @@ function vOverview(){
   </div>
   <div class="grid g2">
     <div class="panel">
-      <div class="phead"><div><h2>Largest holdings</h2><div class="sub">Live market value · ${R.pos.open.length} open positions</div></div><button class="btn sm" data-go="holdings" id="go-holdings">All holdings</button></div>
+      <div class="phead"><div><h2>Largest holdings</h2><div class="sub">${pricesLive()?'Live market value':'Market value from the saved copy'} · ${R.pos.open.length} open positions</div></div><button class="btn sm" data-go="holdings" id="go-holdings">All holdings</button></div>
       <div class="tbl"><table><thead><tr><th>Symbol</th><th class="n">Value</th><th class="n">Unrealized</th><th class="n">Return</th><th>Weight</th></tr></thead><tbody>
       ${R.pos.open.slice().sort((a,b)=>(b.mv||0)-(a.mv||0)).slice(0,6).map(r=>`<tr><td><span class="sym">${esc(r.symbol||r.name)}</span></td><td class="n">${egp(r.mv)}</td><td class="n ${sgn(r.unreal)}">${egp(r.unreal)}</td><td class="n ${sgn(r.unreal)}">${pct(r.openCost?r.unreal/r.openCost:null)}</td><td><div class="wcell"><div class="bar"><i style="width:${(r.weight/maxW*100).toFixed(1)}%"></i></div><span class="num">${pct(r.weight,1,false)}</span></div></td></tr>`).join('')}
       </tbody></table></div>
@@ -783,7 +836,7 @@ function vPerformance(){
     ${chartSlot('ch-dd',{kind:'line',title:'Drawdown',labels,series:[{name:'Drawdown',color:C.neg(),values:rows.map(r=>r.dd),area:true}],yFmt:pctAxis},200)}</div>
   <div class="panel"><div class="phead"><div><h2>Monthly breakdown</h2><div class="sub">Modified Dietz: (month-end value − opening − net flow) ÷ (opening + day-weighted net flow)</div></div><button class="btn sm" id="dl-monthly" data-testid="download-monthly">Download CSV</button></div>
     <div class="tbl"><table data-testid="monthly-table"><thead><tr><th>Month</th><th class="n">Opening</th><th class="n">Net flow</th><th class="n">Dividends</th><th class="n">Month-end value</th><th class="n">Return</th><th class="n">EGX30 Capped</th><th class="n">Alpha</th><th class="n">Cum. return</th><th class="n">Cum. EGX30</th><th class="n">Drawdown</th><th class="n">USD return</th><th class="n">Real return</th><th class="n">Trades</th></tr></thead><tbody>
-    ${rows.map(r=>`<tr><td>${M(r.month)} ${r.live?'<span class="pill prov">Live</span>':r.estimate?'<span class="pill stale" title="Estimated from closing prices; replaced when the Thndr statement is posted">Estimate</span>':r.provisional?'<span class="pill prov">Provisional</span>':''}</td><td class="n">${egp(r.opening)}</td><td class="n">${egp(r.netFlow)}</td><td class="n">${egp(r.dividends)}</td><td class="n">${egp(r.value)}</td><td class="n ${sgn(r.ret)}">${pct(r.ret)}</td><td class="n ${sgn(r.bench)}">${pct(r.bench)}</td><td class="n ${sgn(r.alpha)}">${pct(r.alpha)}</td><td class="n">${pct(r.pCum)}</td><td class="n">${pct(r.pBench)}</td><td class="n">${pct(r.dd)}</td><td class="n">${pct(r.usdRet)}</td><td class="n">${pct(r.realRet)}</td><td class="n">${r.trades}</td></tr>`).join('')}
+    ${rows.map(r=>`<tr><td>${M(r.month)} ${r.live?livePill():r.estimate?'<span class="pill stale" title="Estimated from closing prices; replaced when the Thndr statement is posted">Estimate</span>':r.provisional?'<span class="pill prov">Provisional</span>':''}</td><td class="n">${egp(r.opening)}</td><td class="n">${egp(r.netFlow)}</td><td class="n">${egp(r.dividends)}</td><td class="n">${egp(r.value)}</td><td class="n ${sgn(r.ret)}">${pct(r.ret)}</td><td class="n ${sgn(r.bench)}">${pct(r.bench)}</td><td class="n ${sgn(r.alpha)}">${pct(r.alpha)}</td><td class="n">${pct(r.pCum)}</td><td class="n">${pct(r.pBench)}</td><td class="n">${pct(r.dd)}</td><td class="n">${pct(r.usdRet)}</td><td class="n">${pct(r.realRet)}</td><td class="n">${r.trades}</td></tr>`).join('')}
     </tbody></table></div></div>`;
 }
 function trailingStrip(){ const R=S.R; const tr=PA.trailing(R.months, R.range.to); if(!tr||!tr.some(t=>t.p!=null)) return '';
@@ -933,7 +986,7 @@ function vInputs(){
       const stored=(f)=> estRow && (f==='cash'||f==='securities') && k[f]!=null ? k[f] : null;
       return `<tr data-testid="marks-row-${m}"${estRow?' data-estimate="1"':''}>
       <td>${M(m)}</td>${cell(m,'cash',k.cash,'any',est('cash'),stored('cash'))}${cell(m,'securities',k.securities,'any',est('securities'),stored('securities'))}${cell(m,'benchClose',k.benchClose,'any',est('benchClose'),stored('benchClose'))}${cell(m,'benchReturn',k.benchReturn!=null?+(k.benchReturn*100).toFixed(4):null)}${cell(m,'usdegp',k.usdegp,'any',est('usdegp'),stored('usdegp'))}${cell(m,'cpi',k.cpi!=null?+(k.cpi*100).toFixed(4):null)}<td class="${ro?'wrap':'in-cell'}">${ro?esc(k.note||''):`<input class="txt" type="text" data-m="${m}" data-f="note" value="${esc(k.note||'')}" id="mk-${m}-note">`}</td>
-      <td>${estRow? `<span class="pill stale" data-testid="marks-estimate-pill" title="Cash from the ledger and holdings at the last closing prices of the month. Post the Thndr statement to replace it.">Estimated · awaiting statement</span>` : k.provisional||liveRow? `<span class="pill prov">${liveRow?'Live':'Provisional'}</span> ${S.readOnly?'':`<button class="btn sm" data-confirm="${m}" data-testid="confirm-month">Confirm</button>`}` : k.cash==null?'<span class="pill loss">Missing</span>' : k.source==='statement'?'<span class="pill win">From statement</span>' : k.source==='price-estimate'?`<span class="pill stale" title="${esc(k.estimateNote||'')}">Price estimate</span>` : k.source==='reconstructed'?`<span class="pill auto" title="${esc(k.estimateNote||'')}">Rebuilt from statements</span>`:'<span class="pill man">Typed</span>'}</td></tr>`; }).join('')}
+      <td>${estRow? `<span class="pill stale" data-testid="marks-estimate-pill" title="Cash from the ledger and holdings at the last closing prices of the month. Post the Thndr statement to replace it.">Estimated · awaiting statement</span>` : k.provisional||liveRow? `${liveRow?livePill():'<span class="pill prov">Provisional</span>'} ${S.readOnly?'':`<button class="btn sm" data-confirm="${m}" data-testid="confirm-month">Confirm</button>`}` : k.cash==null?'<span class="pill loss">Missing</span>' : k.source==='statement'?'<span class="pill win">From statement</span>' : k.source==='price-estimate'?`<span class="pill stale" title="${esc(k.estimateNote||'')}">Price estimate</span>` : k.source==='reconstructed'?`<span class="pill auto" title="${esc(k.estimateNote||'')}">Rebuilt from statements</span>`:'<span class="pill man">Typed</span>'}</td></tr>`; }).join('')}
     </tbody></table></div>
     <p class="note" style="margin:10px 0 0">EGX30 Capped % and CPI are entered as percentages (4.2 = 4.2%). Confirming a live month copies the current live cash and holdings value into it; overwrite them with the statement figures before or after confirming.</p></div>
 

@@ -24,8 +24,13 @@ page (`../index.html`), so nothing here is secret — but **no data or keys ever
 | `site/rotate_keys.py` | Rekey runbook for one portfolio: new pair + setup key, re-encrypts `data.enc.json` and every published export with the new public key, swaps the files into the repo only after everything verifies (nothing committed). |
 | `jobs/fetch_prices.py` | The daily market job (scanner snapshot + a 10-session daily-bar backfill). **The same file as `../tools/fetch_prices.py` at the repository root** — that is the path the routine downloads; keep the two identical (`cmp jobs/fetch_prices.py ../tools/fetch_prices.py`). |
 | `tests/test.js` | Excel-parity check: engine vs the original workbook. Needs the two private fixtures `seed.json` (the ledger) and `expected.json` (the workbook's headline figures) — neither is in the repository, see Tests. |
-| `tests/test_dietz.js` | Modified-Dietz, Bonus, round-trip and same-day-ordering checks. The synthetic sections always run; the sections on the real database exports run only when `KHALED_EXPORT` / `YASSIN_EXPORT` (and `EXPECTED_JSON`) point at private copies, otherwise they print `SKIP`. |
+| `tests/test_dietz.js` | Modified-Dietz, Bonus, round-trip and same-day-ordering checks. The synthetic sections always run; the sections on the real database exports run only when `KHALED_EXPORT` / `YASSIN_EXPORT` (and `EXPECTED_JSON`) point at private copies, otherwise they print `SKIP`. Real figures those sections pin come from `expected.json` → `pins`, never from the file itself. |
 | `tests/test_sync.js` | **Not in the repository yet.** The Thndr sync test (invoice matcher, fund convention, Bonus shares, sender verification, account lock) still quotes real statement headers and reads private raw-email fixtures; it stays private until those are replaced by synthetic ones. |
+| `tests/run_all.sh` | The one entry point for the automatic checks (syntax, public-mode tests, tools on synthetic data, builds, private-data guard) — what GitHub Actions runs on every push; see "Automatic checks". |
+| `tests/fixtures/make_synthetic.js` | Writes a made-up database export ("Demo Portfolio", invented prices and amounts, real EGX tickers only) for the tool smoke tests. Deterministic. |
+| `tests/crypto_roundtrip.py` | Encrypts the synthetic export with `../tools/export.py` and a file with `../tools/encrypt_file.py` to a throwaway key, and decrypts both the way `site/lock.js` does. |
+| `tests/site_smoke.js` | Headless-Chromium check of the published `../index.html`: portfolio picker, setup-key screen, a wrong key refused, no console errors, no CSP violations, no request leaving the site. Never unlocks. |
+| `tests/check_private.py` | Private-data guard: fails on files or text that look like private data (see "Automatic checks"). Holds patterns only, no real value. |
 
 ## Build the desk pages
 
@@ -57,8 +62,28 @@ gitignored if you copy them in):
     KHALED_EXPORT=<export-khaled> YASSIN_EXPORT=<export-yassin> EXPECTED_JSON=<expected.json> node tests/test_dietz.js
 
 `seed.json` is Khaled's ledger as extracted from the workbook; `expected.json` holds the workbook's headline figures
-(`{stats:{twr,…}, mvTotal, unreal, sameDay:{name, realized, outcome}}`). No real figure is written into any test file —
+(`{stats:{twr,…}, mvTotal, unreal, sameDay:{name, realized, outcome}, pins:{rebates2026ThroughAug, workbookGapAug}}`; a missing
+`pins` entry only skips that one pinned value). No real figure is written into any test file —
 the public tests only carry the comparison logic. `tests/test_sync.js` is not staged yet (see the table above).
+
+## Automatic checks (GitHub Actions)
+
+Every push to `main` and every pull request runs `.github/workflows/checks.yml` (about 2–3 minutes). A failure puts a red ✗ on
+the commit in GitHub and e-mails whoever pushed it; the Actions tab shows which step failed and why. It does **not** stop
+GitHub Pages from publishing — it tells you something is broken so you can fix it. Nothing in it uses secrets or private
+data. Run the same checks locally from the repository root:
+
+    bash src/tests/run_all.sh                 # steps 1–4 and 6; or name steps: run_all.sh tools build
+    node src/tests/site_smoke.js              # step 5 (needs Playwright + Chromium)
+
+| Step | What fails it |
+|---|---|
+| 1. Syntax | `node --check` on every `.js` under `src/`, `py_compile` on every `.py` under `src/` and `tools/`. |
+| 2. Engine tests | `tests/test_dietz.js` or `tests/test.js` failing in public mode (the private sections print `SKIP`, `test.js` exits 0 without its fixtures). |
+| 3. Tools on synthetic data | `tests/fixtures/make_synthetic.js` writes a made-up export; then `tools/plan.js`, `tools/weekly.js --week-ending 2026-09-10`, `tools/excel.js` + `excel.py` (workbook read back with openpyxl), `tools/sync.js` with an empty inbox (heads-up digest runs, nothing is sent), `tools/build_tooldocs.py`, `../tools/fetch_prices.py --help` and the `export.py` / `encrypt_file.py` round trip must all exit 0 with the expected output. |
+| 4. Build | the tool copies differ from the root files (`engine.js`, `engine2.js`, `statement.js`, `fetch_prices.py`); `build.py` or `site/build_site.py` fails; the site lacks the CSP meta or the `pd-build` stamp or still links Google Fonts; or the committed `../index.html` (and `portfolios.json`, manifest, icons, fonts) is not what `src/` builds today — commit the rebuilt site together with the `src/` change. |
+| 5. Live site | `tests/site_smoke.js` against the repository root served by `python3 -m http.server`, desktop and phone size. |
+| 6. Private-data guard | `tests/check_private.py` over every tracked file: private files (`seed.json`, `expected.json`, exports, sync folders, plain workbooks/PDFs, keys), anything under `p/<id>/` that is not encrypted, e-mail addresses outside a short allowlist, runs of 7+ digits (account codes, phone numbers), money-looking figures (`N,NNN.NN`, `NNNN.NN`, `N,NNN EGP`), a Unified Code or account-holder value, API tokens and private keys. Hits print masked. To also search for the real names and figures, keep them one per line in a file **outside** the repository and run `PRIVATE_MARKERS=<that file> python3 src/tests/check_private.py`. A deliberate synthetic value on a line can be marked `private-scan: synthetic`. |
 
 ## Secrets — never in the repository
 

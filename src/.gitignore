@@ -11,6 +11,8 @@ secret/
 portfolio-desk.html
 yassin-desk.html
 tooldocs/
-fix2/            # tests/test_dietz.js writes its Excel-shape scratch file (real data) under fix2/tmp/engine/ when run with the private exports
+# tests/test_dietz.js writes its Excel-shape scratch files (real data) under fix2/ fix3/ fix4/ when run with the private
+# exports (gitignore has no end-of-line comments: a comment must be on its own line)
+/fix[0-9]*/
 __pycache__/
 node_modules/

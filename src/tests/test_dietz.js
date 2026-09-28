@@ -4,6 +4,9 @@ const fs = require('fs'), path = require('path');
 const PE = require('../engine.js'), PA = require('../engine2.js');
 let fail = 0;
 const check = (name, ok, detail) => { console.log((ok ? 'PASS' : 'FAIL') + ' ' + name + (detail != null ? ' · ' + detail : '')); if (!ok) fail++; };
+// figures of the real exports that the private-data sections pin (expected.json → pins, private like the rest of that file);
+// without them those sections still check every internal invariant, only the pinned value is skipped
+const PIN = (() => { try { return JSON.parse(fs.readFileSync(process.env.EXPECTED_JSON || path.join(__dirname, 'expected.json'))).pins || {}; } catch (e) { return {}; } })();
 
 // 1. synthetic: opening 1000, one deposit of 500 on the 16th of a 31-day month, closing 1600
 const settings = { inception: '2026-01', openingValue: 1000, riskFree: 0.2, volLow: 0.03, volHigh: 0.08, staleDays: 7, openThreshold: 0.5, cash: 0, fxStart: 50 };
@@ -156,10 +159,14 @@ if (fs.existsSync(fixK) && fs.existsSync(fixY)) {
   check('Khaled without Jul-26: deposits, withdrawals, dividends and trades totals unchanged', RG.stats.deposits === RK.stats.deposits && RG.stats.withdrawals === RK.stats.withdrawals && Math.abs(RG.stats.dividends - RK.stats.dividends) < 1e-9 && RG.stats.trades === RK.stats.trades);
   // 9c. trips vs legacy closed-trade stats
   const RN = K.run({ closedTrades: 'name' }), sN = RN.stats, sT = RK.stats;
-  check('Khaled legacy (name) closed trades: 42, win rate 54.8%, avg hold 64 days', sN.closedCount === 42 && Math.abs(sN.winRate - 0.5476) < 1e-3 && Math.abs(sN.avgHold - 64) < 0.5 && sN.closedCashLike === 0, `${sN.closedCount} ${(sN.winRate * 100).toFixed(1)}% ${sN.avgHold.toFixed(1)}d`);
-  check('Khaled trips: 52 closed round trips (10 cash-like excluded), win rate ~54%, avg hold ~40 days', sT.closedTrades === 'trip' && sT.closedCount === 52 && sT.closedCashLike === 10 && Math.abs(sT.winRate - 0.5385) < 1e-3 && sT.avgHold > 38 && sT.avgHold < 44, `${sT.closedCount} ${(sT.winRate * 100).toFixed(1)}% ${sT.avgHold.toFixed(1)}d`);
-  const tmg = RK.pos.trips.filter((t) => t.name === 'TMG Holding');
-  check('Khaled: TMG Holding has two closed trips (Mar-26 and May→Jun-26) and rows[].trips = 2', tmg.length === 2 && tmg[1].firstBuy === '2026-03-04' && tmg[1].lastSell === '2026-03-08' && tmg[0].firstBuy === '2026-05-03' && tmg[0].lastSell === '2026-06-16' && RK.pos.rows.find((r) => r.name === 'TMG Holding').trips === 2, tmg.map((t) => `${t.trip}: ${t.firstBuy}→${t.lastSell}`).join(', '));
+  // the real counts, win rates and one stock's trip dates are private: pinned in expected.json → pins.trips (skipped without it)
+  const PT = PIN.trips;
+  check(`Khaled legacy (name) closed trades: counted, cash-like names never excluded${PT ? ' and equal to the pinned count / win rate / hold' : ' (pinned figures skipped)'}`, sN.closedCount > 0 && sN.closedCashLike === 0 && sN.winRate >= 0 && sN.winRate <= 1 && (!PT || (sN.closedCount === PT.legacyCount && Math.abs(sN.winRate - PT.legacyWin) < 1e-3 && Math.abs(sN.avgHold - PT.legacyHold) < 0.5)), `${sN.closedCount} ${(sN.winRate * 100).toFixed(1)}% ${sN.avgHold.toFixed(1)}d`);
+  check(`Khaled trips: at least as many round trips as closed names, cash-like trips excluded${PT ? ' and equal to the pinned figures' : ' (pinned figures skipped)'}`, sT.closedTrades === 'trip' && sT.closedCount >= sN.closedCount && sT.closedCashLike >= 0 && (!PT || (sT.closedCount === PT.tripCount && sT.closedCashLike === PT.tripCashLike && Math.abs(sT.winRate - PT.tripWin) < 1e-3 && sT.avgHold > PT.tripHoldLo && sT.avgHold < PT.tripHoldHi)), `${sT.closedCount} ${(sT.winRate * 100).toFixed(1)}% ${sT.avgHold.toFixed(1)}d`);
+  if (PT && PT.twoTrips) { const w = PT.twoTrips, tt = RK.pos.trips.filter((t) => t.name === w.name);
+    check('Khaled: the pinned name has its two closed trips on the pinned dates and rows[].trips = 2', tt.length === 2 && tt[1].firstBuy === w.t2[0] && tt[1].lastSell === w.t2[1] && tt[0].firstBuy === w.t1[0] && tt[0].lastSell === w.t1[1] && RK.pos.rows.find((r) => r.name === w.name).trips === 2, tt.map((t) => `${t.trip}: ${t.firstBuy}→${t.lastSell}`).join(', '));
+  } else { const multi = RK.pos.rows.filter((r) => r.trips >= 2);
+    check('Khaled: a name bought again after selling out has one trip per round trip (pinned dates skipped)', multi.every((r) => RK.pos.trips.filter((t) => t.name === r.name).length === r.trips), `${multi.length} names with 2+ trips`); }
   const offRows = RK.pos.rows.filter((r) => r.status === 'Closed').filter((r) => { const tt = RK.pos.trips.filter((t) => t.name === r.name); return Math.abs(tt.reduce((a, t) => a + t.realized, 0) - r.realized) > 0.01 || Math.abs(tt.reduce((a, t) => a + t.divs, 0) - r.divs) > 0.01; });
   check('Khaled: every closed name\'s trips add up to its row (realized and dividends)', offRows.length === 0, offRows.map((r) => r.name).join(', ') || 'all match');
   check('Khaled: S.realized unchanged between modes', sN.realized === sT.realized, `${sT.realized}`);
@@ -171,8 +178,9 @@ if (fs.existsSync(fixK) && fs.existsSync(fixY)) {
     const X = JSON.parse(fs.readFileSync(xlOut));
     const rebAug = K.tx.filter((t) => t.t === 'Rebate' && t.d >= '2026-01-01' && t.d <= '2026-08-31').reduce((a, t) => a + (t.amt || 0), 0);
     const y26 = X.incomeYears.find((y) => y.year === '2026');
-    check('Workbook Aug-26: 2026 rebates equal the ledger through 31 Aug (16,615.83)', Math.abs(y26.rebT - rebAug) < 0.005 && Math.abs(rebAug - 16615.83) < 0.005 && y26.reb[8] === 0, `${y26.rebT.toFixed(2)} vs ${rebAug.toFixed(2)}`);
-    check('Workbook Aug-26: closed sheet has TMG Holding\'s trip ending 2026-06-16 and nothing after August', X.closed.some((r) => r.name === 'TMG Holding' && r.lastSell === '2026-06-16' && r.trip === 2) && X.closed.every((r) => r.lastSell <= '2026-08-31') && X.ledger.every((t) => t.date <= '2026-08-31'), `${X.closed.length} closed trips, latest ${X.closed[0] && X.closed[0].lastSell}`);
+    check(`Workbook Aug-26: 2026 rebates equal the ledger through 31 Aug${PIN.rebates2026ThroughAug == null ? ' (pinned figure skipped: expected.json pins.rebates2026ThroughAug is private)' : ' and the pinned figure'}`, Math.abs(y26.rebT - rebAug) < 0.005 && (PIN.rebates2026ThroughAug == null || Math.abs(rebAug - PIN.rebates2026ThroughAug) < 0.005) && y26.reb[8] === 0, `${y26.rebT.toFixed(2)} vs ${rebAug.toFixed(2)}`);
+    const W2 = PIN.trips && PIN.trips.twoTrips;   // private: the name with two round trips and its dates
+    check(`Workbook Aug-26: closed sheet has nothing after August${W2 ? " and the pinned name's second trip" : ' (pinned trip skipped)'}`, (!W2 || X.closed.some((r) => r.name === W2.name && r.lastSell === W2.t1[1] && r.trip === 2)) && X.closed.every((r) => r.lastSell <= '2026-08-31') && X.ledger.every((t) => t.date <= '2026-08-31'), `${X.closed.length} closed trips, latest ${X.closed[0] && X.closed[0].lastSell}`);
   } catch (e) { check('Workbook Aug-26 build (tools/excel.js)', false, String(e.stderr || e.message).slice(0, 300)); }
   // 9e. cash-source warn
   const cY = RY.checks.find((c) => c.label === 'Broker cash reconciles to ledger'), cK = RK.checks.find((c) => c.label === 'Broker cash reconciles to ledger');
@@ -276,17 +284,21 @@ print(json.dumps({
   'diff': summ['Difference: statement value vs closing prices (EGP)'].value, 'holdNote': v['Holdings']['A1'].value,
   'fmt': {k: summ[k].number_format for k in ['Month return', 'Risk-free rate used', 'Upside capture', 'Annualized volatility', 'Tracking error (annual)', 'Max drawdown (month-end)']},
   'realLabel': [k for k in summI if str(k).startswith('Real return')], 'marksHdr': [c.value for c in v['Marks & inputs'][3]], 'marksHdrI': [c.value for c in i['Marks & inputs'][3]],
-  'closed': [c for c in closed if c and ('TMG Holding' in c)]}))
+  'closed': [c for c in closed if c]}))
 `;
     const Q = JSON.parse(cp.execFileSync('python3', ['-c', py, T], { encoding: 'utf8' }));
     check('Workbook: Monthly Return cells hold numbers when read with data_only=True (13 months, no formulas on the sheet)', Q.rets.length === 13 && Q.rets.every((x) => typeof x === 'number') && Q.monthlyFormulaCells === 0, Q.rets.map((x) => (x * 100).toFixed(2)).join(' '));
     check("Workbook: last sheet 'Monthly (formulas)' keeps the live formulas and the phone-preview note", Q.sheets[Q.sheets.length - 1] === 'Monthly (formulas)' && Q.fK4 === '=(J4-B4-E4)/(B4+F4)' && Q.fK4type === 'f' && /phone previews show the Monthly sheet/.test(Q.fNote), Q.sheets.join(', '));
     check('Workbook: text starting with = @ - + is stored as text, never a formula', Q.inj.every(([v, t]) => t === 's') && Q.inj[0][0] === '=HYPERLINK("http://x","y")' && Q.inj[1][0] === '@SUM(A1)', JSON.stringify(Q.inj));
-    check('Workbook: Summary shows the statement-vs-closes difference (~1,087 EGP) and Holdings explains it', Math.abs(Q.diff - 1086.66) < 1 && /1,087 EGP lower/.test(Q.holdNote), `${Q.diff}`);
+    const gapX = JSON.parse(fs.readFileSync(path.join(T, 'xl.json'))).summary['Difference: statement value vs closing prices (EGP)'];
+    const gapTxt = `${Math.round(Math.abs(gapX)).toLocaleString('en-US')} EGP ${gapX > 0 ? 'lower' : 'higher'}`;
+    check(`Workbook: Summary shows the statement-vs-closes difference and Holdings explains it${PIN.workbookGapAug == null ? ' (pinned figure skipped: expected.json pins.workbookGapAug is private)' : ' (and it is the pinned figure)'}`, Math.abs(gapX) >= 0.5 && Math.abs(Q.diff - gapX) < 0.005 && String(Q.holdNote).includes(gapTxt) && (PIN.workbookGapAug == null || Math.abs(Q.diff - PIN.workbookGapAug) < 1), `${Q.diff}`);
     check('Workbook: unsigned figures use 0.0%, returns the signed 2-decimal format', Q.fmt['Month return'] === '+0.00%;-0.00%;0.00%' && Q.fmt['Max drawdown (month-end)'] === '+0.00%;-0.00%;0.00%' && ['Risk-free rate used', 'Upside capture', 'Annualized volatility', 'Tracking error (annual)'].every((k) => Q.fmt[k] === '0.0%'), JSON.stringify(Q.fmt));
     check("Workbook: partial real return is labelled 'through <Mon-YY>'", Q.realLabel.join() === 'Real return (after CPI, through Jul-26)', Q.realLabel.join());
     check('Workbook: Marks & inputs drops empty source columns and keeps one that has data', !Q.marksHdr.includes('CPI source') && !Q.marksHdr.includes('USD/EGP source') && Q.marksHdrI.includes('CPI source') && !Q.marksHdrI.includes('USD/EGP source'), `${Q.marksHdr.join('|')}`);
-    check("Workbook: Closed trades numbers repeat trips ('TMG Holding (2)', 'TMG Holding (1)')", Q.closed.join() === 'TMG Holding (2),TMG Holding (1)', Q.closed.join());
+    { const W2 = PIN.trips && PIN.trips.twoTrips; const rep = Q.closed.filter((c) => / \(\d+\)$/.test(String(c))), base = (c) => String(c).replace(/ \(\d+\)$/, '');
+      const ok = rep.length > 0 && rep.every((c) => rep.filter((x) => base(x) === base(c)).length >= 2) && (!W2 || rep.filter((c) => base(c) === W2.name).join() === `${W2.name} (2),${W2.name} (1)`);
+      check(`Workbook: Closed trades numbers repeat trips (Name (2), Name (1))${W2 ? ' incl. the pinned name' : ''}`, ok, `${rep.length} numbered rows`); }
   } catch (e) { check('Workbook Aug-26 build and openpyxl read-back', false, String(e.stderr || e.message).slice(0, 400)); }
 }
 

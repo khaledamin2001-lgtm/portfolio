@@ -117,9 +117,9 @@ function vDailyPL(){
     if(!r){ const past=ds<=S.R.today; return `<div class="plc ${past?'closed':'empty'}" data-testid="pl-day-${ds}"><div class="dn"><span>${dn}</span></div>${past?'<div class="mk">Closed</div>':''}</div>`; }
     const tone=Math.abs(r.pnl)<0.5?null:r.pnl>0?'--pos':'--neg', a=Math.round(8+30*Math.min(1,Math.abs(r.ret||0)/maxAbs));
     const fl=Math.abs(r.flow)>0.5?`<span class="flow" title="${r.flow>0?'Deposit':'Withdrawal'} ${egp(Math.abs(r.flow))} EGP, not counted as P/L">${r.flow>0?'dep':'wdr'}</span>`:'';
-    const lbl=`${WD3[new Date(ds+'T12:00:00Z').getUTCDay()]} ${dfmt(ds)}${r.live?' (live)':''}: P/L ${plFull(r.pnl)} EGP, ${pct(r.ret,2)}`;
+    const lbl=`${WD3[new Date(ds+'T12:00:00Z').getUTCDay()]} ${dfmt(ds)}${r.live?liveParen():''}: P/L ${plFull(r.pnl)} EGP, ${pct(r.ret,2)}`;
     return `<button type="button" class="plc${r===sel?' sel':''}" data-pld="${ds}" data-testid="pl-day-${ds}" aria-pressed="${r===sel}" aria-label="${esc(lbl)}" title="${esc(lbl)}" ${tone?`style="background:color-mix(in srgb,var(${tone}) ${a}%,var(--surface))"`:''}>
-      <div class="dn"><span>${dn}</span>${r.live?'<span class="mk">Live</span>':''}</div><div class="pl ${sgn(Math.abs(r.pnl)<0.5?0:r.pnl)}">${plCell(r.pnl)}</div><div class="pc">${pct(r.ret,2)}</div>${fl}</button>`; };
+      <div class="dn"><span>${dn}</span>${r.live?`<span class="mk">${pricesLive()?'Live':'Saved'}</span>`:''}</div><div class="pl ${sgn(Math.abs(r.pnl)<0.5?0:r.pnl)}">${plCell(r.pnl)}</div><div class="pc">${pct(r.ret,2)}</div>${fl}</button>`; };
   let cal=WD3.slice(0,5).map(w=>`<div class="wd">${w}</div>`).join(''), started=false;
   for(let d=1; d<=nDays; d++){ const ds=`${mo}-${String(d).padStart(2,'0')}`, wd=new Date(Date.UTC(y,m-1,d)).getUTCDay(); if(wd>4) continue;
     if(!started){ cal+='<div class="plc empty" aria-hidden="true"></div>'.repeat(wd); started=true; } cal+=cell(ds); }
@@ -135,15 +135,15 @@ function vDailyPL(){
       <button type="button" class="btn sm" data-plm="${months[mi+1]||''}" ${mi<months.length-1?'':'disabled'} aria-label="Next month" data-testid="pl-next">›</button></div></div>
     <div class="kpis plkpis" data-testid="pl-tiles" style="margin-bottom:14px">
       ${kpi('Month P/L', `<span class="${sgn(tot)}">${plFull(tot)}</span>`, `${pct(mret,2)} daily-linked${bret!=null?` · EGX30 Capped ${pct(bret,2)}`:''}`,'','EGP')}
-      ${kpi(endR.live?'Value now':'Value at last close', egp(endR.value), `${dfmt(endR.d)}${endR.live?' · live prices':''} · month started at ${egp(mrows[0].prevValue)}`,'','EGP')}
+      ${kpi(endR.live?(pricesLive()?'Value now':'Value · saved copy'):'Value at last close', egp(endR.value), `${dfmt(endR.d)}${endR.live?(pricesLive()?' · live prices':' · saved prices'):''} · month started at ${egp(mrows[0].prevValue)}`,'','EGP')}
       ${kpi('Best day', `<span class="${sgn(best.pnl)}">${plFull(best.pnl)}</span>`, `${dfmt(best.d)} · ${pct(best.ret,2)}`,'','EGP')}
       ${kpi('Worst day', `<span class="${sgn(worst.pnl)}">${plFull(worst.pnl)}</span>`, `${dfmt(worst.d)} · ${pct(worst.ret,2)}`,'','EGP')}
       ${kpi('Up / down days', `${up} / ${dn}`, `${mrows.length} session${mrows.length>1?'s':''}${Math.abs(flows)>0.5?` · net ${flows>0?'deposits':'withdrawals'} ${egp(Math.abs(flows))} EGP`:''}`)}
     </div>
     <div class="plcal" role="group" aria-label="Daily P/L calendar for ${M(mo)}" data-testid="pl-calendar">${cal}</div>
     <div class="pldet" data-testid="pl-detail">
-      <div class="phead" style="margin-bottom:8px"><div><h2 style="font-size:17px">${WD3[new Date(sel.d+'T12:00:00Z').getUTCDay()]} ${dfmt(sel.d)}${sel.live?' <span class="pill prov">Live</span>':''}</h2>
-        <div class="sub">${sel.live?'Value now':'Close'} ${egp(sel.value)} EGP · previous close ${egp(sel.prevValue)} EGP (${dfmt(sel.prev)})${Math.abs(sel.flow)>0.5?` · ${sel.flow>0?'deposit':'withdrawal'} ${egp(Math.abs(sel.flow))} EGP`:''}${sel.benchRet!=null?` · EGX30 Capped ${pct(sel.benchRet,2)}`:''}</div></div>
+      <div class="phead" style="margin-bottom:8px"><div><h2 style="font-size:17px">${WD3[new Date(sel.d+'T12:00:00Z').getUTCDay()]} ${dfmt(sel.d)}${sel.live?' '+livePill():''}</h2>
+        <div class="sub">${sel.live?(pricesLive()?'Value now':'Saved value'):'Close'} ${egp(sel.value)} EGP · previous close ${egp(sel.prevValue)} EGP (${dfmt(sel.prev)})${Math.abs(sel.flow)>0.5?` · ${sel.flow>0?'deposit':'withdrawal'} ${egp(Math.abs(sel.flow))} EGP`:''}${sel.benchRet!=null?` · EGX30 Capped ${pct(sel.benchRet,2)}`:''}</div></div>
         <div style="text-align:right"><div class="num ${sgn(sel.pnl)}" style="font-size:22px;font-weight:700" data-testid="pl-detail-pnl">${plFull(sel.pnl)} <small class="muted" style="font-size:12px;font-weight:500">EGP</small></div><div class="muted num">${pct(sel.ret,2)}</div></div></div>
       ${shown.length?`<div class="tbl"><table data-testid="pl-movers"><thead><tr><th>What moved it</th><th class="n">Price change</th><th class="n">P/L (EGP)</th></tr></thead><tbody>
         ${shown.map(x=>`<tr><td>${x.symbol?`<span class="sym">${esc(x.symbol)}</span> `:''}<span class="ink2${x.symbol?' plname':''}">${esc(x.name)}</span>${x.traded?' <span class="pill prov" title="Bought, sold or paid a dividend that day; its cash is included">traded</span>':''}</td><td class="n">${x.chg!=null?`<span class="${sgn(x.chg)}">${pct(x.chg,2)}</span>`:'—'}</td><td class="n ${sgn(x.v)}">${plFull(x.v)}</td></tr>`).join('')}
@@ -154,13 +154,13 @@ function vDailyPL(){
   </div>
   <div class="grid g2">
     <div class="panel"><div class="phead"><div><h2>Value at each close</h2><div class="sub">${M(mo)} · holdings × closing prices + cash; jumps on deposit days</div></div></div>
-      ${chartSlot('ch-pl-value',{kind:'line',title:'Portfolio value at each session close',labels,series:[{name:'Value',color:C.s1(),values:mrows.map(r=>r.value)}],yFmt:egpAxis,minZero:false,tipLabel:i=>dfmt(mrows[i].d)+(mrows[i].live?' · live':''),tipExtra:i=>`<div>P/L <b>${plFull(mrows[i].pnl)} EGP</b></div>`},220)}</div>
+      ${chartSlot('ch-pl-value',{kind:'line',title:'Portfolio value at each session close',labels,series:[{name:'Value',color:C.s1(),values:mrows.map(r=>r.value)}],yFmt:egpAxis,minZero:false,tipLabel:i=>dfmt(mrows[i].d)+(mrows[i].live?(pricesLive()?' · live':' · saved'):''),tipExtra:i=>`<div>P/L <b>${plFull(mrows[i].pnl)} EGP</b></div>`},220)}</div>
     <div class="panel"><div class="phead"><div><h2>Daily P/L</h2><div class="sub">${M(mo)} · EGP per session</div></div></div>
-      ${chartSlot('ch-pl-bars',{kind:'bar',title:'Daily profit or loss',labels,series:[{name:'P/L',colorFn:v=>v>=0?C.pos():C.neg(),values:mrows.map(r=>r.pnl)}],yFmt:egpAxis,tipLabel:i=>dfmt(mrows[i].d)+(mrows[i].live?' · live':''),tipExtra:i=>`<div>Return <b>${pct(mrows[i].ret,2)}</b></div>`},220)}</div>
+      ${chartSlot('ch-pl-bars',{kind:'bar',title:'Daily profit or loss',labels,series:[{name:'P/L',colorFn:v=>v>=0?C.pos():C.neg(),values:mrows.map(r=>r.pnl)}],yFmt:egpAxis,tipLabel:i=>dfmt(mrows[i].d)+(mrows[i].live?(pricesLive()?' · live':' · saved'):''),tipExtra:i=>`<div>Return <b>${pct(mrows[i].ret,2)}</b></div>`},220)}</div>
   </div>
   <div class="panel"><details data-testid="pl-table-toggle"><summary style="cursor:pointer;font-weight:600">Day-by-day table · ${M(mo)}</summary>
     <div class="tbl" style="margin-top:10px"><table data-testid="pl-table"><thead><tr><th>Session</th><th class="n">Value at close</th><th class="n">Deposits / withdrawals</th><th class="n">P/L (EGP)</th><th class="n">Return</th><th class="n">EGX30 Capped</th></tr></thead><tbody>
-    ${mrows.map(r=>`<tr><td>${WD3[new Date(r.d+'T12:00:00Z').getUTCDay()]} ${dfmt(r.d)}${r.live?' <span class="pill prov">Live</span>':''}</td><td class="n">${egp(r.value)}</td><td class="n">${Math.abs(r.flow)>0.5?egp(r.flow):'—'}</td><td class="n ${sgn(r.pnl)}">${egp(r.pnl)}</td><td class="n ${sgn(r.ret)}">${pct(r.ret,2)}</td><td class="n ${sgn(r.benchRet)}">${r.benchRet!=null?pct(r.benchRet,2):'—'}</td></tr>`).join('')}
+    ${mrows.map(r=>`<tr><td>${WD3[new Date(r.d+'T12:00:00Z').getUTCDay()]} ${dfmt(r.d)}${r.live?' '+livePill():''}</td><td class="n">${egp(r.value)}</td><td class="n">${Math.abs(r.flow)>0.5?egp(r.flow):'—'}</td><td class="n ${sgn(r.pnl)}">${egp(r.pnl)}</td><td class="n ${sgn(r.ret)}">${pct(r.ret,2)}</td><td class="n ${sgn(r.benchRet)}">${r.benchRet!=null?pct(r.benchRet,2):'—'}</td></tr>`).join('')}
     </tbody><tfoot><tr><td>${M(mo)}</td><td class="n">${egp(endR.value)}</td><td class="n">${Math.abs(flows)>0.5?egp(flows):'—'}</td><td class="n ${sgn(tot)}">${egp(tot)}</td><td class="n ${sgn(mret)}">${pct(mret,2)}</td><td class="n">${bret!=null?pct(bret,2):'—'}</td></tr></tfoot></table></div></details></div>
   </div>`;
 }
@@ -211,7 +211,7 @@ function vAttribution(){
     <div class="legend"><span><i class="sq" style="background:var(--s1)"></i>Allocation</span><span><i class="sq" style="background:var(--s2)"></i>Selection</span><span><i class="sq" style="background:var(--s3)"></i>Trading</span></div></div>
     ${chartSlot('ch-attr',{kind:'bar',title:'Monthly attribution',labels,series:[{name:'Allocation',color:C.s1(),values:A.months.map(m=>m.alloc)},{name:'Selection',color:C.s2(),values:A.months.map(m=>m.sel)},{name:'Trading',color:S3(),values:A.months.map(m=>m.trading)}],yFmt:pctAxis,tipExtra:i=>`<div>Active <b>${pct(A.months[i].R-A.months[i].B,2)}</b></div>`},250)}
     <div class="tbl" style="margin-top:12px"><table><thead><tr><th>Month</th><th class="n">Portfolio</th><th class="n">EGX30 Capped</th><th class="n">Active</th><th class="n">Allocation</th><th class="n">Selection</th><th class="n">Trading</th><th class="n">Model gap</th><th class="n">Model index</th></tr></thead><tbody>
-    ${A.months.map(m=>`<tr><td>${M(m.month)}${m.live?' <span class="pill prov">Live</span>':''}</td><td class="n ${sgn(m.R)}">${pct(m.R)}</td><td class="n ${sgn(m.B)}">${pct(m.B)}</td><td class="n ${sgn(m.R-m.B)}">${pct(m.R-m.B,2)}</td><td class="n">${pct(m.alloc,2)}</td><td class="n">${pct(m.sel,2)}</td><td class="n">${pct(m.trading,2)}</td><td class="n">${pct(m.replication,2)}</td><td class="n">${pct(m.Bs)}</td></tr>`).join('')}
+    ${A.months.map(m=>`<tr><td>${M(m.month)}${m.live?' '+livePill():''}</td><td class="n ${sgn(m.R)}">${pct(m.R)}</td><td class="n ${sgn(m.B)}">${pct(m.B)}</td><td class="n ${sgn(m.R-m.B)}">${pct(m.R-m.B,2)}</td><td class="n">${pct(m.alloc,2)}</td><td class="n">${pct(m.sel,2)}</td><td class="n">${pct(m.trading,2)}</td><td class="n">${pct(m.replication,2)}</td><td class="n">${pct(m.Bs)}</td></tr>`).join('')}
     </tbody></table></div></div>
   <div class="grid g2">
     <div class="panel"><div class="phead"><div><h2>EGX30 Capped model weights</h2><div class="sub">Free-float market cap, each stock capped at ${pct((S.bench.capWeight||0.15),0,false)}</div></div></div>
@@ -257,12 +257,81 @@ function vIncome(){
       <p class="note" style="margin:10px 0 0">Dividend yield is TradingView's trailing yield, refreshed with prices after each session. Expected income is an estimate, not a declared dividend.</p></div>
   </div>
   ${declaredDividends()}
+  ${divCalendar()}
   <div class="panel"><div class="phead"><div><h2>Yearly summary</h2><div class="sub">Trading costs are the commission inside each buy and sell (net amount minus price × shares); they are already in the trade amounts, so they are shown here, not deducted again</div></div></div>
     <div class="tbl"><table data-testid="income-yearly"><thead><tr><th>Year</th><th class="n">Dividends</th><th class="n">Rebates</th><th class="n">Fees</th><th class="n">Net income</th><th class="n">Trading costs</th></tr></thead><tbody>
     ${I.years.map(Y=>`<tr><td>${Y.year}</td><td class="n">${egp(Y.divT)}</td><td class="n">${egp(Y.rebT)}</td><td class="n neg">${egp(Y.feeT)}</td><td class="n ${sgn(Y.net)}"><b>${egp(Y.net)}</b></td><td class="n neg" data-testid="income-trading-costs">${egp(-(costsByYear[Y.year]||0))}</td></tr>`).join('')}
     </tbody></table></div></div>`;
 }
 
+// ---------- Holdings → Income: dividend calendar for the next 12 months (current month + 11) ----------
+// Only stocks held now, at the shares held now. Three kinds of line:
+//  declared  — market/latest quote: exDate/divUp (next ex-date and amount per share, from TradingView); also exRecent/divRecent
+//              when that ex-date falls in the current month and the cash has not been credited yet. Dated by ex-date.
+//  estimated — each Dividend row of the 12 calendar months before this one, per share = amount ÷ shares held before the day it
+//              was credited (the last positive holding if it had been sold by then); projected to the same month a year later at that per-share amount × shares held now. Skipped when
+//              a declared dividend covers the same stock and month, or when the stock already paid in that month this year.
+//  unscheduled — a held stock with no dividend in those 12 months and no declared one, but a trailing yield on its quote:
+//              price × yield × shares, timing unknown.
+const divCalA = () => an('divcal', () => {
+  const R = S.R, q = (S.market && S.market.quotes) || {}, today = R.today, cur = PE.monthOf(today);
+  const months = Array.from({ length: 12 }, (_, k) => PE.addMonths(cur, k)), inWin = new Set(months);
+  const from = PE.addMonths(cur, -12), to = PE.addMonths(cur, -1);
+  const held = R.pos.open.filter(r => r.symbol && r.symbol !== 'SAVINGS' && r.open > 0);
+  const byKey = new Map(); held.forEach(r => { byKey.set(r.name, r); byKey.set(r.symbol, r); });
+  const led = PE.sortLedger(R.ledger);
+  // shares entitled: the holding before the day the cash was credited; when the stock was sold between the ex-date and the
+  // payment (the holding is 0 by then), the last positive holding before the payment
+  const sharesBefore = (name, sym, d) => { let sh = 0, last = 0; led.forEach(t => { if(t.d < d && (t.a === name || (sym && t.a === sym)) && (t.t === 'Buy' || t.t === 'Sell' || t.t === 'Bonus')) { sh += (t.t === 'Sell' ? -1 : 1) * (t.q || 0); if(sh > 0.5) last = sh; } }); return sh > 0.5 ? sh : last; };
+  const lines = [], declared = new Set(), paidNow = new Set(), paid12 = new Set(), est = {};
+  held.forEach(r => { const x = q[r.symbol]; if(!x) return;
+    if(x.exDate && x.divUp > 0 && x.exDate >= today && inWin.has(x.exDate.slice(0, 7))) { lines.push({ kind: 'declared', m: x.exDate.slice(0, 7), sym: r.symbol, name: r.name, ps: x.divUp, sh: r.open, egp: x.divUp * r.open, ex: x.exDate }); declared.add(r.symbol + '|' + x.exDate.slice(0, 7)); }
+    if(x.exRecent && x.divRecent > 0 && x.exRecent.slice(0, 7) === cur && x.exRecent !== x.exDate) {
+      const got = R.ledger.some(t => t.t === 'Dividend' && (t.a === r.name || t.a === r.symbol) && t.d >= x.exRecent);
+      if(!got) { lines.push({ kind: 'declared', m: cur, sym: r.symbol, name: r.name, ps: x.divRecent, sh: r.open, egp: x.divRecent * r.open, ex: x.exRecent, awaiting: true }); declared.add(r.symbol + '|' + cur); } } });
+  R.ledger.forEach(t => { if(t.t !== 'Dividend' || !t.a || !(t.amt > 0)) return; const r = byKey.get(t.a); if(!r) return; const m = t.d.slice(0, 7);
+    if(m === cur) paidNow.add(r.symbol);
+    if(m < from || m > to) return;
+    paid12.add(r.symbol);
+    const sh = sharesBefore(r.name, r.symbol, t.d); if(!(sh > 0.5)) return;
+    const k = r.symbol + '|' + m, e = est[k] || (est[k] = { r, m0: m, ps: 0, paid: 0, n: 0 }); e.ps += t.amt / sh; e.paid += t.amt; e.n++; });
+  Object.values(est).forEach(e => { const m = PE.addMonths(e.m0, 12);
+    if(declared.has(e.r.symbol + '|' + m) || (m === cur && paidNow.has(e.r.symbol))) return;
+    lines.push({ kind: 'estimated', m, sym: e.r.symbol, name: e.r.name, ps: e.ps, sh: e.r.open, egp: e.ps * e.r.open, from: e.m0, paid: e.paid }); });
+  const hasDecl = new Set(lines.filter(l => l.kind === 'declared').map(l => l.sym));
+  const unscheduled = held.filter(r => !paid12.has(r.symbol) && !hasDecl.has(r.symbol) && q[r.symbol] && q[r.symbol].dy > 0 && r.price > 0)
+    .map(r => ({ kind: 'yield', sym: r.symbol, name: r.name, dy: q[r.symbol].dy / 100, sh: r.open, price: r.price, egp: r.price * q[r.symbol].dy / 100 * r.open })).sort((a, b) => b.egp - a.egp);
+  const rows = months.map(m => { const L = lines.filter(l => l.m === m).sort((a, b) => b.egp - a.egp);
+    const dec = L.filter(l => l.kind === 'declared').reduce((s, l) => s + l.egp, 0), es = L.filter(l => l.kind === 'estimated').reduce((s, l) => s + l.egp, 0);
+    return { m, lines: L, declared: dec, estimated: es, total: dec + es }; });
+  const unsch = unscheduled.reduce((s, l) => s + l.egp, 0), sched = rows.reduce((s, r) => s + r.total, 0);
+  const cash = R.liveCash ?? R.settings.cash ?? 0, value = R.pos.mvTotal + Math.max(0, cash);
+  return { months: rows, unscheduled, unsch, sched, total: sched + unsch, declared: rows.reduce((s, r) => s + r.declared, 0), estimated: rows.reduce((s, r) => s + r.estimated, 0),
+    value, yield: value ? (sched + unsch) / value : null, from, to };
+});
+function divCalendar(){
+  const D = divCalA(); if(!D) return '';
+  const ps = (x) => num(x, x < 0.1 ? 4 : 3);
+  const line = (l) => `<li class="dcl" data-testid="div-cal-line" data-kind="${l.kind}" data-sym="${esc(l.sym)}" data-egp="${l.egp}" data-ps="${l.ps}" data-sh="${l.sh}">
+      <span class="sym">${esc(l.sym)}</span><span class="dcl-v num">${egp(l.egp)}</span>
+      <span class="dcl-d">${ps(l.ps)} a share × ${num(l.sh, 0)} · ${l.kind === 'declared' ? `<span class="pill auto">declared</span> ex ${dfmt(l.ex)}${l.awaiting ? ' · went ex, awaiting credit' : ''}` : `<span class="pill man" title="Paid ${egp(l.paid)} EGP in ${M(l.from)}; assumes the same amount a share this year">estimated from last year</span>`}</span></li>`;
+  const labels = D.months.map(r => Ms(r.m));
+  return `<div class="panel" data-testid="div-cal"><div class="phead"><div><h2>Dividend calendar · next 12 months</h2><div class="sub">${M(D.months[0].m)} – ${M(D.months[11].m)} · stocks you hold now, at the shares you hold now</div></div>
+    <div class="legend"><span><i class="sq" style="background:var(--s1)"></i>Declared</span><span><i class="sq" style="background:var(--s3)"></i>Estimated from last year</span></div></div>
+    <div class="kpis dckpis" style="margin-bottom:14px">
+      <div data-testid="div-cal-total" data-egp="${D.total}" style="display:contents">${kpi('Expected, next 12 months', egp(D.total), `declared ${egp(D.declared)} · estimated ${egp(D.estimated)}${D.unsch ? ` · timing unknown ${egp(D.unsch)}` : ''}`, 'hero', 'EGP')}</div>
+      <div data-testid="div-cal-yield" style="display:contents">${kpi('Implied yield', pct(D.yield, 2, false), `on today's portfolio value of ${egp(D.value)} EGP (holdings + cash)`)}</div>
+    </div>
+    ${chartSlot('div-cal-chart', { kind: 'bar', title: 'Expected dividend income by month', labels, series: [{ name: 'Declared', color: C.s1(), values: D.months.map(r => r.declared) }, { name: 'Estimated', color: S3(), values: D.months.map(r => r.estimated) }], yFmt: egpAxis, tipLabel: (i) => M(D.months[i].m), tipExtra: (i) => `<div>Total <b>${egp(D.months[i].total)} EGP</b></div>` }, 210)}
+    <div class="dcgrid" style="margin-top:14px">${D.months.map(r => `<div class="dcm${r.total > 0.5 ? '' : ' none'}" data-testid="div-cal-month-${r.m}" data-total="${r.total}" data-declared="${r.declared}" data-estimated="${r.estimated}">
+      <div class="dcm-h"><b>${M(r.m)}</b><span class="num" data-testid="div-cal-month-${r.m}-total">${r.total > 0.5 ? egp(r.total) + ' <small>EGP</small>' : '—'}</span></div>
+      ${r.lines.length ? `${r.declared > 0.5 && r.estimated > 0.5 ? `<div class="dcm-s">declared ${egp(r.declared)} · estimated ${egp(r.estimated)}</div>` : ''}<ul>${r.lines.map(line).join('')}</ul>` : '<div class="dcm-s">Nothing expected</div>'}</div>`).join('')}</div>
+    ${D.unscheduled.length ? `<div class="dcm dcun" data-testid="div-cal-unscheduled" data-total="${D.unsch}"><div class="dcm-h"><b>Unscheduled</b><span class="num">${egp(D.unsch)} <small>EGP</small></span></div>
+      <div class="dcm-s">Paid you nothing in the last 12 months but has a trailing yield: yield-based estimate, timing unknown</div>
+      <ul>${D.unscheduled.map(l => `<li class="dcl" data-testid="div-cal-line" data-kind="yield" data-sym="${esc(l.sym)}" data-egp="${l.egp}" data-sh="${l.sh}"><span class="sym">${esc(l.sym)}</span><span class="dcl-v num">${egp(l.egp)}</span><span class="dcl-d">${num(l.price, 2)} × ${pct(l.dy, 2, false)} yield × ${num(l.sh, 0)} shares · <span class="pill stale">yield-based estimate, timing unknown</span></span></li>`).join('')}</ul></div>` : ''}
+    <p class="note" style="margin:10px 0 0" data-testid="div-cal-note">Estimates assume each stock pays the same amount a share in the same month as it did in ${M(D.from)} – ${M(D.to)}, and that you still hold what you hold today. Declared dividends and yields come from TradingView with the prices. Amounts are before any tax withheld at payment; the 12-month total is the months plus the unscheduled estimate.</p>
+  </div>`;
+}
 function declaredDividends(){
   const q=(S.market&&S.market.quotes)||{}; const today=S.R.today; const rows=[];
   S.R.pos.open.forEach(r=>{ const x=r.symbol&&q[r.symbol]; if(!x) return;
@@ -379,7 +448,7 @@ function vFactsheet(){
   if(window.pdExports && S.exportsList===null){ S.exportsList=false; window.pdExports().then(l=>{ S.exportsList=Array.isArray(l)?l:[]; if(S.tab==='reports') renderTab(false); }).catch(()=>{ S.exportsList=[]; }); }
   const ex = Array.isArray(S.exportsList) ? S.exportsList.find(x=>x.month===S.fsMonth) : null;
   return `<div class="panel"><div class="phead"><div><h2>Monthly factsheet</h2><div class="sub">A one-page report in the format fund managers publish each month</div></div>
-    <div class="row"><label class="ink2" style="font-size:12px">Month <select id="fs-month" data-testid="factsheet-month">${months.map(m=>`<option value="${m}" ${m===S.fsMonth?'selected':''}>${M(m)}${S.R.months.find(r=>r.month===m).live?' (live)':''}</option>`).join('')}</select></label>
+    <div class="row"><label class="ink2" style="font-size:12px">Month <select id="fs-month" data-testid="factsheet-month">${months.map(m=>`<option value="${m}" ${m===S.fsMonth?'selected':''}>${M(m)}${S.R.months.find(r=>r.month===m).live?liveParen():''}</option>`).join('')}</select></label>
     <button class="btn" id="fs-dl" data-testid="factsheet-download">Download HTML</button>
     ${window.pdDownloadExport?`<button class="btn" id="fs-xlsx" data-testid="factsheet-excel" data-month="${S.fsMonth}">Download Excel</button>`:''}${window.pdDownloadExport&&ex&&ex.pdf?`<button class="btn" id="fs-pdf" data-testid="factsheet-pdf" data-month="${S.fsMonth}">Download PDF</button>`:''}
     <button class="btn primary" id="fs-email" data-testid="factsheet-email" ${email?'':'disabled'} title="${email?'Send to '+esc(email):'Set an email address under Settings → Inputs &amp; settings'}">Email to me</button></div></div>
@@ -660,3 +729,270 @@ function analysisPanel(c){
     ${winners.length||losers.length?`<p class="note" style="margin-top:10px">Unrealized today: ${winners.length?`winners ${list(winners.slice(0,3),h=>`${sym(h)} +${egp(h.unreal)}`)}`:''}${winners.length&&losers.length?' · ':''}${losers.length?`losers ${list(losers.slice(0,3),h=>`${sym(h)} −${egp(Math.abs(h.unreal))}`)}`:''} (EGP).</p>`:''}
   </div>`;
 }
+
+// ---------- Analysis: What if (a trade planner; hypothetical only: nothing is traded, and nothing goes to the database) ----------
+// The plan is a list of lines: Sell / Buy (shares, % of the holding for sells, or EGP) and Deposit (EGP), applied in order at
+// the latest prices. Held positions keep the price the Holdings tab values them at (the live quote for listed stocks, the
+// position price for funds); a stock not held uses its market quote. Commission = the portfolio's own average trading cost
+// (st.costPct, commission ÷ value traded over the selected period; 0.15% when there is none) on every stock buy and sell; funds
+// carry none, as in the engine. Before and After run through one function (wiMetrics), so an empty plan gives After = Before.
+// The draft is kept in this browser only (localStorage 'pd.whatif.<portfolioId>').
+const WI_COST_DEFAULT = 0.0015;
+const wiKey = () => 'pd.whatif.' + (currentPortfolioId() || 'default');
+const wiClean = (x) => ({ side: ['sell','buy','dep'].includes(x && x.side) ? x.side : 'buy', key: String((x && x.key) ?? '').slice(0, 120),
+  mode: ['shares','pct','egp'].includes(x && x.mode) ? x.mode : 'egp', amt: String((x && x.amt) ?? '').slice(0, 24) });
+function wiLines(){
+  const k = wiKey();
+  if(!S.whatif || S.whatif.key !== k){ let lines = [];
+    try{ const v = JSON.parse(localStorage.getItem(k) || 'null'); if(Array.isArray(v)) lines = v.slice(0, 40).map(wiClean); }catch(e){}
+    S.whatif = { key: k, lines }; }
+  return S.whatif.lines;
+}
+function wiSave(){ try{ const l = S.whatif.lines; if(l.length) localStorage.setItem(S.whatif.key, JSON.stringify(l)); else localStorage.removeItem(S.whatif.key); }catch(e){} }
+const wiNum = (s) => { const v = parseFloat(String(s ?? '').replace(/[,\s]/g, '')); return isFinite(v) ? v : null; };
+const wiRate = () => { const c = S.R && S.R.stats && S.R.stats.costPct; return c != null && isFinite(c) && c > 0 ? { rate: c, own: true } : { rate: WI_COST_DEFAULT, own: false }; };
+// per-symbol beta: the same 12-month daily regression the "Each holding's risk" table uses (betaOf), cached per engine run
+function wiBeta(sym){ if(!sym) return null; const m = an('wibeta', () => new Map()); if(!m.has(sym)){ const pb = pbook(); const b = pb.has(sym) ? betaOf(pb, sym) : null; m.set(sym, b && b.beta != null && isFinite(b.beta) ? b.beta : null); } return m.get(sym); }
+function wiQuotes(){ return (S.market && S.market.quotes) || {}; }
+// resolve what was typed in a Buy line: a symbol ("abuk", "ABUK · Abou Kir…") or a company's exact name
+function wiResolve(txt){
+  const q = wiQuotes(), t = String(txt || '').trim(); if(!t) return null;
+  const tok = t.split(/[\s·—-]+/)[0].toUpperCase(); if(q[tok]) return tok;
+  const lo = t.toLowerCase(); const hit = Object.keys(q).find(s => String(q[s].name || '').toLowerCase() === lo); return hit || null;
+}
+// the positions as they stand, one object each, in a Map keyed 'h:<asset name>' (held) or 's:<symbol>' (a new buy)
+function wiPositions(){
+  const R = S.R, q = wiQuotes(), P = new Map();
+  R.pos.open.forEach(r => { const a = S.assets[r.name] || {}, x = r.symbol ? q[r.symbol] : null;
+    P.set('h:' + r.name, { id: 'h:' + r.name, name: r.name, symbol: r.symbol || '', sector: r.sector || 'Unclassified', held: true,
+      shares: r.open, price: r.price > 0 ? r.price : null, cost: r.openCost || 0, noCost: !!a.fund || !r.symbol || r.symbol === 'SAVINGS',
+      whole: !(a.fund || !r.symbol || r.symbol === 'SAVINGS'), beta: wiBeta(r.symbol), dy: x && x.dy != null ? x.dy / 100 : null,
+      pe: x && x.pe != null && isFinite(x.pe) ? x.pe : null, sh0: r.open }); });
+  return P;
+}
+function wiSectorOf(sym){
+  const a = Object.values(S.assets || {}).find(x => x.symbol === sym); if(a && a.sector) return a.sector;
+  const m = ((S.bench && S.bench.members) || []).find(x => x.s === sym); return (m && m.sector) || 'Unclassified';
+}
+// the metrics of one state of the book (Before or After): same arithmetic for both
+function wiMetrics(list, cash){
+  const rows = list.filter(p => p.shares > 1e-9).map(p => ({ ...p, mv: p.price > 0 ? p.shares * p.price : 0 }));
+  const sec = rows.reduce((s, p) => s + p.mv, 0), total = sec + cash;
+  rows.forEach(p => { p.w = total ? p.mv / total : 0; });
+  const ws = rows.map(p => p.w).sort((a, b) => b - a);
+  const hhi = sec ? rows.reduce((s, p) => s + (p.mv / sec) ** 2, 0) : 0;
+  const unknown = rows.filter(p => p.beta == null && p.mv > 0);
+  const beta = rows.reduce((s, p) => s + p.w * (p.beta == null ? 1 : p.beta), 0);
+  const withDy = rows.filter(p => p.symbol && p.symbol !== 'SAVINGS' && p.dy != null);
+  const div = withDy.reduce((s, p) => s + p.dy * p.mv, 0);
+  const withPe = rows.filter(p => p.pe != null && p.pe > 0 && p.mv > 0), peMv = withPe.reduce((s, p) => s + p.mv, 0), earn = withPe.reduce((s, p) => s + p.mv / p.pe, 0);
+  const sectors = {}; rows.forEach(p => { sectors[p.sector] = (sectors[p.sector] || 0) + p.mv; });
+  if(cash > 0) sectors['Cash & Savings'] = (sectors['Cash & Savings'] || 0) + cash;
+  let active = null; try{ active = S.bench ? PA.activeWeights({ open: rows.map(p => ({ sector: p.sector, mv: p.mv })), mvTotal: sec }, S.bench, pbook(), cash) : null; }catch(e){ console.error(e); }
+  return { rows, sec, cash, total, cashPct: total ? cash / total : null, count: rows.length, largest: ws[0] || 0, largestRow: rows.slice().sort((a, b) => b.mv - a.mv)[0] || null,
+    top5: ws.slice(0, 5).reduce((s, w) => s + w, 0), hhi, eff: hhi ? 1 / hhi : null, beta, unknownN: unknown.length, unknownW: unknown.reduce((s, p) => s + p.w, 0),
+    div, divCover: sec ? withDy.reduce((s, p) => s + p.mv, 0) / sec : 0, pe: earn > 0 ? peMv / earn : null, peCover: sec ? peMv / sec : 0, peN: withPe.length, sectors, active };
+}
+// apply the plan line by line; returns the per-line outcome and the Before/After metrics
+function wiCompute(lines){
+  const R = S.R, q = wiQuotes(), P = wiPositions(), { rate } = wiRate();
+  const cash0 = R.liveCash ?? R.settings.cash ?? 0; let cash = cash0, dep = 0;
+  const before = wiMetrics([...P.values()].map(p => ({ ...p })), cash0);
+  const out = (lines || []).map((L, i) => {
+    const o = { i, side: L.side, ok: false, msg: '' }, a = wiNum(L.amt);
+    if(L.side === 'dep'){ if(a == null || a <= 0){ o.msg = L.amt.trim() ? 'Enter a positive amount' : 'Enter an amount'; return o; } cash += a; dep += a; o.ok = true; o.value = a; o.cashAfter = cash; return o; }
+    let p = null;
+    if(L.side === 'sell') p = L.key ? P.get('h:' + L.key) : null;
+    else { const sym = wiResolve(L.key); if(sym){ p = [...P.values()].find(x => x.symbol === sym && (x.held || x.id === 's:' + sym)) || null;
+        if(!p){ const x = q[sym]; p = { id: 's:' + sym, name: x.name || sym, symbol: sym, sector: wiSectorOf(sym), held: false, shares: 0, price: x.price > 0 ? x.price : null, cost: 0,
+          noCost: sym === 'SAVINGS', whole: sym !== 'SAVINGS', beta: wiBeta(sym), dy: x.dy != null ? x.dy / 100 : null, pe: x.pe != null && isFinite(x.pe) ? x.pe : null, sh0: 0 }; P.set(p.id, p); } } }
+    if(!p){ o.msg = L.side === 'sell' ? 'Choose a holding' : L.key.trim() ? 'No quote for that symbol — pick one from the list' : 'Type a symbol or company name'; return o; }
+    o.name = p.name; o.symbol = p.symbol; o.price = p.price;
+    if(!(p.price > 0)){ o.msg = 'No price for this holding'; return o; }
+    if(a == null || a <= 0){ o.msg = L.amt.trim() ? 'Enter a positive amount' : 'Enter an amount'; return o; }
+    if(L.side === 'sell' && !(p.shares > 1e-9)){ o.msg = 'Already sold out earlier in the plan'; return o; }
+    let sh = L.mode === 'shares' ? a : L.mode === 'pct' && L.side === 'sell' ? p.shares * Math.min(a, 100) / 100 : a / p.price;
+    if(L.mode === 'pct' && L.side === 'sell' && a >= 100) sh = p.shares;
+    else if(p.whole && L.mode !== 'shares') sh = Math.floor(sh + 1e-9);   // EGX trades whole shares
+    if(L.side === 'sell' && sh > p.shares + 1e-9){ sh = p.shares; o.capped = true; }
+    if(!(sh > 0)){ o.msg = 'Less than one share at this price'; return o; }
+    const value = sh * p.price, fee = p.noCost ? 0 : value * rate;
+    o.shares = sh; o.value = value; o.fee = fee; o.ok = true;
+    if(L.side === 'sell'){ const avg = p.shares > 0 ? p.cost / p.shares : 0, basis = avg * sh;
+      o.avgCost = avg; o.proceeds = value - fee; o.realized = o.proceeds - basis; o.soldOut = sh >= p.shares - 1e-9;
+      p.cost = o.soldOut ? 0 : p.cost - basis; p.shares = o.soldOut ? 0 : p.shares - sh; cash += o.proceeds; }
+    else { o.outlay = value + fee; p.shares += sh; p.cost += o.outlay; cash -= o.outlay; }
+    o.cashAfter = cash; return o;
+  });
+  const after = wiMetrics([...P.values()], cash);
+  const sells = out.filter(o => o.ok && o.side === 'sell'), buys = out.filter(o => o.ok && o.side === 'buy');
+  return { lines: out, before, after, P, cash0, cash, dep, rate, realized: sells.reduce((s, o) => s + o.realized, 0), fees: out.reduce((s, o) => s + (o.ok && o.fee ? o.fee : 0), 0),
+    sold: sells.reduce((s, o) => s + o.proceeds, 0), bought: buys.reduce((s, o) => s + o.outlay, 0), shortfall: cash < -0.005 ? -cash : 0 };
+}
+const wiSigned = (x, dp=0) => Math.abs(x) < 0.5 * Math.pow(10, -dp) ? '0' : (x < 0 ? '−' : '+') + egp(Math.abs(x), dp);
+const wiPp = (x) => x == null || !isFinite(x) ? '—' : Math.abs(x) < 0.0005 ? '0.0 pp' : (x < 0 ? '−' : '+') + nf(1).format(Math.abs(x) * 100) + ' pp';
+function wiLineInfo(o, L){
+  if(!o.ok) return `<span class="wi-msg">${esc(o.msg)}</span>`;
+  if(L.side === 'dep') return `Adds <b>${egp(o.value)}</b> EGP to cash`;
+  const sh = num(o.shares, o.shares % 1 ? 4 : 0);
+  if(L.side === 'sell') return `${sh} shares × ${num(o.price, 2)} = <b>${egp(o.value)}</b> EGP · commission ${egp(o.fee, 2)} · realized <b class="${sgn(o.realized)}">${wiSigned(o.realized)}</b>${o.soldOut ? ' · <span class="pill loss">sells all</span>' : ''}${o.capped ? ' · <span class="pill stale" title="More than you hold: capped at the whole holding">capped</span>' : ''}`;
+  return `${sh} shares × ${num(o.price, 2)} = <b>${egp(o.value)}</b> EGP + commission ${egp(o.fee, 2)} · uses ${egp(o.outlay)} EGP`;
+}
+function wiLineHtml(L, i, o, held){
+  const tid = `whatif-line-${i}`;
+  if(L.side === 'dep') return `<div class="wiline dep" data-wi="${i}" data-testid="${tid}">
+    <span class="wi-n">${i + 1}</span><span class="wi-side wi-deplbl" data-testid="${tid}-side" data-side="dep">Deposit</span>
+    <label class="wi-amt"><span class="sr">Deposit amount in EGP</span><input type="text" inputmode="decimal" autocomplete="off" data-wi-f="amt" data-testid="${tid}-amount" placeholder="EGP" value="${esc(L.amt)}"></label>
+    <div class="wi-info" data-wi-info="${i}" data-testid="${tid}-info">${wiLineInfo(o, L)}</div>
+    <button type="button" class="btn sm wi-del" data-wi-del="${i}" data-testid="${tid}-remove" aria-label="Remove line ${i + 1}">✕</button></div>`;
+  const sell = L.side === 'sell';
+  const stock = sell ? `<select data-wi-f="key" data-testid="${tid}-stock" aria-label="Holding to sell"><option value="">Choose a holding…</option>${held.map(r => `<option value="${esc(r.name)}" ${r.name === L.key ? 'selected' : ''}>${esc(r.symbol ? r.symbol + ' · ' + r.name : r.name)}</option>`).join('')}</select>`
+    : `<input type="text" list="wi-syms" autocomplete="off" autocapitalize="characters" spellcheck="false" data-wi-f="key" data-testid="${tid}-stock" aria-label="Stock to buy: symbol or company name" placeholder="Symbol or company, e.g. COMI" value="${esc(L.key)}">`;
+  const modes = [['shares', 'Shares'], ...(sell ? [['pct', '% of holding']] : []), ['egp', 'EGP']];
+  return `<div class="wiline" data-wi="${i}" data-testid="${tid}">
+    <span class="wi-n">${i + 1}</span>
+    <select class="wi-side" data-wi-f="side" data-testid="${tid}-side" aria-label="Buy or sell"><option value="sell" ${sell ? 'selected' : ''}>Sell</option><option value="buy" ${sell ? '' : 'selected'}>Buy</option></select>
+    <div class="wi-stock">${stock}</div>
+    <select class="wi-mode" data-wi-f="mode" data-testid="${tid}-mode" aria-label="Amount in">${modes.map(([v, l]) => `<option value="${v}" ${L.mode === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+    <label class="wi-amt"><span class="sr">Amount</span><input type="text" inputmode="decimal" autocomplete="off" data-wi-f="amt" data-testid="${tid}-amount" placeholder="${L.mode === 'pct' ? '% of holding' : L.mode === 'shares' ? 'Shares' : 'EGP'}" value="${esc(L.amt)}"></label>
+    <div class="wi-info" data-wi-info="${i}" data-testid="${tid}-info">${wiLineInfo(o, L)}</div>
+    <button type="button" class="btn sm wi-del" data-wi-del="${i}" data-testid="${tid}-remove" aria-label="Remove line ${i + 1}">✕</button></div>`;
+}
+function wiCashHtml(C){
+  const b = C.before, a = C.after;
+  return `<div class="wi-cash" data-testid="whatif-cash">Cash now <b class="num">${egp(C.cash0)}</b> EGP → after the plan <b class="num ${C.cash < -0.005 ? 'neg' : ''}" data-testid="whatif-cash-after">${egp(C.cash)}</b> EGP
+    ${C.sold ? ` · sells bring in ${egp(C.sold)}` : ''}${C.bought ? ` · buys use ${egp(C.bought)}` : ''}${C.dep ? ` · deposits ${egp(C.dep)}` : ''}${C.fees ? ` · commission ${egp(C.fees, 2)}` : ''}</div>
+    ${C.shortfall ? `<div class="banner wi-warn" role="alert" data-testid="whatif-cash-warning"><b>Cash would go negative: short by ${egp(C.shortfall)} EGP.</b><span>The buys cost more than your cash plus what the sells bring in. Add a deposit or sell more; the figures below assume the gap is covered on credit.</span></div>` : ''}`;
+}
+function wiResultsHtml(C){
+  const b = C.before, a = C.after, lines = wiLines();
+  const any = C.lines.some(o => o.ok);
+  const cmp = (label, tid, x, y, fmt, dfmt2, note) => `<tr data-testid="whatif-m-${tid}"><td>${label}${note ? ` <span class="muted wi-mnote">${note}</span>` : ''}</td><td class="n" data-testid="whatif-m-${tid}-before">${fmt(x)}</td><td class="n" data-testid="whatif-m-${tid}-after">${fmt(y)}</td><td class="n ink2">${x != null && y != null ? dfmt2(y - x) : '—'}</td></tr>`;
+  const P1 = (v) => pct(v, 1, false), E = (v) => egp(v), N2 = (v) => num(v, 2), N1 = (v) => num(v, 1);
+  const unkNote = (m) => m.unknownN ? `${m.unknownN} without a beta (${pct(m.unknownW, 1, false)}) counted as 1` : 'every holding has a beta';
+  // sector weights (of total value) and active weights vs EGX30 Capped, before and after
+  const secs = [...new Set([...Object.keys(b.sectors), ...Object.keys(a.sectors), ...((a.active && a.active.rows) || []).map(r => r.sector)])];
+  const wb = {}; ((a.active && a.active.rows) || []).forEach(r => { wb[r.sector] = r.wb; });
+  const sw = (m, s) => m.total ? (m.sectors[s] || 0) / m.total : 0;
+  const secRows = secs.map(s => ({ s, b: sw(b, s), a: sw(a, s), ix: wb[s] })).filter(r => r.b > 1e-6 || r.a > 1e-6 || (r.ix || 0) > 1e-6).sort((x, y) => y.a - x.a || y.b - x.b || (y.ix || 0) - (x.ix || 0));
+  const act = (m) => { const o = {}; ((m.active && m.active.rows) || []).forEach(r => { o[r.sector] = r.active; }); return o; };
+  const ab = act(b), aa = act(a);
+  const actOrder = secRows.map(r => r.s).filter(s => s in ab || s in aa).sort((x, y) => (aa[y] ?? 0) - (aa[x] ?? 0));
+  // per holding after the plan
+  const ids = new Set([...b.rows.map(p => p.id), ...a.rows.map(p => p.id)]);
+  const bw = new Map(b.rows.map(p => [p.id, p])), aw = new Map(a.rows.map(p => [p.id, p]));
+  const hold = [...ids].map(id => { const x = bw.get(id), y = aw.get(id), p = y || x;
+    const flag = !x ? 'new' : !y ? 'sold' : Math.abs(y.shares - x.shares) > 1e-9 ? (y.shares > x.shares ? 'added' : 'trimmed') : '';
+    return { id, name: p.name, symbol: p.symbol, wb: x ? x.w : 0, wa: y ? y.w : 0, va: y ? y.mv : 0, vb: x ? x.mv : 0, flag }; })
+    .sort((x, y) => (y.flag === 'sold' ? -1 : 0) - (x.flag === 'sold' ? -1 : 0) || y.va - x.va || y.vb - x.vb);
+  const FL = { new: '<span class="pill win" data-testid="whatif-flag-new">new</span>', sold: '<span class="pill loss" data-testid="whatif-flag-sold">sold out</span>', added: '<span class="pill auto">added</span>', trimmed: '<span class="pill man">trimmed</span>' };
+  const sells = C.lines.filter(o => o.ok && o.side === 'sell');
+  const wsum = a.rows.reduce((s, p) => s + p.w, 0) + (a.total ? a.cash / a.total : 0);
+  return `
+  <div class="kpis wikpis" data-testid="whatif-tiles">
+    ${kpi('Value after', egp(a.total), `before ${egp(b.total)} · ${wiSigned(a.total - b.total)} EGP (commission${C.dep ? ' and deposits' : ''})`, '', 'EGP')}
+    ${kpi('Cash after', `<span class="${a.cash < -0.005 ? 'neg' : ''}">${egp(a.cash)}</span>`, `${pct(a.cashPct, 1, false)} of the portfolio · now ${pct(b.cashPct, 1, false)}`, '', 'EGP')}
+    ${kpi('Realized P/L locked in', `<span class="${sgn(Math.abs(C.realized) < 0.5 ? 0 : C.realized)}">${wiSigned(C.realized)}</span>`, sells.length ? `on ${sells.length} sell${sells.length > 1 ? 's' : ''} vs average cost, after commission` : 'no sells in the plan', '', 'EGP')}
+    ${kpi('Beta after', num(a.beta, 2), `now ${num(b.beta, 2)} · 12-month daily, cash at 0`)}
+  </div>
+  <div class="panel"><div class="phead"><div><h2>Before and after</h2><div class="sub">Weights are of total value (holdings + cash) · HHI and effective positions use holdings only, as on Overview</div></div></div>
+    <div class="tbl"><table data-testid="whatif-compare"><thead><tr><th>Measure</th><th class="n">Before</th><th class="n">After</th><th class="n">Change</th></tr></thead><tbody>
+      ${cmp('Total value (EGP)', 'total', b.total, a.total, E, (d) => wiSigned(d))}
+      ${cmp('Holdings value (EGP)', 'sec', b.sec, a.sec, E, (d) => wiSigned(d))}
+      ${cmp('Cash (EGP)', 'cash', b.cash, a.cash, E, (d) => wiSigned(d))}
+      ${cmp('Cash share', 'cashpct', b.cashPct, a.cashPct, P1, wiPp)}
+      ${cmp('Number of holdings', 'count', b.count, a.count, (v) => String(v), (d) => (d > 0 ? '+' : d < 0 ? '−' : '') + Math.abs(d))}
+      ${cmp('Largest position', 'largest', b.largest, a.largest, P1, wiPp, a.largestRow ? esc(a.largestRow.symbol || a.largestRow.name) + ' after' : '')}
+      ${cmp('Top 5 positions', 'top5', b.top5, a.top5, P1, wiPp)}
+      ${cmp('HHI', 'hhi', b.hhi, a.hhi, (v) => num(v, 3), (d) => (d > 0 ? '+' : d < 0 ? '−' : '') + num(Math.abs(d), 3))}
+      ${cmp('Effective positions', 'eff', b.eff, a.eff, N1, (d) => (d > 0 ? '+' : d < 0 ? '−' : '') + num(Math.abs(d), 1), '1 ÷ HHI')}
+      ${cmp('Portfolio beta', 'beta', b.beta, a.beta, N2, (d) => (d > 0 ? '+' : d < 0 ? '−' : '') + num(Math.abs(d), 2), unkNote(a))}
+      ${cmp('Expected dividends a year (EGP)', 'div', b.div, a.div, E, (d) => wiSigned(d), `current yields · cover ${pct(a.divCover, 0, false)} of holdings`)}
+      ${cmp('Weighted P/E', 'pe', b.pe, a.pe, N1, (d) => (d > 0 ? '+' : d < 0 ? '−' : '') + num(Math.abs(d), 1), a.peN ? `${a.peN} holdings with a P/E, ${pct(a.peCover, 0, false)} of holdings` : 'no P/E in the quotes yet')}
+    </tbody></table></div>
+    <p class="note" style="margin:10px 0 0">Beta: each holding's 12-month daily beta against EGX30 Capped (the same figures as "Each holding's risk"), weighted by value, cash at 0; a holding with too little price history has no beta and is counted as 1. Expected dividends: each stock's trailing dividend yield from the quotes × its value. Weighted P/E: total value ÷ total earnings of the holdings that have a positive P/E.</p>
+  </div>
+  ${sells.length ? `<div class="panel"><div class="phead"><div><h2>Realized P/L the sells would lock in</h2><div class="sub">(price − average cost) × shares − commission · average cost includes the commission you paid buying</div></div></div>
+    <div class="tbl"><table data-testid="whatif-realized"><thead><tr><th>Line</th><th class="n">Shares</th><th class="n">Price</th><th class="n">Average cost</th><th class="n">Proceeds, net</th><th class="n">Commission</th><th class="n">Realized P/L</th></tr></thead><tbody>
+    ${sells.map(o => `<tr data-testid="whatif-realized-${o.i}"><td>${o.i + 1} · <span class="sym">${esc(o.symbol || o.name)}</span></td><td class="n">${num(o.shares, o.shares % 1 ? 4 : 0)}</td><td class="n">${num(o.price, 2)}</td><td class="n">${num(o.avgCost, 2)}</td><td class="n">${egp(o.proceeds, 2)}</td><td class="n">${egp(o.fee, 2)}</td><td class="n ${sgn(o.realized)}" data-testid="whatif-realized-${o.i}-pl">${wiSigned(o.realized, 2)}</td></tr>`).join('')}
+    </tbody><tfoot><tr><td>Total</td><td></td><td></td><td></td><td class="n">${egp(C.sold, 2)}</td><td class="n">${egp(sells.reduce((s, o) => s + o.fee, 0), 2)}</td><td class="n ${sgn(C.realized)}" data-testid="whatif-realized-total">${wiSigned(C.realized, 2)}</td></tr></tfoot></table></div></div>` : ''}
+  <div class="grid g2">
+    <div class="panel"><div class="phead"><div><h2>Sector weights</h2><div class="sub">Share of total value · EGX30 Capped weights replicated from its members</div></div></div>
+      <div class="tbl"><table data-testid="whatif-sectors"><thead><tr><th>Sector</th><th class="n">Before</th><th class="n">After</th><th class="n">Change</th><th class="n">Index</th></tr></thead><tbody>
+      ${secRows.map(r => `<tr><td>${esc(r.s)}</td><td class="n">${pct(r.b, 1, false)}</td><td class="n">${pct(r.a, 1, false)}</td><td class="n ${sgn(Math.abs(r.a - r.b) < 5e-4 ? 0 : r.a - r.b)}">${wiPp(r.a - r.b)}</td><td class="n muted">${r.ix != null ? pct(r.ix, 1, false) : '—'}</td></tr>`).join('')}
+      </tbody></table></div></div>
+    <div class="panel" data-testid="whatif-active"><div class="phead"><div><h2>Active weight vs EGX30 Capped</h2><div class="sub">Your sector weight minus the index's · right of the line = more than the index</div></div></div>
+      ${a.active && b.active ? `<div class="wi-bars"><div><div class="eyebrow" style="margin-bottom:8px">Before</div>${hbars(actOrder.map(s => ({ label: s, v: ab[s] ?? 0 })), (v) => wiPp(v).replace(' pp', ''))}</div>
+        <div><div class="eyebrow" style="margin-bottom:8px">After</div>${hbars(actOrder.map(s => ({ label: s, v: aa[s] ?? 0 })), (v) => wiPp(v).replace(' pp', ''))}</div></div>
+        <p class="note" style="margin:10px 0 0">Percentage points. Both columns use the same scale order (by the active weight after the plan); bar lengths are scaled within each column.</p>` : '<p class="muted">Index members are not loaded yet.</p>'}
+    </div>
+  </div>
+  <div class="panel"><div class="phead"><div><h2>Holdings after the plan</h2><div class="sub">Weight of total value before → after · ${a.count} holding${a.count === 1 ? '' : 's'} and cash</div></div></div>
+    <div class="tbl"><table data-testid="whatif-holdings"><thead><tr><th>Holding</th><th class="n">Weight before</th><th class="n">Weight after</th><th class="n">Change</th><th class="n">Value after (EGP)</th><th></th></tr></thead><tbody>
+    ${hold.map(h => `<tr data-testid="whatif-h-${esc(h.symbol || h.name)}" data-flag="${h.flag}"><td><span class="sym">${esc(h.symbol || '—')}</span> <span class="ink2 wi-hname">${esc(h.name)}</span></td><td class="n">${pct(h.wb, 1, false)}</td><td class="n" data-testid="whatif-h-w">${pct(h.wa, 1, false)}</td><td class="n ${sgn(Math.abs(h.wa - h.wb) < 5e-4 ? 0 : h.wa - h.wb)}">${wiPp(h.wa - h.wb)}</td><td class="n">${egp(h.va)}</td><td>${FL[h.flag] || ''}</td></tr>`).join('')}
+    <tr data-testid="whatif-h-cash"><td><span class="ink2">Cash</span></td><td class="n">${pct(b.cashPct, 1, false)}</td><td class="n">${pct(a.cashPct, 1, false)}</td><td class="n">${wiPp((a.cashPct || 0) - (b.cashPct || 0))}</td><td class="n ${a.cash < -0.005 ? 'neg' : ''}">${egp(a.cash)}</td><td></td></tr>
+    </tbody><tfoot><tr><td>Total</td><td class="n">${pct(b.rows.reduce((s, p) => s + p.w, 0) + (b.cashPct || 0), 1, false)}</td><td class="n" data-testid="whatif-wsum">${pct(wsum, 1, false)}</td><td></td><td class="n">${egp(a.total)}</td><td></td></tr></tfoot></table></div>
+    ${!any && lines.length ? '<p class="note" style="margin:10px 0 0">No line is complete yet, so After equals Before.</p>' : ''}
+  </div>`;
+}
+function vWhatIf(){
+  const R = S.R; if(!R || !R.pos) return `<div class="panel empty"><h2>No holdings loaded</h2></div>`;
+  const lines = wiLines(), C = wiCompute(lines), q = wiQuotes(), { rate, own } = wiRate();
+  const held = R.pos.open.filter(r => r.price > 0).slice().sort((a, b) => (b.mv || 0) - (a.mv || 0));
+  const syms = Object.keys(q).filter(s => q[s] && q[s].price > 0).sort();
+  const asOf = S.market && S.market.asOf ? cairoAt(S.market.asOf) : null;
+  return `<div id="wi-root" data-testid="whatif">
+  <div class="panel wi-plan"><div class="phead"><div><h2>Try a plan before you trade</h2>
+      <div class="sub" data-testid="whatif-disclaimer"><b>Hypothetical — nothing is traded or saved; prices are the latest quotes</b>${asOf ? ` (${esc(asOf)})` : ''}. Lines apply in order. Your draft stays in this browser only.</div></div>
+    <span class="chip warn" title="Nothing here reaches Thndr or the portfolio database">Hypothetical</span></div>
+    <datalist id="wi-syms">${syms.map(s => `<option value="${esc(s)}">${esc(q[s].name || s)}</option>`).join('')}</datalist>
+    <div class="wilines" data-testid="whatif-lines">${lines.length ? lines.map((L, i) => wiLineHtml(L, i, C.lines[i], held)).join('') : '<p class="muted" style="margin:0" data-testid="whatif-empty">No lines yet. Add a sell or a buy to see how the portfolio would change.</p>'}</div>
+    <div class="row" style="margin-top:12px">
+      <button type="button" class="btn primary" data-wi-add="trade" data-testid="whatif-add-line">+ Add trade</button>
+      <button type="button" class="btn" data-wi-add="dep" data-testid="whatif-add-deposit">+ Add deposit</button>
+      <button type="button" class="btn danger" data-wi-clear="1" data-testid="whatif-clear" ${lines.length ? '' : 'disabled'}>Clear plan</button>
+    </div>
+    <div id="wi-cashbox" style="margin-top:12px">${wiCashHtml(C)}</div>
+    <p class="note" style="margin:10px 0 0" data-testid="whatif-cost-note">Commission ${pct(rate, 2, false)} of each stock buy and sell (${own ? `your own average over ${esc(S.R.stats.label || 'the selected period')}` : 'a typical rate; your ledger has no trading costs for this period'}); funds carry none. Prices: holdings at the price the Holdings tab uses, other stocks at their latest quote. Amounts in EGP buy or sell whole shares, rounded down.</p>
+  </div>
+  <div id="wi-results" data-testid="whatif-results">${wiResultsHtml(C)}</div>
+  </div>`;
+}
+// Local re-render: typing an amount refreshes the results and each line's summary without touching the inputs (focus stays);
+// changing a select, adding or removing a line redraws the section and puts focus back on the same control.
+function wiRefresh(full, focusTid){
+  const root = document.getElementById('wi-root'); if(!root) return;
+  if(full){ root.outerHTML = vWhatIf(); if(focusTid){ const el = document.querySelector(`[data-testid="${focusTid}"]`); if(el) el.focus({ preventScroll: true }); } }
+  else { const lines = wiLines(), C = wiCompute(lines);
+    C.lines.forEach((o, i) => { const el = document.querySelector(`[data-wi-info="${i}"]`); if(el) el.innerHTML = wiLineInfo(o, lines[i]); });
+    const cb = document.getElementById('wi-cashbox'); if(cb) cb.innerHTML = wiCashHtml(C);
+    const rs = document.getElementById('wi-results'); if(rs) rs.innerHTML = wiResultsHtml(C);
+    const cl = document.querySelector('[data-testid=whatif-clear]'); if(cl) cl.disabled = !lines.length; }
+  markScrollables();
+}
+document.addEventListener('input', e => {
+  const f = e.target.closest && e.target.closest('#wi-root [data-wi-f]'); if(!f || f.tagName === 'SELECT') return;
+  const i = +f.closest('[data-wi]').dataset.wi, L = wiLines()[i]; if(!L) return;
+  L[f.dataset.wiF] = f.value.slice(0, f.dataset.wiF === 'key' ? 120 : 24); wiSave(); wiRefresh(false);
+});
+document.addEventListener('change', e => {
+  const f = e.target.closest && e.target.closest('#wi-root select[data-wi-f]'); if(!f) return;
+  const i = +f.closest('[data-wi]').dataset.wi, L = wiLines()[i]; if(!L) return;
+  const k = f.dataset.wiF, v = f.value;
+  if(k === 'side' && v !== L.side){
+    // carry the stock across: a held name becomes its symbol for a buy, a symbol becomes the holding for a sell
+    if(v === 'buy'){ const r = S.R.pos.open.find(x => x.name === L.key); L.key = r && r.symbol ? r.symbol : ''; if(L.mode === 'pct') L.mode = 'egp'; }
+    else { const sym = wiResolve(L.key); const r = sym && S.R.pos.open.find(x => x.symbol === sym); L.key = r ? r.name : ''; }
+    L.side = v;
+  } else L[k] = v;
+  wiSave(); wiRefresh(true, f.dataset.testid);
+});
+document.addEventListener('click', e => {
+  const t = e.target.closest && e.target.closest('#wi-root [data-wi-add],#wi-root [data-wi-del],#wi-root [data-wi-clear]'); if(!t || t.disabled) return;
+  const lines = wiLines();
+  if(t.dataset.wiAdd){ if(lines.length >= 40){ toast('A plan holds up to 40 lines.'); return; }
+    lines.push(t.dataset.wiAdd === 'dep' ? { side: 'dep', key: '', mode: 'egp', amt: '' } : { side: 'sell', key: '', mode: 'pct', amt: '' });
+    wiSave(); const n = lines.length - 1; wiRefresh(true, `whatif-line-${n}-${t.dataset.wiAdd === 'dep' ? 'amount' : 'side'}`); return; }
+  if(t.dataset.wiDel != null){ lines.splice(+t.dataset.wiDel, 1); wiSave(); wiRefresh(true, lines.length ? `whatif-line-${Math.min(+t.dataset.wiDel, lines.length - 1)}-remove` : 'whatif-add-line'); return; }
+  if(t.dataset.wiClear){ lines.splice(0); wiSave(); wiRefresh(true, 'whatif-add-line'); }
+});

@@ -1,0 +1,80 @@
+# The repository's own checks on every push to main and every pull request. A failing run marks the commit with a red X
+# and GitHub e-mails whoever pushed it. Nothing here uses secrets or private data: the tests run in public mode and the
+# tools run on synthetic data generated in the run (src/tests/fixtures/make_synthetic.js). Same checks locally:
+#   bash src/tests/run_all.sh && node src/tests/site_smoke.js
+name: Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PDFJS_VERSION: 3.11.174
+  PLAYWRIGHT_VERSION: 1.56.1
+
+jobs:
+  checks:
+    name: Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-pdfjs-${{ env.PDFJS_VERSION }}-playwright-${{ env.PLAYWRIGHT_VERSION }}
+
+      - name: Install Python packages
+        run: python -m pip install --quiet --disable-pip-version-check openpyxl==3.1.5 pillow==12.3.0 cryptography
+
+      # every check step runs even when an earlier one failed, so one push shows everything that is wrong
+      - name: 1. Syntax (node --check, py_compile)
+        run: bash src/tests/run_all.sh syntax
+
+      - name: 2. Engine tests (public mode, no private fixtures)
+        if: ${{ !cancelled() }}
+        run: bash src/tests/run_all.sh tests
+
+      - name: 3. Tool smoke tests on synthetic data
+        if: ${{ !cancelled() }}
+        run: bash src/tests/run_all.sh tools
+
+      - name: 4. Build check (desk pages, site wrapper, published site up to date)
+        if: ${{ !cancelled() }}
+        run: bash src/tests/run_all.sh build
+
+      - name: 6. Private-data guard
+        if: ${{ !cancelled() }}
+        run: bash src/tests/run_all.sh private
+
+      - name: 5a. Install Playwright + Chromium
+        if: ${{ !cancelled() }}
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir -p pw && cd pw
+          npm install --no-save --no-package-lock --no-audit --no-fund --loglevel=error playwright@${{ env.PLAYWRIGHT_VERSION }}
+          npx playwright install --with-deps --only-shell chromium
+
+      - name: 5b. Live-site smoke test (lock screen, console, CSP)
+        if: ${{ !cancelled() }}
+        working-directory: ${{ runner.temp }}/pw
+        run: node "$GITHUB_WORKSPACE/src/tests/site_smoke.js" "$GITHUB_WORKSPACE"

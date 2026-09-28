@@ -14,7 +14,11 @@
    Locking (the Lock button, or 5 minutes in the background) drops the key and the decrypted documents from memory and blanks
    the page; unlocking downloads the data again. Devices set up under v2 (private key wrapped by a non-extractable browser
    key, password checked against the published hash) are migrated on first use without the setup key: the key is read with
-   the browser key and the user chooses a real password. */
+   the browser key and the user chooses a real password.
+   Installable app: sw.js (built from pwa/sw.js) keeps a copy of the page and of the ENCRYPTED data files on the device, so the
+   Home Screen app opens offline with the last loaded data. Nothing about the key changes: the private key stays in IndexedDB
+   wrapped by the password / passkey, and unlocking an offline copy needs exactly the same password. When the data on screen
+   came from that saved copy, or the device is offline, a small banner says so (#pd-offline). */
 (function(){
   'use strict';
   const MAX_TRIES = 10, RELOCK_MS = 5 * 60e3, REFRESH_MS = 30 * 60e3, LIVE_MS = 10 * 60e3, PBKDF2_ITER = 310000;
@@ -82,6 +86,7 @@
 
   /* ---------- keys ---------- */
   let KEYS = null, PK8 = null, DATA_AT = null, lastFetch = 0, fetchTry = 0;
+  let SAVED_AT = null;   // set when the last data answer was sw.js's saved copy (its x-pd-saved-at header), null when it came from the network
   async function unwrapWithSetupKey(code) {
     const w = KEYS.wrap, clean = code.toUpperCase().replace(/[^A-Z0-9]/g, '');
     const k0 = await crypto.subtle.importKey('raw', enc.encode(clean), 'PBKDF2', false, ['deriveKey']);
@@ -113,8 +118,9 @@
     if (!r.ok) throw new Error('Could not download the portfolio data (' + r.status + ')');
     const gz = await unseal(await r.json(), 'portfolio-data-v1');
     const plain = await new Response(new Blob([gz]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
-    lastFetch = Date.now();
-    return JSON.parse(plain);
+    const bundle = JSON.parse(plain);
+    lastFetch = Date.now(); SAVED_AT = r.headers.get('x-pd-saved-at');
+    return bundle;
   }
   // month-end Excel workbooks, published encrypted under p/<id>/exports/ (exports/index.json lists them)
   let EXPORTS = null;
@@ -233,11 +239,12 @@
     return (now - t) / 36e5 > (weekday ? FRESH_H.weekday : FRESH_H.other);
   }
   window.pdDataAt = () => DATA_AT; window.pdDataStale = dataStale;
+  const cairoAt = (iso) => { const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'Africa/Cairo', day: 'numeric', month: 'short', year: 'numeric' }).formatToParts(new Date(iso)).map((x) => [x.type, x.value]));
+    return `${p.day} ${p.month} ${p.year}, ${cairoTime(iso)} Cairo`; };
   function footerFresh() {
     const t = document.getElementById('pd-updated'); if (!t || !DATA_AT) return;
-    const d = new Date(DATA_AT), p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'Africa/Cairo', day: 'numeric', month: 'short', year: 'numeric' }).formatToParts(d).map((x) => [x.type, x.value]));
     const stale = dataStale(DATA_AT);
-    t.textContent = `Ledger data as of ${p.day} ${p.month} ${p.year}, ${cairoTime(DATA_AT)} Cairo${stale ? ' · stale' : ''}`;
+    t.textContent = `Ledger data as of ${cairoAt(DATA_AT)}${stale ? ' · stale' : ''}`;
     t.classList.toggle('stale', stale); t.dataset.state = stale ? 'stale' : 'fresh';
     t.title = stale ? 'The daily site update has not arrived when expected; the figures may be out of date.' : '';
   }
@@ -251,7 +258,19 @@
       footerFresh();
       const w = document.getElementById('pd-who'); if (w) w.textContent = CUR.name;
     });
+    offlineBanner();
   }
+  // Offline banner: shown while the page is unlocked and either the device is offline or the data on screen is the copy saved
+  // on this device (sw.js answered from its cache: no network, or no answer within 4 s). Back online, the data is fetched
+  // again and the banner goes as soon as a fresh copy arrives from the network.
+  function offlineBanner() {
+    whenReady(() => { const el = document.getElementById('pd-offline'); if (!el) return;
+      const off = !!PK8 && !!DATA_AT && (navigator.onLine === false || !!SAVED_AT);
+      el.hidden = !off; el.textContent = off ? `Offline — showing the data saved on this device (as of ${cairoAt(DATA_AT)})` : '';
+      el.dataset.state = !off ? 'online' : navigator.onLine === false ? 'offline' : 'saved'; });
+  }
+  window.addEventListener('offline', offlineBanner);
+  window.addEventListener('online', () => { offlineBanner(); if (!PK8) return; refresh().then(offlineBanner); updateLive().catch(() => {}); });
   const whenReady = (fn) => { if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn, { once: true }); else fn(); };
   // Lock means locked: drop the key and every decrypted document, tell the page (its state is rebuilt from the snapshots it
   // receives, so it renders its empty state) and blank whatever it had drawn. LIVE (public market prices) is kept for reuse.
@@ -261,9 +280,9 @@
     const t = document.getElementById('toast'); if (t) { t.hidden = true; t.textContent = ''; }
   }
   function lock(auto) {
-    PK8 = null; DOCS = {}; DATA_AT = null; lastFetch = 0; EXPORTS = null;
+    PK8 = null; DOCS = {}; DATA_AT = null; lastFetch = 0; EXPORTS = null; SAVED_AT = null;
     document.title = 'Stock Market Portfolio Tracker';
-    listeners.forEach(fire); blank();
+    listeners.forEach(fire); blank(); offlineBanner();
     if (!CUR) return chooseScreen();
     const d = getDev();
     if (isV3(d)) unlockScreen(auto); else if (isOld(d)) migrateScreen(); else setupScreen();
@@ -475,10 +494,26 @@
   }
   async function start() { publish(await fetchData()); dbResolve(db);
     updateLive().catch((e) => { console.warn('live prices unavailable', e); notice('Live prices are unavailable right now: showing prices from the last daily update.'); }); }
-  async function refresh() { if (!PK8) return; fetchTry = Date.now(); try { const b = await fetchData(); if (b.exportedAt !== DATA_AT) publish(b); } catch (e) { console.warn('refresh failed', e); } }
+  async function refresh() { if (!PK8) return; fetchTry = Date.now(); try { const b = await fetchData(); if (b.exportedAt !== DATA_AT) publish(b); else offlineBanner(); } catch (e) { console.warn('refresh failed', e); } }
   window.pdLock = () => { if (CUR) lock(false); };
   window.pdSwitch = () => chooseScreen();
   window.pdSelect = (id) => { const p = PORTFOLIOS.find((x) => x.id === id); if (p && !(CUR && CUR.id === p.id)) select(p); };
+
+  /* ---------- installable app: the service worker (offline copy) and the "Install app" button ---------- */
+  if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {   // feature-detected; failure only means no offline copy
+    const reg = () => navigator.serviceWorker.register('sw.js', { scope: './' }).catch((e) => console.warn('offline support unavailable', e));
+    if (document.readyState === 'complete') reg(); else window.addEventListener('load', reg, { once: true });
+  }
+  // Chromium browsers fire beforeinstallprompt when the site can be installed: keep it and offer a small button in the bottom
+  // bar instead of the browser's own banner. Never shown inside the installed app; iOS Safari has no such event (Share → Add to
+  // Home Screen, as the Safari tip on the lock screen says).
+  let installEvt = null;
+  const standalone = () => (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+  const installBtn = (show) => whenReady(() => { const b = document.getElementById('pd-install'); if (b) b.hidden = !show; });
+  window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); if (standalone()) return; installEvt = e; installBtn(true); });
+  window.addEventListener('appinstalled', () => { installEvt = null; installBtn(false); });
+  window.pdInstall = async () => { const e = installEvt; installEvt = null; installBtn(false); if (!e) return;
+    try { await e.prompt(); await e.userChoice; } catch (err) { console.warn('install prompt failed', err); } };
 
   /* ---------- boot ---------- */
   let hiddenAt = 0;

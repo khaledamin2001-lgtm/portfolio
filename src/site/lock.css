@@ -31,3 +31,5 @@ body.pd-locked>:not(#lock){display:none!important}
 #pd-bar button{font:500 12px/1 var(--f-ui,system-ui,sans-serif);padding:8px 12px;border-radius:8px;border:1px solid var(--rule,#DAE2DE);background:var(--surface,#fff);color:var(--ink-2,#46534E);cursor:pointer}
 @media (max-width:600px){#pd-bar button{min-height:40px}#lock .lk-link{min-height:40px}}
 #pd-updated.stale{color:var(--warn,#8f5a00);font-weight:600}
+#pd-offline{margin:0;padding:7px 16px;background:var(--warn-bg,#FFF1D2);color:var(--warn,#8f5a00);border-bottom:1px solid var(--rule,#DAE2DE);font:500 12.5px/1.4 var(--f-ui,system-ui,sans-serif);text-align:center;text-wrap:balance}
+#pd-bar #pd-install{color:var(--accent,#0B6E5F);border-color:var(--accent,#0B6E5F)}
