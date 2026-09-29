@@ -90,7 +90,19 @@ def diff(a, b, path, doc, out):
         out.append((doc, path, short(a), short(b)))
 
 
+def normalize(doc, data):
+    """The heads-up texts quote live figures (e.g. today's value in the drawdown line), so compare which alerts exist."""
+    if doc == "sync/state" and isinstance(data, dict) and isinstance(data.get("digest"), dict):
+        dg = dict(data["digest"])
+        dg["items"] = sorted(str(i.get("key")) for i in (dg.get("items") or []) if isinstance(i, dict))
+        dg.pop("drawdown", None)
+        data = dict(data, digest=dg)
+    return data
+
+
 def compare(old_docs, new_docs):
+    old_docs = {k: normalize(k, v) for k, v in old_docs.items()}
+    new_docs = {k: normalize(k, v) for k, v in new_docs.items()}
     out = []
     only_old = sorted(set(old_docs) - set(new_docs))
     only_new = sorted(set(new_docs) - set(old_docs))
