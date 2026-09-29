@@ -29,6 +29,17 @@ VOLATILE = {
 }
 VOLATILE_ANY = {"postedAt", "factsheetSentAt", "workbooksPublishedAt", "updatedAt", "exportedAt"}
 SHOW = 40          # differences listed in full in the email; the rest are counted
+# Differences that only reflect WHEN each side fetched prices (the dollar and gold trade around the clock; "as of" dates):
+# counted separately, never listed as problems.
+def is_timing(doc, path):
+    if doc == "bench/egx30" and path in ("asOf", "divYieldAsOf"):
+        return True
+    if doc == "market/latest" and (path.startswith("fx.") or path.startswith("gold.") or path.endswith(".date") and path.startswith("index.")):
+        return True
+    if doc.startswith("history/") and (path.endswith(".USDEGP") or path.endswith(".GOLD24K")):
+        return True
+    return False
+
 
 
 def open_bundle(priv, path):
@@ -85,7 +96,9 @@ def compare(old_docs, new_docs):
     only_new = sorted(set(new_docs) - set(old_docs))
     for d in sorted(set(old_docs) & set(new_docs)):
         diff(old_docs[d], new_docs[d], "", d, out)
-    return out, only_old, only_new
+    timing = [x for x in out if is_timing(x[0], x[1])]
+    real = [x for x in out if not is_timing(x[0], x[1])]
+    return real, only_old, only_new, len(timing)
 
 
 def outbox_today(ctx, day):
@@ -104,7 +117,7 @@ def outbox_today(ctx, day):
     return subs
 
 
-def build_email(name, day, bundle_at, diffs, only_old, only_new, sent):
+def build_email(name, day, bundle_at, diffs, only_old, only_new, sent, timing=0):
     n = len(diffs) + len(only_old) + len(only_new)
     subject = f"{name} · side-by-side check {day} · " + ("everything matches" if n == 0 else f"{n} difference{'s' if n != 1 else ''}")
     lines = [f"Side-by-side check for {day}.",
@@ -123,6 +136,8 @@ def build_email(name, day, bundle_at, diffs, only_old, only_new, sent):
                 lines.append(f"  {doc} · {p}\n      old: {a}\n      new: {b}")
             if len(diffs) > SHOW:
                 lines.append(f"  … and {len(diffs) - SHOW} more.")
+    if timing:
+        lines += ["", f"Also {timing} small difference{'s' if timing != 1 else ''} from the two sides fetching prices at different minutes (dollar, gold, as-of dates). These are expected."]
     lines += ["", "Emails the new jobs would have sent today (not sent, kept encrypted):"]
     lines += [f"  • {s}" for s in sent] or ["  none"]
     lines += ["", "Nothing needs doing unless a difference looks wrong. Reply in Claude if one does."]
@@ -149,12 +164,12 @@ def main(argv=None):
         old = open_bundle(ctx.priv, bundle)
         new = {k: v["data"] for k, v in store.read_all(ctx.engine, ctx.keys, ctx.priv).items()}
         old_docs = {k: v for k, v in old.get("docs", {}).items() if not k.startswith("tools/")}
-        diffs, only_old, only_new = compare(old_docs, new)
+        diffs, only_old, only_new, timing = compare(old_docs, new)
         sent = outbox_today(ctx, plan["today"])
         subject, text = build_email(ctx.config.get("name") or ctx.config["portfolioId"], plan["today"],
-                                    old.get("exportedAt"), diffs, only_old, only_new, sent)
+                                    old.get("exportedAt"), diffs, only_old, only_new, sent, timing)
         jc.log(f"compare: {len(old_docs)} old docs, {len(new)} new docs, {len(diffs)} value differences, "
-               f"{len(only_old)} only-old, {len(only_new)} only-new, {len(sent)} shadow emails")
+               f"{len(only_old)} only-old, {len(only_new)} only-new, {timing} timing, {len(sent)} shadow emails")
         if a.dry_run:
             jc.log("compare: dry run, subject: " + subject)
             return 0
