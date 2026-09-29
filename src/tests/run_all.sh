@@ -47,6 +47,10 @@ step_tests() {
   grep -q '^PASS' "$TMP/dietz.out" || die "test_dietz.js ran no check"
   (cd "$TMP/tsrc" && node tests/test.js > "$TMP/test.out") || { cat "$TMP/test.out"; die "test.js"; }
   echo "  test.js: $(head -c 160 "$TMP/test.out")"
+  (cd "$TMP/tsrc" && python3 tests/test_store.py > "$TMP/store.out" 2>&1) || { tail -20 "$TMP/store.out"; die "test_store.py"; }
+  echo "  test_store.py: $(tail -1 "$TMP/store.out")"
+  (cd "$TMP/tsrc" && python3 tests/test_jobs.py > "$TMP/jobs.out" 2>&1) || { tail -20 "$TMP/jobs.out"; die "test_jobs.py"; }
+  echo "  test_jobs.py: $(tail -1 "$TMP/jobs.out")"
 }
 
 step_tools() {
