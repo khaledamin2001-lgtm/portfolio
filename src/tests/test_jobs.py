@@ -64,10 +64,10 @@ try:
           and byk[("portfolio", "assets")]["if_version"] == 4)
     check("market plan: never a ledger/settings/imports/sync write", not any(x["collection"] in ("ledger", "imports", "sync") or x["doc_id"] == "settings" for x in w))
     o2 = dict(o, latest={"asOf": "2026-09-28T15:12+03:00", "quotes": {"ALPH": {"price": 1}}, "missing": [],
-                         "index": {"EGX30CAPPED": {"close": 41234.5, "chg": -0.42, "date": "2026-09-28"}}, "rates": {"policy": {"rate": 0.22, "date": "2026-08"}}})
+                         "index": {"EGX30CAPPED": {"close": 1234.5, "chg": -0.42, "date": "2026-09-28"}}, "rates": {"policy": {"rate": 0.22, "date": "2026-08"}}})   # private-scan: synthetic
     subj, body = run_market.success_email(o2, info, True)
     check("market email: subject names the close date", subj == "Portfolio: market updated 2026-09-28")
-    check("market email: market figures in the body", "EGX30 Capped: 41,234.50 (-0.42% on the day)" in body and "CBE policy rate: 22.00% (since 2026-08)" in body
+    check("market email: market figures in the body", "EGX30 Capped: 1,234.50 (-0.42% on the day)" in body and "CBE policy rate: 22.00% (since 2026-08)" in body
           and "History written: 2026-08, 2026-09" in body and "The live site is updated." in body)
     check("market email: nothing from the portfolio's own documents", "Alpha Co" not in body and "cash" not in body.lower())
 finally:
