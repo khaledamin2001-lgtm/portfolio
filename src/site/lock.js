@@ -18,7 +18,10 @@
    Installable app: sw.js (built from pwa/sw.js) keeps a copy of the page and of the ENCRYPTED data files on the device, so the
    Home Screen app opens offline with the last loaded data. Nothing about the key changes: the private key stays in IndexedDB
    wrapped by the password / passkey, and unlocking an offline copy needs exactly the same password. When the data on screen
-   came from that saved copy, or the device is offline, a small banner says so (#pd-offline). */
+   came from that saved copy, or the device is offline, a small banner says so (#pd-offline).
+   Editing (portfolios with an "engine" repository): a device can also keep a GitHub token for that repository, sealed to the
+   portfolio's public key in IndexedDB 'tok:<id>'; saves are encrypted here and committed to the engine repository (see
+   "editing from the site" below). Forgetting the portfolio removes the token with the key. */
 (function(){
   'use strict';
   const MAX_TRIES = 10, RELOCK_MS = 5 * 60e3, REFRESH_MS = 30 * 60e3, LIVE_MS = 10 * 60e3, PBKDF2_ITER = 310000;
@@ -55,7 +58,7 @@
   const isOld = (d) => !!d && d.v !== 3 && !!d.ct;   // v2: {iv, ct, tries, at} in localStorage + a CryptoKey in IndexedDB
   const notSetUp = () => Object.assign(new Error('This device is not set up'), { code: 'not_set_up' });
   // the ONLY callers: MAX_TRIES wrong passwords, and the explicit "Forget this portfolio" flow
-  async function forget() { ls.del(devLS()); await idbDel('dev:' + CUR.id); await idbDel('bio:' + CUR.id); }
+  async function forget() { ls.del(devLS()); await idbDel('dev:' + CUR.id); await idbDel('bio:' + CUR.id); await idbDel('tok:' + CUR.id); }
   async function migrateLegacy() {   // devices set up before the site held more than one portfolio (single-portfolio v1 layout)
     const d = ls.get(LEGACY_LS); if (!d) return;
     try { const dk = await idbGet('device'); if (dk) { await idbPut('dev:khaled', dk); await idbDel('device'); } } catch (e) {}
@@ -137,7 +140,7 @@
     await downloads.save({ filename: e.name || fallback, data: new Blob([bytes], { type: k.type }) });
   };
 
-  /* ---------- read-only database for the page ---------- */
+  /* ---------- the page's database: the published documents, and saves to the engine repository when editing is on ---------- */
   let DOCS = {}, dbResolve; const listeners = new Set();
   const dbReady = new Promise((r) => (dbResolve = r));
   const snap = (id, d) => ({ id, exists: d != null, data: () => (d == null ? undefined : JSON.parse(JSON.stringify(d))), metadata: {} });
@@ -145,10 +148,9 @@
     if (l.kind === 'doc') l.f(snap(l.path.split('/').pop(), DOCS[l.path]));
     else { const docs = Object.keys(DOCS).filter((p) => p.startsWith(l.path + '/') && p.split('/').length === l.path.split('/').length + 1).sort().map((p) => snap(p.split('/').pop(), DOCS[p])); l.f({ docs, size: docs.length, empty: !docs.length }); }
   } catch (e) { console.error(e); } };
-  const readOnly = () => Promise.reject(Object.assign(new Error('This live site is read-only. Make changes on the Claude page; they show up here after the next daily update.'), { code: 'read_only' }));
   const sub = (kind, path) => ({ onSnapshot(f) { const l = { kind, path, f }; listeners.add(l); setTimeout(() => fire(l), 0); return () => listeners.delete(l); } });
   const db = Object.freeze({
-    doc: (p) => ({ ...sub('doc', p), get: async () => snap(p.split('/').pop(), DOCS[p]), set: readOnly, update: readOnly, delete: readOnly }),
+    doc: (p) => ({ ...sub('doc', p), get: async () => snap(p.split('/').pop(), DOCS[p]), set: (d) => saveDoc('set', p, d), update: (d) => saveDoc('update', p, d), delete: () => saveDoc('delete', p) }),
     collection: (p) => ({ ...sub('col', p), get: async () => { const docs = Object.keys(DOCS).filter((k) => k.startsWith(p + '/')).map((k) => snap(k.split('/').pop(), DOCS[k])); return { docs, size: docs.length, empty: !docs.length }; } }),
   });
   // Downloads work normally on a real website, so the page's export buttons save straight to the device.
@@ -158,6 +160,220 @@
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   } });
   window.claude = Object.freeze({ use: async (n) => (n === 'db' ? dbReady : n === 'downloads' ? downloads : null) });
+
+  /* ---------- editing from the site ----------
+     A portfolio whose portfolios.json entry names an "engine" repository (its private data repository) can be edited here.
+     The device then holds a fine-grained GitHub token for that one repository (Contents and Actions: read and write), sealed
+     to the portfolio's public key in IndexedDB 'tok:<id>' (label 'portfolio-token-v1'): only an unlocked page can read it,
+     and locking drops it from memory together with the private key. A save reads the document from the engine repository,
+     applies the page's change with the engine's own rules (store.js, pinned by src/jobs/merge_vectors.json; a whole-document
+     save made from an older copy keeps what the jobs changed meanwhile), encrypts it for the site key exactly like
+     src/jobs/store.py and commits it through the GitHub Contents API pinned to the file's current sha, so a job's commit in
+     between is never overwritten: the save is redone on the newer file. The engine's "Publish site" workflow runs on that
+     commit and republishes the site's data within a few minutes; until then this page keeps showing the saved version. The
+     price update and the inbox check can be started from here too (workflow_dispatch). */
+  const GH_API = 'https://api.github.com', TOK_LABEL = 'portfolio-token-v1', FILE_LABEL = 'portfolio-file-v1';
+  const JOBS = { market: { file: 'market.yml', what: 'Price update' }, sync: { file: 'sync.yml', what: 'Inbox check' } };
+  let EDIT = null;                  // {token, repo, expires} while unlocked and this device is set up for editing
+  const OVERLAY = new Map();        // 'coll/doc' -> {data, at}: saves the published data does not show yet
+  const RECENT = new Map();         // 'coll/doc' -> {sha, doc, at}: this device's last commit of a document (the API can lag)
+  let QUEUE = Promise.resolve();    // saves run one at a time, in the order the page made them
+  const engineRepo = () => (CUR && CUR.engine) || null;
+  const canEdit = () => !!(PK8 && EDIT && engineRepo());
+  window.pdCanEdit = canEdit;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const b64big = (u) => { u = u instanceof Uint8Array ? u : new Uint8Array(u); let s = ''; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); };
+  const toast = (m, k) => { if (window.pdToast) window.pdToast(m, k); };
+  // encrypt for the portfolio's public key: the same scheme unseal() opens and src/jobs/store.py seal() writes
+  async function seal(bytes, label) {
+    const site = await crypto.subtle.importKey('raw', ub64(KEYS.pub), { name: 'ECDH', namedCurve: 'P-256' }, false, []);
+    const eph = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+    const epk = new Uint8Array(await crypto.subtle.exportKey('raw', eph.publicKey));
+    const shared = await crypto.subtle.deriveBits({ name: 'ECDH', public: site }, eph.privateKey, 256);
+    const hk = await crypto.subtle.importKey('raw', shared, 'HKDF', false, ['deriveKey']);
+    const key = await crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: epk, info: enc.encode(label) }, hk, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+    const iv = rnd(12);
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc.encode(label) }, key, bytes);
+    return { epk: b64big(epk), iv: b64big(iv), ct: b64big(ct) };
+  }
+  async function loadEdit() {
+    EDIT = null;
+    if (!engineRepo() || !PK8) return;
+    try {
+      const r = await idbGet('tok:' + CUR.id); if (!r || !r.ct) return;
+      const t = JSON.parse(dec.decode(await unseal(r, TOK_LABEL)));
+      if (t && typeof t.token === 'string' && t.repo === engineRepo()) EDIT = { token: t.token, repo: t.repo, expires: t.expires || null };
+    } catch (e) { console.warn('the editing key saved on this device could not be read', e); }
+  }
+  async function storeEdit(t) { await idbPut('tok:' + CUR.id, Object.assign({ v: 1 }, await seal(enc.encode(JSON.stringify(t)), TOK_LABEL))); }
+  const ghErr = (status, msg, repo) => Object.assign(new Error(
+    status === 401 ? 'GitHub no longer accepts the editing key on this device (it expired or was deleted). Turn editing on again with a new key'
+    : status === 403 && /rate limit/i.test(msg) ? 'GitHub is limiting requests right now. Try again in a few minutes'
+    : status === 403 ? `The editing key is not allowed to do this. It needs Contents and Actions set to "Read and write" on ${repo}`
+    : status === 404 ? 'Not found on GitHub'
+    : 'GitHub answered ' + status + (msg ? ': ' + msg : '')),
+  { status, code: status === 401 ? 'auth' : status === 403 ? 'forbidden' : status === 404 ? 'not_found' : status === 409 || status === 422 ? 'conflict' : 'github' });
+  let ghExp = null;   // the token's expiry as GitHub reports it (header github-authentication-token-expiration), when readable
+  async function gh(method, path, body, token) {
+    const tok = token || (EDIT && EDIT.token), repo = path.split('/').slice(2, 4).join('/');
+    if (!tok) throw Object.assign(new Error('Editing is not turned on on this device'), { code: 'read_only' });
+    let r;
+    try {
+      r = await fetch(GH_API + path, { method, cache: 'no-store', referrerPolicy: 'no-referrer', body: body ? JSON.stringify(body) : undefined,
+        headers: Object.assign({ Authorization: 'Bearer ' + tok, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' }, body ? { 'Content-Type': 'application/json' } : {}) });
+    } catch (e) { throw Object.assign(new Error('GitHub could not be reached. Check the connection and try again'), { code: 'network' }); }
+    const x = r.headers.get('github-authentication-token-expiration'); if (x) ghExp = x;
+    if (r.ok) return r.status === 204 ? null : r.json();
+    let msg = ''; try { msg = (await r.json()).message || ''; } catch (e) { /* no body */ }
+    throw ghErr(r.status, msg, repo);
+  }
+  const fileText = (b64s) => dec.decode(ub64(String(b64s).replace(/\s/g, '')));
+  // the engine repository's copy of one document -> {sha, doc: {version, updatedAt, data}}; {sha: null, doc: null} when absent
+  async function readEngineDoc(c, d, token, repo) {
+    repo = repo || EDIT.repo;
+    let f;
+    try { f = await gh('GET', `/repos/${repo}/contents/db/${c}/${d}.enc.json?ref=main`, null, token); }
+    catch (e) { if (e.code === 'not_found') return { sha: null, doc: null }; throw e; }
+    const b = f.content && f.encoding === 'base64' ? f.content : (await gh('GET', `/repos/${repo}/git/blobs/${f.sha}`, null, token)).content;   // files over 1 MB come as a blob
+    let p;
+    try { p = JSON.parse(dec.decode(await unseal(JSON.parse(fileText(b)), FILE_LABEL))); }
+    catch (e) { throw Object.assign(new Error(`${c}/${d} in ${repo} cannot be opened with this portfolio's key`), { code: 'wrong_key' }); }
+    if (!p || !Number.isInteger(p.version) || p.version < 1 || !p.data || typeof p.data !== 'object' || Array.isArray(p.data)) throw new Error(`${c}/${d} in ${repo} has the wrong shape`);
+    return { sha: f.sha, doc: { version: p.version, updatedAt: p.updatedAt, data: p.data } };
+  }
+  function saveDoc(op, p, data) {
+    if (!canEdit()) return Promise.reject(Object.assign(new Error(engineRepo() ? 'Editing is not turned on on this device. Use "Turn on editing" at the bottom of the page' : 'This portfolio can only be viewed on the site'), { code: 'read_only' }));
+    const seen = Object.prototype.hasOwnProperty.call(DOCS, p) ? JSON.parse(JSON.stringify(DOCS[p])) : undefined;   // what the page showed when it made the change
+    const run = () => commitDoc(op, p, data, seen);
+    const done = QUEUE.then(run, run); QUEUE = done.catch(() => {});
+    return done;
+  }
+  async function commitDoc(op, p, data, seen) {
+    if (!canEdit()) throw Object.assign(new Error('The portfolio was locked before the change was saved'), { code: 'read_only' });
+    const parts = String(p).split('/'), c = parts[0], d = parts[1];
+    if (parts.length !== 2 || !pdStore.NAME_RE.test(c) || !pdStore.NAME_RE.test(d)) throw Object.assign(new Error('invalid document ' + p), { code: 'invalid' });
+    const repo = EDIT.repo, path = `db/${c}/${d}.enc.json`, msg = `Site edit: ${p}`;
+    for (let attempt = 0; ; attempt++) {
+      const rc = RECENT.get(p);
+      const cur = attempt === 0 && rc && Date.now() - rc.at < 120e3 ? rc : await readEngineDoc(c, d);
+      const w = op === 'set' && seen !== undefined && cur.doc ? { op, data: pdStore.rebase(seen, data, cur.doc.data) } : { op, data };
+      const step = (await pdStore.applyWrites([Object.assign(w, { collection: c, doc_id: d })], async () => cur.doc)).plan[0];
+      try {
+        if (!step) return settle(p, cur.doc ? cur.doc.data : undefined);   // unchanged
+        if (step.action === 'rm') {
+          await gh('DELETE', `/repos/${repo}/contents/${path}`, { message: msg, sha: cur.sha, branch: 'main' });
+          RECENT.delete(p); return settle(p, undefined);
+        }
+        const plain = enc.encode(JSON.stringify(step.doc));
+        const env = Object.assign({ v: 1, name: d + '.json', bytes: plain.length }, await seal(plain, FILE_LABEL));
+        const r = await gh('PUT', `/repos/${repo}/contents/${path}`, Object.assign({ message: msg, content: b64big(enc.encode(JSON.stringify(env) + '\n')), branch: 'main' }, cur.sha ? { sha: cur.sha } : {}));
+        RECENT.set(p, { sha: r && r.content ? r.content.sha : null, doc: step.doc, at: Date.now() });
+        return settle(p, step.doc.data);
+      } catch (e) {
+        if (e.code === 'conflict' && attempt < 4) { RECENT.delete(p); await sleep(800 * 2 ** attempt); continue; }   // the file changed meanwhile: redo on the new one
+        throw e;
+      }
+    }
+  }
+  function settle(p, data) {   // a save went through: show it now, and keep showing it until the published data has it
+    if (!PK8) return;
+    OVERLAY.set(p, { data, at: Date.now() });
+    if (data === undefined) delete DOCS[p]; else DOCS[p] = data;
+    listeners.forEach(fire);
+  }
+  function applyOverlay() {
+    for (const [p, o] of OVERLAY) {
+      if (Date.now() - o.at > 30 * 60e3 || Date.parse(DATA_AT) > o.at + 120e3 || pdStore.canon(DOCS[p]) === pdStore.canon(o.data)) OVERLAY.delete(p);
+      else if (o.data === undefined) delete DOCS[p]; else DOCS[p] = o.data;
+    }
+  }
+  const expDate = () => { const x = EDIT && (EDIT.expires || ghExp); const t = x ? Date.parse(String(x).replace(' UTC', 'Z').replace(' ', 'T')) : NaN; return isFinite(t) ? t : null; };
+  const dayText = (t) => new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(t));
+  let JOB_NOTE = '';
+  function editBar() {
+    whenReady(() => {
+      const on = canEdit(), el = (id) => document.getElementById(id), exp = expDate();
+      const st = el('pd-edit-state');
+      if (st) {
+        const soon = on && exp && exp - Date.now() < 14 * 864e5;
+        st.textContent = !engineRepo() ? 'View only' : !on ? 'View only on this device' : JOB_NOTE || (soon ? `Editing on · the editing key expires ${dayText(exp)}` : 'Editing on · saved changes reach the site in a few minutes');
+        st.classList.toggle('stale', !!soon && !JOB_NOTE);
+      }
+      for (const id of ['pd-run-market', 'pd-run-sync', 'pd-edit-menu']) { const b = el(id); if (b) b.hidden = !on; }
+      const b = el('pd-edit-on'); if (b) b.hidden = on || !engineRepo() || !PK8;
+      document.body.classList.toggle('pd-edit', on);
+    });
+  }
+  const TOKEN_URL = (owner) => 'https://github.com/settings/personal-access-tokens/new?name=' + encodeURIComponent('Portfolio site editing') +
+    '&description=' + encodeURIComponent('Lets the portfolio website save edits') + '&target_name=' + encodeURIComponent(owner) + '&expires_in=366&contents=write&actions=write';
+  function editOnScreen(note) {
+    const repo = engineRepo(), [owner, name] = repo.split('/');
+    screen(`<h1>Turn on editing</h1><p>Changes made here are saved to <b>${esc(name)}</b>, the portfolio's private data on GitHub, and reach the site a few minutes later. This device needs a GitHub key for that one repository; you make it once:</p>
+      <ol class="lk-steps"><li>Open <a href="${esc(TOKEN_URL(owner))}" target="_blank" rel="noopener noreferrer" data-testid="edit-token-link">GitHub → new fine-grained token</a>, signed in as <b>${esc(owner)}</b>.</li>
+      <li><b>Expiration</b>: the longest offered (the site warns before it runs out).</li>
+      <li><b>Repository access</b>: Only select repositories → <b>${esc(name)}</b>.</li>
+      <li><b>Permissions</b> → Repository permissions: <b>Contents</b> and <b>Actions</b> set to <b>Read and write</b>.</li>
+      <li><b>Generate token</b>, copy it and paste it here.</li></ol>
+      <form id="lk-edit" autocomplete="off"><input id="lk-tok" type="password" data-testid="edit-token" placeholder="github_pat_…" aria-label="GitHub token" autocapitalize="none" spellcheck="false">
+      <button class="lk-btn" id="lk-edit-go" data-testid="edit-token-submit">Turn on editing</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>
+      <p class="lk-foot">The key stays on this device, encrypted like the portfolio, and opens only that repository. You can delete it any time on GitHub (Settings → Developer settings → Personal access tokens).</p>
+      <div class="lk-links"><button type="button" class="lk-link" id="lk-edit-back" data-testid="edit-token-cancel">Cancel</button></div>`);
+    $l('#lk-edit-back').onclick = open;
+    $l('#lk-tok').focus();
+    $l('#lk-edit').onsubmit = async (ev) => {
+      ev.preventDefault(); const go = $l('#lk-edit-go'), tok = $l('#lk-tok').value.trim();
+      if (!/^(github_pat_|ghp_)[A-Za-z0-9_]{20,}$/.test(tok)) return err('That is not a GitHub token. It starts with github_pat_ and is about 90 characters long.');
+      go.disabled = true; err('Checking the key with GitHub…'); ghExp = null;
+      try {
+        const cfg = await gh('GET', `/repos/${repo}/contents/config.json?ref=main`, null, tok).catch((e) => { throw e.code === 'not_found' ? new Error(`The key cannot open ${name}. Under "Repository access" pick Only select repositories → ${name}`) : e; });
+        let id = null; try { id = JSON.parse(fileText(cfg.content)).portfolioId; } catch (e) { /* checked below */ }
+        if (id !== CUR.id) throw new Error(`${name} does not hold ${CUR.name}`);
+        await readEngineDoc('portfolio', 'settings', tok, repo);   // opens with this portfolio's key: the right data
+        await gh('GET', `/repos/${repo}/actions/workflows?per_page=1`, null, tok).catch((e) => { throw e.code === 'forbidden' || e.code === 'not_found' ? new Error('The key needs Actions set to "Read and write" as well (Permissions → Repository permissions)') : e; });
+        const t = { token: tok, repo, expires: ghExp, at: new Date().toISOString() };
+        await storeEdit(t);
+        EDIT = { token: tok, repo, expires: ghExp };
+        RECENT.clear(); open(); listeners.forEach(fire); editBar();
+        toast('Editing is on for this device. Saves go to GitHub and reach the site in a few minutes.');
+      } catch (e) { console.error(e); go.disabled = false; err(e.message || String(e)); }
+    };
+  }
+  function editMenuScreen() {
+    const exp = expDate();
+    screen(`<h1>Editing on this device</h1><p>Saves go to <b>${esc(engineRepo())}</b> on GitHub.${exp ? ` The editing key expires on <b>${esc(dayText(exp))}</b>; make a new one before then.` : ''}</p>
+      <button class="lk-btn ghost" id="lk-edit-new" data-testid="edit-replace">Use a new editing key</button>
+      <button class="lk-btn ghost" id="lk-edit-off" data-testid="edit-off">Turn off editing on this device</button>
+      <div class="lk-links"><button type="button" class="lk-link" id="lk-edit-close" data-testid="edit-menu-close">Back</button></div>`);
+    $l('#lk-edit-close').onclick = open;
+    $l('#lk-edit-new').onclick = () => editOnScreen();
+    $l('#lk-edit-off').onclick = async () => { await idbDel('tok:' + CUR.id); EDIT = null; RECENT.clear(); open(); listeners.forEach(fire); editBar(); toast('Editing is off on this device. Delete the key on GitHub too if you no longer need it.'); };
+  }
+  window.pdEditOn = () => { if (PK8 && engineRepo()) editOnScreen(); };
+  window.pdEditMenu = () => { if (canEdit()) editMenuScreen(); };
+  // start the price update or the inbox check on GitHub, follow it, and load the new figures when it is done
+  window.pdRunJob = async (kind, btn) => {
+    const j = JOBS[kind]; if (!j || !canEdit()) return;
+    const repo = EDIT.repo, runs = async () => ((await gh('GET', `/repos/${repo}/actions/workflows/${j.file}/runs?per_page=10`)).workflow_runs || []);
+    if (btn) btn.disabled = true;
+    const note = (t) => { JOB_NOTE = t; editBar(); };
+    try {
+      const before = new Set((await runs()).map((r) => r.id));
+      await gh('POST', `/repos/${repo}/actions/workflows/${j.file}/dispatches`, { ref: 'main' });
+      note(`${j.what} started on GitHub…`);
+      toast(`${j.what} started. It takes a few minutes; the page updates when it is done.`);
+      let run = null;
+      for (let i = 0; i < 80 && canEdit(); i++) {
+        await sleep(i < 6 ? 5e3 : 15e3);
+        try { run = (await runs()).filter((r) => !before.has(r.id)).sort((a, b) => a.id - b.id)[0] || null; } catch (e) { continue; }
+        if (run) note(`${j.what} ${run.status === 'completed' ? 'finished' : run.status === 'in_progress' ? 'running' : 'queued'} on GitHub…`);
+        if (run && run.status === 'completed') break;
+      }
+      if (!run || run.status !== 'completed') toast(`${j.what} is still running. The page picks up the result on its own.`);
+      else if (run.conclusion === 'success') { toast(`${j.what} finished. Loading the new figures…`); RECENT.clear(); for (const t of [30e3, 90e3, 180e3]) setTimeout(refresh, t); }
+      else toast(`${j.what} did not finish (${run.conclusion}). GitHub emails the details.`, 'error');
+    } catch (e) { console.error(e); toast(`${j.what} could not start: ${e.message}`, 'error'); }
+    finally { if (btn) btn.disabled = false; note(''); }
+  };
 
   /* ---------- live prices straight from TradingView (15-min delayed; the scanner allows this site's origin) ---------- */
   let LIVE = null, liveAt = 0, liveTry = 0;
@@ -250,6 +466,7 @@
   }
   function publish(bundle) {
     DOCS = bundle.docs || {}; DATA_AT = bundle.exportedAt; OPENED = CUR.id;
+    applyOverlay();   // saves made here that the published data does not show yet
     const jm = DOCS['market/latest'] || {};   // the market job's own document in this bundle: its asOf is the job's heartbeat
     if (LIVE && Date.parse(LIVE.asOf) > Date.parse(jm.asOf || 0)) DOCS['market/latest'] = { ...jm, ...LIVE, jobAsOf: jm.asOf || LIVE.jobAsOf };
     listeners.forEach(fire);
@@ -280,7 +497,7 @@
     const t = document.getElementById('toast'); if (t) { t.hidden = true; t.textContent = ''; }
   }
   function lock(auto) {
-    PK8 = null; DOCS = {}; DATA_AT = null; lastFetch = 0; EXPORTS = null; SAVED_AT = null;
+    PK8 = null; DOCS = {}; DATA_AT = null; lastFetch = 0; EXPORTS = null; SAVED_AT = null; EDIT = null; OVERLAY.clear(); RECENT.clear(); JOB_NOTE = ''; editBar();
     document.title = 'Stock Market Portfolio Tracker';
     listeners.forEach(fire); blank(); offlineBanner();
     if (!CUR) return chooseScreen();
@@ -354,7 +571,7 @@
   }
   async function select(p) {
     if (OPENED && OPENED !== p.id) { ls.set(CUR_LS, p.id); location.reload(); return; }   // the page already shows another portfolio: start clean
-    CUR = p; ls.set(CUR_LS, p.id); KEYS = null; PK8 = null; EXPORTS = null;
+    CUR = p; ls.set(CUR_LS, p.id); KEYS = null; PK8 = null; EXPORTS = null; EDIT = null;
     try { KEYS = await (await fetch(base() + 'keys.json', { cache: 'no-store' })).json(); } catch (e) { return screen('<h1>Offline</h1><p>The portfolio could not load. Check your connection and reload.</p>'); }
     const d = getDev();
     if (isV3(d)) unlockScreen(true); else if (isOld(d)) migrateScreen(); else setupScreen();
@@ -492,7 +709,7 @@
     wireSwitch(); $l('#lk-relock').onclick = () => lock(false);
     $l('#lk-retry').onclick = async () => { const b = $l('#lk-retry'); b.disabled = true; b.textContent = 'Trying…'; if (!PK8) return lock(false); await unlocked(PK8); };
   }
-  async function start() { publish(await fetchData()); dbResolve(db);
+  async function start() { await loadEdit(); publish(await fetchData()); dbResolve(db); editBar();
     updateLive().catch((e) => { console.warn('live prices unavailable', e); notice('Live prices are unavailable right now: showing prices from the last daily update.'); }); }
   async function refresh() { if (!PK8) return; fetchTry = Date.now(); try { const b = await fetchData(); if (b.exportedAt !== DATA_AT) publish(b); else offlineBanner(); } catch (e) { console.warn('refresh failed', e); } }
   window.pdLock = () => { if (CUR) lock(false); };

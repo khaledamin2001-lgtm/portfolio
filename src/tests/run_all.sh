@@ -4,7 +4,7 @@
 # Nothing here needs private data or network access except `tools`, which installs pdfjs-dist@3.11.174 (for sync.js) into
 # a temp dir unless PDFJS_NODE_MODULES points at a node_modules that already has it. Everything that writes goes to a temp
 # dir; the working tree is left as it was. Needs: node 20+, python 3.11+ with openpyxl, pillow and cryptography.
-# The live-site browser test is separate: node src/tests/site_smoke.js (needs Playwright + Chromium).
+# The live-site browser tests are separate: node src/tests/site_smoke.js, node src/tests/site_edit.js (need Playwright + Chromium).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/portfolio-checks.XXXXXX")"
@@ -47,6 +47,8 @@ step_tests() {
   grep -q '^PASS' "$TMP/dietz.out" || die "test_dietz.js ran no check"
   (cd "$TMP/tsrc" && node tests/test.js > "$TMP/test.out") || { cat "$TMP/test.out"; die "test.js"; }
   echo "  test.js: $(head -c 160 "$TMP/test.out")"
+  (cd "$TMP/tsrc" && node tests/test_site_store.js > "$TMP/sitestore.out") || { cat "$TMP/sitestore.out"; die "test_site_store.js"; }
+  echo "  $(tail -1 "$TMP/sitestore.out")"
   (cd "$TMP/tsrc" && python3 tests/test_store.py > "$TMP/store.out" 2>&1) || { tail -20 "$TMP/store.out"; die "test_store.py"; }
   echo "  test_store.py: $(tail -1 "$TMP/store.out")"
   (cd "$TMP/tsrc" && python3 tests/test_jobs.py > "$TMP/jobs.out" 2>&1) || { tail -20 "$TMP/jobs.out"; die "test_jobs.py"; }

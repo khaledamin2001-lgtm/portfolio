@@ -33,3 +33,10 @@ body.pd-locked>:not(#lock){display:none!important}
 #pd-updated.stale{color:var(--warn,#8f5a00);font-weight:600}
 #pd-offline{margin:0;padding:7px 16px;background:var(--warn-bg,#FFF1D2);color:var(--warn,#8f5a00);border-bottom:1px solid var(--rule,#DAE2DE);font:500 12.5px/1.4 var(--f-ui,system-ui,sans-serif);text-align:center;text-wrap:balance}
 #pd-bar #pd-install{color:var(--accent,#0B6E5F);border-color:var(--accent,#0B6E5F)}
+#lock .lk-steps{margin:0;padding:0 0 0 1.4em;text-align:left;font-size:13.5px;line-height:1.5;color:var(--ink-2,#46534E);display:flex;flex-direction:column;gap:4px}
+#lock .lk-steps a{color:var(--accent,#0B6E5F);font-weight:600}
+#lock .lk-btn.ghost + .lk-btn.ghost{margin-top:-8px}
+#pd-bar #pd-edit-on{color:var(--accent,#0B6E5F);border-color:var(--accent,#0B6E5F)}
+#pd-bar .pd-actions{flex-wrap:wrap}
+#pd-bar button:disabled{opacity:.6;cursor:default}
+#pd-edit-state.stale{color:var(--warn,#8f5a00);font-weight:600}
