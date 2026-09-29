@@ -1,0 +1,39 @@
+# One-off test (step 0 of the move off Claude): can GitHub's servers reach TradingView?
+# Uses public tickers only and prints counts only. Deleted after the test.
+name: TradingView probe
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install websocket-client
+        run: pip install -q websocket-client
+      - name: Fetch prices for five public tickers
+        run: |
+          python3 - <<'PY'
+          import json
+          items = {s: {"name": s, "symbol": s, "sector": "Test"} for s in ["COMI", "FWRY", "ETEL", "ORHD", "EFIH"]}
+          json.dump({"items": items}, open("probe_assets.json", "w"))
+          PY
+          python3 tools/fetch_prices.py probe_assets.json > probe_out.json
+      - name: Summarise (counts only)
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          d = json.load(open("probe_out.json")); L = d["latest"]
+          q = L.get("quotes", {}); h = d.get("histories", [])
+          s = {"asOf": L.get("asOf"), "quotes": len(q), "withPE": sum(1 for v in q.values() if v.get("pe") is not None),
+               "egx30capped": bool((L.get("index") or {}).get("EGX30CAPPED")), "policyRate": bool((L.get("rates") or {}).get("policy")),
+               "divYield": d.get("bench", {}).get("divYield") is not None, "historyMonths": len(h),
+               "historySessions": sum(len(x.get("days", {})) for x in h), "fillErrors": len(d.get("fillErrors") or {})}
+          print(json.dumps(s))
+          ok = s["quotes"] >= 250 and s["egx30capped"] and s["historySessions"] > 0 and s["policyRate"]
+          print("PROBE", "PASS" if ok else "FAIL"); sys.exit(0 if ok else 1)
+          PY
