@@ -29,6 +29,8 @@ Steps (routine step numbers):
       Ledger, settings, imports and sync documents are never written. If someone saved meanwhile (version conflict
       or rejected push) the patches are recomputed on the fresh documents once with the same prices.
  5.   Publish this portfolio's site folder (publish.py). Then jobs.json records the run.
+ 6.   Scheduled runs only: the "Portfolio: market updated <close date>" email, market figures only (never holdings, cash,
+      values or anything from the ledger, marks or settings). A failure to send it is logged, not a job failure.
 Output: one line of counts. Any failure: email "Portfolio: market FAILED <date>" and exit 1.
 """
 import os, sys, json, time, argparse, shutil
@@ -67,6 +69,30 @@ def marks_patch(marks, out):
                 p[field] = s[K]
                 p[field + "Source"] = macro.get(source)
     return patch
+
+
+def success_email(out, info, published):
+    """Step 6: (subject, plain-text body) of the market-updated email. Market figures only."""
+    L = out.get("latest") or {}
+    ix = (L.get("index") or {}).get("EGX30CAPPED") or {}
+    close_date = ix.get("date") or max((d for H in out.get("histories") or [] for d in (H.get("days") or {})), default=None) or (L.get("asOf") or "")[:10]
+    pol = (L.get("rates") or {}).get("policy") or {}
+    bench = out.get("bench") or {}
+    pct = lambda v: f"{v * 100:.2f}%" if isnum(v) else "n/a"
+    fe, miss = sorted(out.get("fillErrors") or {}), L.get("missing") or []
+    names = {"cpi": "CPI", "usdegp": "USD/EGP", "cashRate": "CBE rate"}
+    filled = [f"{names[k]} {', '.join(v)}" for k, v in info["marksFilled"].items() if v and k in names]
+    lines = [f"Close date: {close_date} (as of {L.get('asOf')})",
+             f"Quotes: {len(L.get('quotes') or {})}",
+             f"EGX30 Capped: {ix['close']:,.2f} ({ix.get('chg', 0):+.2f}% on the day)" if isnum(ix.get("close")) else "EGX30 Capped: n/a",
+             f"CBE policy rate: {pct(pol.get('rate'))}" + (f" (since {pol['date']})" if pol.get("date") else ""),
+             f"Index dividend yield: {pct(bench.get('divYield'))}",
+             f"History written: {', '.join(info['historyMonths']) or 'none'} ({info['sessions']} sessions)",
+             f"Fill errors or missing symbols: {', '.join(fe + list(miss)) or 'none'}",
+             f"New index members added: {info['newAssets'] or 'none'}",
+             f"CPI / USD/EGP / CBE-rate months filled: {'; '.join(filled) or 'none'}",
+             "The live site is updated." if published else "The live site data was already current."]
+    return f"Portfolio: market updated {close_date}", "\n".join(lines) + "\n"
 
 
 def build_writes(data_dir, out):
@@ -190,11 +216,19 @@ def main(argv=None):
                f"usdegp {info['marksFilled']['usdegp']} cashRate {info['marksFilled']['cashRate']}; "
                f"{len(res['changed'])} documents changed ({'/'.join(sorted(st))}), engine commit {head or 'none'}")
         step = "publish"
+        r = None
         if not a.no_publish:
             import publish
             r = publish.publish(ctx, f"Daily data update {plan['today']}", push=ctx.live, remote=a.site_remote, force=a.force_publish)
             jc.log(f"publish: {'pushed' if r['pushed'] else 'committed locally (shadow)' if r['committed'] else 'nothing to publish'}"
                    f"{', data unchanged' if r['dataUnchanged'] else ''}, head {r['head']}, {len(r['files'])} files")
+        if slot != "manual":
+            try:
+                import mail_send
+                subj, body = success_email(out, info, bool(r and r["pushed"]))
+                jc.log("email: " + mail_send.send(ctx, subj, body))
+            except Exception as e:     # the update itself succeeded; a missing notice is not a failed job
+                jc.log(f"email: not sent ({type(e).__name__}: {jc.redact(str(e))[:200]})")
         step = "record"
         state = jc.jobs_state(ctx)
         ms = state.setdefault("market", {})
@@ -204,7 +238,7 @@ def main(argv=None):
         jc.save_jobs_state(ctx, state)
         for attempt in range(3):
             try:
-                jc.engine_commit(ctx, ["jobs.json"], f"jobs: market {plan['today']}")
+                jc.engine_commit(ctx, ["jobs.json"] + list(getattr(ctx, "outbox_files", [])), f"jobs: market {plan['today']}")
                 break
             except jc.PushRejected:
                 jc.engine_refresh(ctx)
