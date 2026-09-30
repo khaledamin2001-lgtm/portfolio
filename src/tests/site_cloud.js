@@ -260,7 +260,7 @@ k = store.unlock(${JSON.stringify(path.join(SITE, 'p/khaled/keys.json'))}, open(
 i = json.loads(sys.stdin.read()); p = r.open_mail_pkg(k, i["pkg"]); priv, _ = r.account_key(p["pk8"])
 g = json.loads(store.unseal(priv, i["gmail"]).decode())["data"]
 print(json.dumps({"uid": p["uid"], "email": p["email"], "prefs": p["prefs"], "refresh": bool(p["refresh"]), "pk8": bool(p["pk8"]), "gmail": [g["address"], g["appPassword"]]}))`], { input: JSON.stringify({ pkg: pkgEnv, gmail: gmailEnv }), stdio: ['pipe', 'pipe', 'inherit'] })) : null;
-    check('email updates: the package opens only with the mail key and names this account, its address and choices', !!opened && opened.uid === uid && opened.email === EMAIL && opened.prefs.alerts && opened.prefs.weekly && opened.prefs.gmail && opened.refresh && opened.pk8 && !pkgEnv.includes(EMAIL), JSON.stringify(opened));
+    check('email updates: the package opens only with the mail key and names this account, its address and choices', !!opened && opened.uid === uid && opened.email === EMAIL && opened.prefs.alerts && opened.prefs.weekly && opened.prefs.reports && opened.prefs.gmail && opened.refresh && opened.pk8 && !pkgEnv.includes(EMAIL), JSON.stringify(opened));
     check('the job can open the Gmail login with the account key from the package (spaces removed)', !!opened && JSON.stringify(opened.gmail) === JSON.stringify(['friend.test@example.com', 'abcdefghijklmnop']));
     await $t('account-menu').click(); await $t('account-gmail').click();
     await $t('gmail-status').waitFor();
@@ -271,6 +271,11 @@ print(json.dumps({"uid": p["uid"], "email": p["email"], "prefs": p["prefs"], "re
     check('turning Thndr emails off deletes the Gmail login and keeps email updates', !FB.docs[`users/${uid}/docs/sync__gmail`] && !!FB.docs['mail/' + uid]);
     await page.waitForTimeout(500);
     if (!(await page.evaluate(() => document.getElementById('lock').hidden))) await $t('account-back').click();
+    await page.click('#tab-reports'); await page.waitForTimeout(400);
+    if (await page.locator('#fs-xlsx').count()) {
+      await page.click('#fs-xlsx'); await page.waitForTimeout(300);
+      check('Reports tab: an account is told its month-end Excel and PDF come by email', /emailed to you/.test(await page.locator('#toast').textContent()));
+    } else check('Reports tab: the Download Excel button is there', false);
     await $t('account-menu').click(); await $t('account-email').click(); await $t('mail-off').click();
     for (let i = 0; i < 40 && FB.docs['mail/' + uid]; i++) await page.waitForTimeout(250);
     check('switching email updates off deletes the package', !FB.docs['mail/' + uid]);

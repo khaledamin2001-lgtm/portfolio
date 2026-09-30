@@ -93,3 +93,12 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: ${{ runner.temp }}/pw
         run: node "$GITHUB_WORKSPACE/src/tests/site_cloud.js"
+
+      - name: 5f. Account job with the PDF factsheet (month-end report emailed to a friend; Playwright + pdf.js)
+        if: ${{ !cancelled() }}
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir -p acct/tools && cd acct
+          (cd tools && npm install --no-save --no-package-lock --no-audit --no-fund --loglevel=error playwright@${{ env.PLAYWRIGHT_VERSION }} pdfjs-dist@${{ env.PDFJS_VERSION }})
+          node "$GITHUB_WORKSPACE/src/tests/fixtures/make_synthetic.js" syn > /dev/null
+          REQUIRE_PDF=1 python3 "$GITHUB_WORKSPACE/src/tests/test_account_mail.py" syn tools

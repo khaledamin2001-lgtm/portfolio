@@ -2,7 +2,8 @@
 """Send one email through Gmail SMTP (smtp.gmail.com:465, SSL) from GMAIL_ADDRESS with GMAIL_APP_PASSWORD.
 
 The only allowed recipient is the portfolio's own portfolio/settings.factsheetEmail (decrypted from the engine repo);
-any other address is refused. Plain text body plus an optional HTML alternative; never attachments.
+any other address is refused. Plain text body plus an optional HTML alternative; never attachments here (build() takes
+attachments only for run_account_mail.py: a site account's own month-end files, to that account's own address).
 
     python3 mail_send.py --engine DIR [--code DIR] --subject S --text FILE [--html FILE] [--to ADDR]
     python3 mail_send.py --failure JOB --engine DIR [--code DIR] [--step S] [--error E]
@@ -34,7 +35,8 @@ def _sender():
     return a, pw
 
 
-def build(sender, to, subject, text, html=None):
+def build(sender, to, subject, text, html=None, attachments=None):
+    """attachments: [(filename, bytes, 'maintype/subtype')]"""
     m = EmailMessage()
     m["From"], m["To"], m["Subject"] = sender, to, subject
     m["Date"] = formatdate(localtime=False)
@@ -42,6 +44,9 @@ def build(sender, to, subject, text, html=None):
     m.set_content(text or "")
     if html:
         m.add_alternative(html, subtype="html")
+    for name, data, ctype in attachments or []:
+        mt, st = ctype.split("/", 1)
+        m.add_attachment(data, maintype=mt, subtype=st, filename=name)
     return m
 
 

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Emails, and the Thndr inbox import, for site ACCOUNTS that switched them on (Account → Email updates / Thndr emails on
-the site): heads-up alerts after each market close, the weekly summary on Thursday night, and (accounts that connected
-their Gmail) new Thndr invoices and statements posted to the portfolio. Nothing is done for an account that has not
-opted in.
+the site): heads-up alerts after each market close, the weekly summary on Thursday evening, the month-end report (Excel
+workbook + PDF factsheet) when a monthly statement is posted, and (accounts that connected their Gmail) new Thndr
+invoices and statements posted to the portfolio. Nothing is done for an account that has not opted in.
 
     python3 run_account_mail.py --engine DIR [--code DIR] [--now ISO] [--weekly | --no-weekly] [--dry-run]
 
 An account that opts in stores Firestore mail/{uid} = {pkg}: an envelope sealed in its browser to the MAIL key (the public
 key of p/khaled/keys.json on the site, label 'portfolio-mail-v1'; this job opens it with SETUP_KEY = KHALED_SETUP_KEY)
-holding {uid, email, refresh, pk8, prefs: {alerts, weekly, gmail}}. That is the account's own choice to let this job open
+holding {uid, email, refresh, pk8, prefs: {alerts, weekly, reports, gmail}}. That is the account's own choice to let this job open
 its portfolio (the site says so when it is switched on). For each package this job:
   1. exchanges the refresh token for an ID token (Secure Token API) and reads users/{uid}/docs AS THAT ACCOUNT (the
      Firestore rules are unchanged: only the account itself can read its documents), opening each with the account key;
@@ -20,8 +20,12 @@ its portfolio (the site says so when it is switched on). For each package this j
      in sync/mail.gmail; a new error is emailed once. When the import ran, its heads-up digest replaces step 3.
   3. adds the shared market data (engine shared/: latest, history, bench) and runs src/jobs/account_alerts.js (the same
      PA.headsUp checks the page shows); items whose key is not in its alertsSent list are emailed, once;
-  4. on Thursday from 21:00 Cairo (or --weekly), runs src/tools/weekly.js and emails the summary, once a week;
-  5. saves {alertsSent, weeklySent, gmail} back to the account as users/{uid}/docs/sync__mail, encrypted to the account key.
+  4. on Thursday from 18:00 Cairo (or --weekly), runs src/tools/weekly.js and emails the summary, once a week;
+  5. month-end report (prefs.reports, default on): every imports/<M> that is a full month posted since 2026-09-28 and
+     has no reports.emailedAt gets excel.js + excel.py (workbook) and factsheet.js (HTML + PDF, on the page built from
+     src/; Playwright is installed by JOBS_PLAYWRIGHT_SETUP the first time one is due), emailed to the account's address
+     with both files attached, then stamped reports.emailedAt (reportsPending removed) in the account;
+  6. saves {alertsSent, weeklySent, gmail} back to the account as users/{uid}/docs/sync__mail, encrypted to the account key.
 Emails go from GMAIL_ADDRESS to the address in the package only. One account failing never stops the others; the job
 exits 1 (and emails the owner) only when nothing could be done at all. Logs carry counts, never figures or addresses.
 """
@@ -153,6 +157,8 @@ def materialize(docs, shared, out):
     os.makedirs(os.path.join(out, "bench"), exist_ok=True)
     os.makedirs(os.path.join(out, "history"), exist_ok=True)
     shutil.copyfile(os.path.join(shared, "latest.json"), os.path.join(out, "market", "latest.json"))
+    if os.path.exists(os.path.join(shared, "macro.json")):
+        shutil.copyfile(os.path.join(shared, "macro.json"), os.path.join(out, "market", "macro.json"))
     if os.path.exists(os.path.join(shared, "bench.json")):
         shutil.copyfile(os.path.join(shared, "bench.json"), os.path.join(out, "bench", "egx30.json"))
     for f in sorted(os.listdir(os.path.join(shared, "history"))):
@@ -259,6 +265,72 @@ def gmail_import(http, tok, pkg, keys, docs, shared, code, work, now, dry, read_
     return summary, os.path.join(run, "write"), data, {"after": after, **c}
 
 
+# ---------------------------------------------------------------- month-end report
+REPORTS_FROM = "2026-09-28"     # full months posted before this are not sent (no backlog when the feature started)
+XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def pending_reports(docs):
+    out = []
+    for k, v in docs.items():
+        if not k.startswith("imports/"):
+            continue
+        d = v.get("data") or {}
+        if d.get("fullMonth") and str(d.get("postedAt") or "") >= REPORTS_FROM and not (d.get("reports") or {}).get("emailedAt"):
+            out.append(k.split("/", 1)[1])
+    return sorted(out)
+
+
+_PAGE = {}
+
+
+def report_page(code):
+    """The desk page built from src/ once per run (the same page the owner's month-end uses), Playwright installed."""
+    if "path" not in _PAGE:
+        import atexit
+        work = tempfile.mkdtemp(prefix="acct-page-", dir=os.environ.get("RUNNER_TEMP") or None)
+        atexit.register(shutil.rmtree, work, True)
+        cmd = os.environ.get("JOBS_PLAYWRIGHT_SETUP")
+        if cmd:
+            jc.run(["bash", "-c", cmd], "month-end: install Playwright", timeout=900)
+        import run_sync
+        from types import SimpleNamespace
+        _PAGE["path"] = run_sync.desk_page(SimpleNamespace(code=code, config={"portfolioId": "account"}), work)
+    return _PAGE["path"]
+
+
+def month_end(code, data, M, name, work):
+    """-> (subject, text, html, attachments) for month M; the workbook is required, the PDF is attached when it renders."""
+    S = jc.short(M)
+    base = f"{''.join(ch for ch in name if ch.isalnum()) or 'Portfolio'}-{S}"
+    tools = os.path.join(code, "src", "tools")
+    xl, xlsx, html_p, pdf_p = (os.path.join(work, f) for f in (f"xl-{M}.json", base + ".xlsx", f"factsheet-{M}.html", base + ".pdf"))
+    jc.run(["node", os.path.join(tools, "excel.js"), "--data", data, "--month", M, "--out", xl], "month-end: excel.js")
+    jc.run([sys.executable, os.path.join(tools, "excel.py"), xl, xlsx], "month-end: excel.py")
+    att = [(base + ".xlsx", open(xlsx, "rb").read(), XLSX)]
+    html, pdf_note = None, ""
+    try:
+        fs = ["node", os.path.join(tools, "factsheet.js"), "--page", report_page(code), "--data", data, "--month", M, "--out", html_p]
+        try:
+            jc.run(fs + ["--pdf", pdf_p], "month-end: factsheet", timeout=600)
+        except jc.JobError:
+            jc.run(fs, "month-end: factsheet", timeout=600)
+        html = open(html_p, encoding="utf-8").read()
+        if os.path.exists(pdf_p):
+            att.append((base + ".pdf", open(pdf_p, "rb").read(), "application/pdf"))
+        else:
+            pdf_note = " (the PDF could not be made this time; the factsheet is in this email)"
+    except jc.JobError as e:
+        jc.log(f"month-end {M}: factsheet not made ({jc.mask(e.detail)[:120]}); sending the workbook")
+        pdf_note = " (the factsheet could not be made this time)"
+    what = "Excel workbook and PDF factsheet" if len(att) == 2 else "Excel workbook"
+    text = (
+        f"Your {S} month-end report is attached: {what}{pdf_note}. Excel sheets: Summary, Monthly, Holdings, Ledger, "
+        f"Closed trades, Income, Attribution, Marks & inputs.\n\nYou get this because email updates or Thndr emails are on "
+        f"in your account.\n")
+    return f"{name} · month-end report {S}", text, html, att
+
+
 def gmail_error_email(name, err, site):
     text = (f"The site could not read the Thndr emails in your Gmail for {name}:\n\n  {err}\n\n"
             "Usually the app password was deleted or changed. To fix it: open the site, tap Account, then Thndr emails, "
@@ -346,6 +418,25 @@ def run_one(http, pkg, shared, code, now, weekly_due, dry, send):
                 state["weeklySent"] = today
                 changed = True
                 notes.append("weekly sent")
+        if prefs.get("reports", True) and not dry:
+            fresh = read_account(http, tok, pkg["uid"], priv) if overlay else docs    # after an import: what was saved
+            months = pending_reports(fresh)
+            if months:
+                rdata = os.path.join(work, "rdata")
+                materialize(fresh, shared, rdata)
+                for M in months:
+                    subj, text, html, att = month_end(code, rdata, M, name, work)
+                    send(pkg["email"], subj, text, html, att)
+                    for attempt in range(2):
+                        try:
+                            commit_writes(http, tok, pkg["uid"], keys, fresh, [{"op": "update", "collection": "imports", "doc_id": M,
+                                          "data": {"reports": {"emailedAt": jc.now_iso(), "factsheetSentAt": jc.now_iso()}, "reportsPending": {"__delete__": True}}}], jc.now_iso())
+                            break
+                        except Conflict:
+                            fresh = read_account(http, tok, pkg["uid"], priv)
+                    else:
+                        raise jc.JobError("month-end", f"{M} was emailed but could not be marked as sent (the portfolio kept changing)")
+                    notes.append(f"month-end {M} sent ({len(att)} files)")
         if changed and not dry:
             cutoff = (now - datetime.timedelta(days=400)).strftime("%Y-%m-%d")
             state["alertsSent"] = {k: v for k, v in sent.items() if not (isinstance(v, str) and v < cutoff)}
@@ -359,8 +450,8 @@ def run_one(http, pkg, shared, code, now, weekly_due, dry, send):
 def smtp_sender():
     import mail_send
     sender, pw = mail_send._sender()
-    def send(to, subject, text, html):
-        mail_send.smtp_send(mail_send.build(sender, to, subject, text, html), sender, pw, to)
+    def send(to, subject, text, html, attachments=None):
+        mail_send.smtp_send(mail_send.build(sender, to, subject, text, html, attachments), sender, pw, to)
     return send
 
 
@@ -378,7 +469,7 @@ def main(argv=None, http=None, send=None):
         import zoneinfo
         t = datetime.datetime.fromisoformat(a.now.replace("Z", "+00:00")) if a.now else datetime.datetime.now(datetime.timezone.utc)
         now = t.astimezone(zoneinfo.ZoneInfo("Africa/Cairo"))
-        weekly_due = not a.no_weekly and (a.weekly or (now.strftime("%a") == "Thu" and now.hour >= 21))
+        weekly_due = not a.no_weekly and (a.weekly or (now.strftime("%a") == "Thu" and now.hour >= 18))
         shared = os.path.join(os.path.abspath(a.engine), "shared")
         if not os.path.exists(os.path.join(shared, "latest.json")):
             raise jc.JobError("setup", "no shared market data yet (shared/latest.json)")

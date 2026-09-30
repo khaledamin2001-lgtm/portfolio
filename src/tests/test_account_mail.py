@@ -6,8 +6,9 @@ was sent is saved back encrypted, a second run sends nothing, and an account tha
 A second account connected its Gmail: a synthetic Thndr monthly statement (src/tests/fixtures/make_statement_pdf.py) is
 "fetched" by a fake imap_fetch, sync.js posts it from the day after the account's tracking start (the opening rows typed
 at sign-up are kept, the earlier statement rows are not added twice), everything is saved in one pinned Firestore commit
-encrypted to that account's key, the summary email goes to its own address, a second run does nothing new, and a wrong
-app password is emailed once and recorded without touching the portfolio.
+encrypted to that account's key, the summary email goes to its own address, the month-end report (Excel workbook, and
+the PDF factsheet when Playwright is there; REQUIRE_PDF=1 insists on it) is emailed to it as attachments and stamped, a
+second run does nothing new, and a wrong app password is emailed once and recorded without touching the portfolio.
     python3 src/tests/test_account_mail.py <synthetic export dir> <tools dir with node_modules/pdfjs-dist>   (exit 0 = all pass)"""
 import os, sys, json, base64, shutil, tempfile, subprocess
 from email.message import EmailMessage
@@ -152,7 +153,7 @@ try:
                     return 200, {"updateTime": DB[path]["updateTime"]}
             return 404, {}
     sent = []
-    send = lambda to, subj, text, html: sent.append({"to": to, "subject": subj, "text": text, "html": bool(html)})
+    send = lambda to, subj, text, html, att=None: sent.append({"to": to, "subject": subj, "text": text, "html": bool(html), "att": att or []})
     argv = ["--engine", eng, "--code", code, "--now", "2026-09-24T19:30:00Z"]     # Thursday 22:30 Cairo
     rc = ram.main(argv, http=FakeHttp(), send=send)
     check("the job succeeds", rc == 0)
@@ -168,8 +169,28 @@ try:
     mk = ((gdoc("portfolio/marks") or {}).get("months") or {}).get("2026-08") or {}
     check("gmail: August is posted from the statement (month-end cash and securities, final)", mk.get("source") == "statement" and not mk.get("provisional") and abs(mk.get("cash", 0) - 9145) < 0.01 and abs(mk.get("securities", 0) - 860) < 0.01, json.dumps(mk))
     check("gmail: the Thndr account code is recorded from the statement", ((gdoc("portfolio/settings") or {}).get("account") or {}).get("unifiedCode") == "1234567")   # private-scan: synthetic
-    check("gmail: the import and sync state are saved in ONE commit", len(commits) == 1 and (gdoc("imports/2026-08") or {}).get("fullMonth") and "18a0b0c0d0e0f001" in ((gdoc("sync/state") or {}).get("seen") or {}), json.dumps(commits))
-    check("gmail: the summary email goes to the account's own address", len(gsent) == 1 and "Aug-26 statement posted" in gsent[0]["subject"], json.dumps([m["subject"] for m in gsent]))
+    check("gmail: the import and sync state are saved in ONE commit (the month-end stamp is a second)", len(commits) == 2 and commits[1] == 1 and (gdoc("imports/2026-08") or {}).get("fullMonth") and "18a0b0c0d0e0f001" in ((gdoc("sync/state") or {}).get("seen") or {}), json.dumps(commits))
+    check("gmail: the summary email goes to the account's own address", len(gsent) == 2 and "Aug-26 statement posted" in gsent[0]["subject"], json.dumps([m["subject"] for m in gsent]))
+    rep = gsent[1] if len(gsent) > 1 else {"subject": "", "att": []}
+    names = [a[0] for a in rep["att"]]
+    check("month-end: the Aug-26 report goes to the account's own address with the Excel workbook attached",
+          rep["subject"] == "Friend Portfolio · month-end report Aug-26" and "FriendPortfolio-Aug-26.xlsx" in names, json.dumps([rep["subject"], names]))
+    if names:
+        import io
+        from openpyxl import load_workbook
+        wb = load_workbook(io.BytesIO(rep["att"][0][1]), data_only=True)
+        check("month-end: the workbook opens and starts with the Summary sheet", wb.sheetnames[0] == "Summary", str(wb.sheetnames))
+    if os.environ.get("KEEP_REPORT"):
+        for a in rep["att"]:
+            open(os.path.join(os.environ["KEEP_REPORT"], a[0]), "wb").write(a[1])
+    has_pw = subprocess.run(["node", "-e", "require.resolve('playwright', {paths: [process.argv[1]]})", os.path.join(PDFJS_TOOLS, "node_modules")], capture_output=True).returncode == 0
+    if has_pw or os.environ.get("REQUIRE_PDF") == "1":
+        check("month-end: the PDF factsheet is attached and the factsheet is the email's HTML", "FriendPortfolio-Aug-26.pdf" in names and rep["html"]
+              and next(a for a in rep["att"] if a[0].endswith(".pdf"))[1][:5] == b"%PDF-", json.dumps(names))
+    else:
+        print("SKIP month-end PDF: no Playwright next to the tools (CI step 5f checks it)")
+    imp = gdoc("imports/2026-08") or {}
+    check("month-end: the month is stamped as sent in the account", (imp.get("reports") or {}).get("emailedAt") and "reportsPending" not in imp, json.dumps(imp)[:300])
     gm = (gdoc("sync/mail") or {}).get("gmail") or {}
     check("gmail: the result is recorded for the site (ok, 1 new, 1 applied)", gm.get("ok") and gm.get("new") == 1 and gm.get("applied") == 1, json.dumps(gm))
     check("the heads-up email lists the synthetic ex-dividend and target items", "Ex-dividend" in sent[0]["text"] and "Target reached" in sent[0]["text"])

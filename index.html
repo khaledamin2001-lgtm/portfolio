@@ -339,7 +339,12 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   window.pdExports = async () => { if (EXPORTS) return EXPORTS; try { const r = await fetch(base() + 'exports/index.json?t=' + Date.now(), { cache: 'no-store' }); EXPORTS = r.ok ? await r.json() : []; } catch (e) { EXPORTS = []; } return EXPORTS; };
   // kind 'xlsx' (default): the Excel workbook (entry.file); 'pdf': the PDF factsheet (entry.pdf), both encrypted the same way
   const FILE_KINDS = { xlsx: { key: 'file', what: 'workbook', type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }, pdf: { key: 'pdf', what: 'PDF factsheet', type: 'application/pdf' } };
+  // accounts made on the site get their month-end files by email (run_account_mail.py), not as downloads here
+  window.pdExportsNote = (month) => (!CUR || !CUR.cloud ? null
+    : (mailPrefs() || {}).reports ? `Your month-end Excel workbook and PDF factsheet are emailed to you when a monthly statement is posted. Look for "month-end report ${month}" in your email.`
+      : 'Month-end Excel and PDF files are sent by email: open Account → Email updates and tick "Month-end report". They come each time a monthly statement is posted.');
   window.pdDownloadExport = async (month, kind) => {
+    if (window.pdExportsNote(month)) throw new Error(window.pdExportsNote(month));
     if (!PK8) throw new Error('The portfolio is locked. Unlock it first.');
     const k = FILE_KINDS[kind || 'xlsx']; if (!k) throw new Error('Unknown file kind ' + kind);
     const list = await window.pdExports(); const x = list.find((e) => e.month === month); if (!x || !x[k.key]) throw new Error('No ' + k.what + ' published for ' + month);
@@ -1327,7 +1332,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   const MAIL_LABEL = 'portfolio-mail-v1';
   const mailLS = () => 'pd.mail.' + CUR.id;
   const mailPrefs = () => ls.get(mailLS());
-  const mailOn = () => { const m = mailPrefs(); return !!(m && (m.alerts || m.weekly)); };
+  const mailOn = () => { const m = mailPrefs(); return !!(m && (m.alerts || m.weekly || m.reports)); };
   const gmailOn = () => !!(mailPrefs() || {}).gmail;
   const sha = async (s) => b64big(await crypto.subtle.digest('SHA-256', enc.encode(s)));
   async function sealTo(pubB64, bytes, label) {
@@ -1336,41 +1341,42 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   }
   async function writeMail(prefs) {
     const mk = await (await fetch('p/khaled/keys.json', { cache: 'no-store' })).json();
-    const pkg = { v: 1, uid: CLOUD.uid, email: prefs.email, refresh: CLOUD.refresh, pk8: b64big(PK8), prefs: { alerts: !!prefs.alerts, weekly: !!prefs.weekly, gmail: !!prefs.gmail }, at: new Date().toISOString() };
+    const pkg = { v: 1, uid: CLOUD.uid, email: prefs.email, refresh: CLOUD.refresh, pk8: b64big(PK8), prefs: { alerts: !!prefs.alerts, weekly: !!prefs.weekly, reports: !!prefs.reports, gmail: !!prefs.gmail }, at: new Date().toISOString() };
     const env = Object.assign({ v: 1 }, await sealTo(mk.pub, enc.encode(JSON.stringify(pkg)), MAIL_LABEL));
     await fsReq('PATCH', `mail/${CLOUD.uid}`, { fields: { pkg: { stringValue: JSON.stringify(env) }, at: { stringValue: pkg.at } } });
     ls.set(mailLS(), Object.assign({}, prefs, { ref: await sha(CLOUD.refresh) }));
   }
   // nothing left on: the package is deleted, so the job no longer opens the portfolio
   async function setMail(prefs) {
-    if (prefs.alerts || prefs.weekly || prefs.gmail) return writeMail(prefs);
+    if (prefs.alerts || prefs.weekly || prefs.reports || prefs.gmail) return writeMail(prefs);
     await fsReq('DELETE', `mail/${CLOUD.uid}`); ls.del(mailLS());
   }
   // the job signs in with the saved refresh token: after a password change (which ends old sessions) it is sealed again
   async function resealMail() { const m = mailPrefs(); if (m && CLOUD && CLOUD.refresh && m.ref !== (await sha(CLOUD.refresh))) await writeMail(m); }
   function mailScreen(note) {
-    const on = mailOn(), m = on ? mailPrefs() : Object.assign({ email: CUR.email || (CLOUD && CLOUD.email) || '' }, mailPrefs() || {}, { alerts: true, weekly: true });
-    screen(`<h1>Email updates</h1><p>Get an email when something needs your attention (a dividend coming up, a target or stop reached, a big drop), and a summary every Thursday night.</p>
+    const on = mailOn(), m = on ? mailPrefs() : Object.assign({ email: CUR.email || (CLOUD && CLOUD.email) || '' }, mailPrefs() || {}, { alerts: true, weekly: true, reports: true });
+    screen(`<h1>Email updates</h1><p>Get an email when something needs your attention (a dividend coming up, a target or stop reached, a big drop), a summary every Thursday evening, and your month-end report (Excel workbook + PDF factsheet) when each monthly statement is posted.</p>
       <p class="lk-tip">To write these, the site owner's email job has to open your portfolio, so while this is on your figures are not private from that job. Switch it off any time: nothing is kept after that.</p>
       <form id="lk-ml" autocomplete="off"><input id="lk-ml-email" type="email" data-testid="mail-address" value="${esc(m.email)}" placeholder="Email address" aria-label="Email address">
       <label class="lk-check"><input type="checkbox" id="lk-ml-alerts" data-testid="mail-alerts" ${m.alerts ? 'checked' : ''}> Heads-up alerts</label>
-      <label class="lk-check"><input type="checkbox" id="lk-ml-weekly" data-testid="mail-weekly" ${m.weekly ? 'checked' : ''}> Weekly summary (Thursday night)</label>
+      <label class="lk-check"><input type="checkbox" id="lk-ml-weekly" data-testid="mail-weekly" ${m.weekly ? 'checked' : ''}> Weekly summary (Thursday evening)</label>
+      <label class="lk-check"><input type="checkbox" id="lk-ml-reports" data-testid="mail-reports" ${m.reports ? 'checked' : ''}> Month-end report (Excel + PDF)</label>
       <button class="lk-btn" id="lk-ml-go" data-testid="mail-on">${on ? 'Save' : 'Turn on email updates'}</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>
       ${on ? '<button class="lk-btn ghost" id="lk-ml-off" data-testid="mail-off">Turn off email updates</button>' : ''}
       <div class="lk-links"><button type="button" class="lk-link" id="lk-ml-back" data-testid="mail-back">Back</button></div>`);
     $l('#lk-ml-back').onclick = accountScreen;
     $l('#lk-ml').onsubmit = async (ev) => {
-      ev.preventDefault(); const email = $l('#lk-ml-email').value.trim(), alerts = $l('#lk-ml-alerts').checked, weekly = $l('#lk-ml-weekly').checked;
+      ev.preventDefault(); const email = $l('#lk-ml-email').value.trim(), alerts = $l('#lk-ml-alerts').checked, weekly = $l('#lk-ml-weekly').checked, reports = $l('#lk-ml-reports').checked;
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return err('Enter an email address.');
-      if (!alerts && !weekly) return err('Pick at least one kind of email, or turn email updates off.');
+      if (!alerts && !weekly && !reports) return err('Pick at least one kind of email, or turn email updates off.');
       const b = $l('#lk-ml-go'); b.disabled = true; err('Saving…');
-      try { await writeMail({ email, alerts, weekly, gmail: gmailOn() }); open(); toast('Email updates are on. The first ones come after the next market close.'); }
+      try { await writeMail({ email, alerts, weekly, reports, gmail: gmailOn() }); open(); toast('Email updates are on. The first ones come after the next market close.'); }
       catch (e) { console.error(e); b.disabled = false; err(e.message || String(e)); }
     };
     const off = $l('#lk-ml-off');
     if (off) off.onclick = async () => {
       off.disabled = true;
-      try { await setMail(Object.assign({}, mailPrefs(), { alerts: false, weekly: false })); open(); toast('Email updates are off.'); }
+      try { await setMail(Object.assign({}, mailPrefs(), { alerts: false, weekly: false, reports: false })); open(); toast('Email updates are off.'); }
       catch (e) { console.error(e); off.disabled = false; err(e.message || String(e)); }
     };
   }
@@ -1433,7 +1439,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
       ${change ? '' : `<label class="lk-lbl" for="lk-gm-name">Your full name, exactly as in the Thndr app</label>
       <input id="lk-gm-name" data-testid="gmail-holder" value="${esc(((S0.account || {}).holder) || '')}" placeholder="Full name" autocomplete="name">
       <p class="lk-hint">Thndr prints it on every invoice and statement. Only emails in this name are used, so nobody else's trades can land in your portfolio.</p>
-      ${mailOn() ? '' : '<label class="lk-check"><input type="checkbox" id="lk-gm-mail" data-testid="gmail-also-mail" checked> Also email me alerts and a Thursday summary</label>'}`}
+      ${mailOn() ? '' : '<label class="lk-check"><input type="checkbox" id="lk-gm-mail" data-testid="gmail-also-mail" checked> Also email me alerts, a Thursday summary and my month-end report (Excel + PDF)</label>'}`}
       <button class="lk-btn" id="lk-gm-go" data-testid="gmail-connect">${change ? 'Save' : 'Connect Gmail'}</button><div class="lk-err" role="alert"></div></form>
       <div class="lk-links"><button type="button" class="lk-link" id="lk-gm-back">Back</button></div>`);
     $l('#lk-gm-back').onclick = () => gmailStep2(done, first, change);
@@ -1453,8 +1459,8 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
           if (((S0.account || {}).holder || '') !== holder) patch.account = { holder };
           if (!S0.trackFrom) patch.trackFrom = cairoDay(Date.now() / 1000);   // the ledger so far stands; emails count from the next day
           if (Object.keys(patch).length) await saveDoc('update', 'portfolio/settings', patch);
-          const m = Object.assign({ email: email || address, alerts: false, weekly: false }, mailPrefs() || {});
-          if (also) Object.assign(m, { email: m.email || address, alerts: true, weekly: true });
+          const m = Object.assign({ email: email || address, alerts: false, weekly: false, reports: false }, mailPrefs() || {});
+          if (also) Object.assign(m, { email: m.email || address, alerts: true, weekly: true, reports: true });
           await writeMail(Object.assign(m, { gmail: true }));
           return gmailDoneScreen(done);
         }
@@ -1464,9 +1470,9 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   }
   function gmailDoneScreen(done) {
     screen(`<h1>Connected</h1><p>Here is what happens now:</p>
-      <ol class="lk-steps"><li>Twice a day (about 4 pm and 10:30 pm Cairo time) the site checks your Gmail for new Thndr emails. The first check is at the next of those times.</li>
+      <ol class="lk-steps"><li>Twice a day (about 4 pm and 6:30 pm Cairo time) the site checks your Gmail for new Thndr emails. The first check is at the next of those times.</li>
         <li>Trades from your Thndr invoices appear on the Activity tab by themselves.</li>
-        <li>When your monthly statement arrives (early each month), it corrects everything to Thndr's figures and closes the month.</li>
+        <li>When your monthly statement arrives (early each month), it corrects everything to Thndr's figures and closes the month${(mailPrefs() || {}).reports ? ', and your month-end report (Excel + PDF) is emailed to you' : ''}.</li>
         <li>If something does not match, nothing is changed and you get an email saying what to check.</li>
         <li>Only emails from after today count: what you entered when you started covers everything before.</li></ol>
       <p class="lk-tip">To see the last check, change the app password or turn this off: Account → Thndr emails.</p>
@@ -1477,7 +1483,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
     const [login, rec] = await Promise.all([readCloudDoc('sync', 'gmail').catch(() => ({})), readCloudDoc('sync', 'mail').catch(() => ({}))]);
     const addr = ((login.doc && login.doc.data) || {}).address || '', g = (((rec.doc && rec.doc.data) || {}).gmail) || null;
     const when = g && g.at ? new Date(g.at).toLocaleString('en-GB', { timeZone: 'Africa/Cairo', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
-    const status = !g ? 'Not checked yet. The first check is at about 4 pm or 10:30 pm Cairo time, whichever comes next.'
+    const status = !g ? 'Not checked yet. The first check is at about 4 pm or 6:30 pm Cairo time, whichever comes next.'
       : g.ok ? `<span class="lk-ok">Working.</span> Last checked ${esc(when)}: ${g.new ? `${g.new} new Thndr email${g.new > 1 ? 's' : ''}` : 'no new Thndr emails'}${g.held ? `, ${g.held} need${g.held > 1 ? '' : 's'} a look (see the email you got)` : ''}.`
       : `<b>The last check failed</b> (${esc(when)}): ${esc(g.error || 'unknown error')}. Usually the app password was deleted or changed: tap <b>Change app password</b>.`;
     screen(`<h1>Thndr emails</h1><p>Connected to <b>${esc(addr)}</b>. New Thndr invoices and statements are added to your portfolio twice a day.</p>
@@ -1552,7 +1558,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   })();
 })();
 </script>
-<meta name="pd-build" content="b1f5418fe606 2026-09-30 03:27">
+<meta name="pd-build" content="3aea8ec32a0c 2026-09-30 03:40">
 <style>
 :root{
   --bg:#F3F6F4; --surface:#FFFFFF; --surface-2:#EDF2EF; --ink:#0F1A17; --ink-2:#46534E; --ink-3:#5F6C67;
@@ -5210,6 +5216,7 @@ document.addEventListener('click', async e=>{
   if(e.target.id==='review-close'){ S.stmt.review=null; renderTab(true); return; }
   if(e.target.id==='retry-held'){ retryHeld(e.target); return; }
   if(e.target.id==='post-statement'){ postStatement(); return; }
+  if((e.target.id==='fs-xlsx'||e.target.id==='fs-pdf') && window.pdExportsNote && window.pdExportsNote(M(e.target.dataset.month))){ toast(window.pdExportsNote(M(e.target.dataset.month))); return; }
   if(e.target.id==='fs-xlsx'){ const b=e.target, m=b.dataset.month; b.disabled=true; b.textContent='Preparing…'; try{ const list=await window.pdExports(); if(!list.some(x=>x.month===m)){ const have=list.map(x=>M(x.month)).join(', '); toast(`No Excel workbook for ${M(m)} yet. Workbooks are published with each monthly statement${have?` (available: ${have})`:''}.`,'error'); } else { await window.pdDownloadExport(m); toast(`Excel workbook for ${M(m)} saved`); } }catch(err){ toast('Could not download the workbook: '+(err.message||err),'error'); } b.disabled=false; b.textContent='Download Excel'; return; }
   if(e.target.id==='fs-pdf'){ const b=e.target, m=b.dataset.month; b.disabled=true; b.textContent='Preparing…'; try{ await window.pdDownloadExport(m,'pdf'); toast(`PDF factsheet for ${M(m)} saved`); }catch(err){ toast('Could not download the PDF: '+(err.message||err),'error'); } b.disabled=false; b.textContent='Download PDF'; return; }
   if(e.target.id==='fs-email'){ e.target.disabled=true; await emailFactsheet(S.fsMonth); e.target.disabled=false; return; }
