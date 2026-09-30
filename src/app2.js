@@ -506,6 +506,36 @@ async function reviewStatement(item){
   }catch(e){ S.stmt.error = `Could not read the ${M(item.month)} statement: ${e.message||e}`; }
   S.stmt.busy=false; renderTab(true);
 }
+// The same review from statement PDFs chosen on this device (the live site has no Gmail; any portfolio being edited). A
+// portfolio that does not know its Thndr account yet asks once to confirm the account the PDFs name, then records it, so
+// from then on only that account's documents are accepted.
+async function reviewUpload(files){
+  S.stmt.busy='Reading the statement…'; S.stmt.review=null; S.stmt.error=null; renderTab(true);
+  try{
+    if(!files.length) throw new Error('choose the PDFs from the Thndr statement email');
+    const pdfjs = await loadPdfjs();
+    const docs=[]; for(const f of files){ if(!/\.pdf$/i.test(f.name) && f.type!=='application/pdf') throw new Error(`${f.name} is not a PDF`); docs.push({filename:f.name, lines: await TS.pdfLines(pdfjs, new Uint8Array(await f.arrayBuffer()))}); }
+    let own = TS.ownerCheck(docs, S.settings);
+    const acc = S.settings.account||{};
+    if(own.error && !String(acc.unifiedCode||'').trim()){
+      const a = TS.accountOf(docs, '');
+      if(a.codes.length===1 && confirm(`These PDFs are for Thndr account ${a.code}. Is that your account?\n\nIt will be recorded for this portfolio, and from then on only that account's statements are accepted.`)){
+        const settings = {...S.settings, account:{...acc, unifiedCode:a.code}};
+        if(!(await save(()=>S.db.doc('portfolio/settings').set(settings), `Thndr account ${a.code} recorded for this portfolio`))) throw new Error('the account could not be saved');
+        own = TS.ownerCheck(docs, settings);
+      }
+    }
+    if(own.error) throw new Error(`refused — this statement ${own.error}. Only this portfolio's own Thndr documents are ever imported.`);
+    const st = TS.parseStatement(docs); if(!st.cash) throw new Error('could not find the account statement among the PDFs (upload every PDF from the Thndr statement email)');
+    const rc = TS.reconcile(st, allTx(), S.assets, S.marks);
+    rc.item={id:'upload-'+Date.now(), subject:files.map(f=>f.name).join(', '), month:rc.month}; rc.files=files.map(f=>f.name); rc.accountCode=own.code;
+    rc.pick = rc.fresh.map(()=>true); rc.use = rc.conflicts.map(()=>false);
+    rc.applyMarks = !!(rc.markProposal && rc.markProposal.securities!=null);
+    S.stmt.review = rc; S.stmt.error=null;
+  }catch(e){ console.error(e); S.stmt.error = `Could not read the statement: ${e.message||e}`; }
+  S.stmt.busy=false; renderTab(true);
+}
+document.addEventListener('change', e=>{ if(e.target && e.target.id==='stmt-files'){ const f=[...(e.target.files||[])]; e.target.value=''; if(f.length) reviewUpload(f); } });
 const IMPORT_DEBUG = false;
 function vStatements(){
   const T=S.stmt, imp=S.imports||{};
@@ -516,6 +546,7 @@ function vStatements(){
   const hasSync = !!S.sync;
   return `
   <div class="panel"><div class="phead"><div><h2>Thndr statements</h2><div class="sub" data-testid="statements-intro">${hasSync?`An automatic job reads every new Thndr email twice a day. Trade invoices are booked straight away; any statement you request replaces the ledger for the dates it covers and updates your cash; the monthly statement with its positions snapshot rewrites the whole month and sets the month-end, then the factsheet is emailed to you. Nothing is saved unless the corrected month reconciles exactly (cash to the piaster, every share count); otherwise the email is held and sent to you for review here.`:`No automatic inbox sync is set up for this portfolio. Statements are posted by hand from this page (Check Gmail → Review → Post).`}</div></div>
+    ${S.readOnly?'':`<label class="btn" data-testid="statement-upload-label" ${T.busy?'aria-disabled="true"':''}>Upload statement PDFs<input type="file" id="stmt-files" data-testid="statement-upload" accept="application/pdf,.pdf" multiple hidden ${T.busy?'disabled':''}></label>`}
     <button class="btn primary" id="scan-gmail" data-testid="scan-gmail" ${T.busy?'disabled':''}>${T.list?'Check Gmail again':'Check Gmail'}</button></div>
     ${T.busy?`<p class="note">${esc(T.busy)}</p>`:''}${T.error?`<div class="banner" style="background:var(--neg-bg);color:var(--neg)">${esc(T.error)}</div>`:''}
     ${T.list? (T.list.length? `<div class="tbl"><table data-testid="statements-table"><thead><tr><th>Month</th><th>Email</th><th>Status</th><th></th></tr></thead><tbody>${T.list.map(row).join('')}</tbody></table></div>` : '<p class="muted">No Thndr statement emails found.</p>') : S.readOnly?'':`<p class="muted">Thndr emails the monthly statement around the 3rd of each month with three PDFs: the account statement, the fund account, and a month-end positions snapshot. The first check asks your permission to read Gmail.</p>`}
@@ -570,7 +601,7 @@ function reviewPanel(rv){
       <dt>Securities (${mp.fundsFromLedger?'snapshot stocks + funds at last NAV':'positions snapshot'})</dt><dd>${mp.securities!=null?egp(mp.securities,2):'No snapshot in this email'} <span class="note">${md.securities!=null?`now ${egp(md.current.securities,2)} · diff ${egp(md.securities,2)}`:''}</span></dd></dl>
       ${mp.securities!=null?`<label style="display:flex;gap:8px;margin-top:8px"><input type="checkbox" id="apply-marks" ${rv.applyMarks?'checked':''}> Set ${M(rv.month)} month-end marks from the statement and mark the month confirmed</label>`:''}`:''}
     <p class="note" style="margin-top:14px" data-testid="review-outcome">${postOutcome(rv).text}</p>
-    <div class="row" style="margin-top:18px;justify-content:space-between"><label style="display:flex;gap:8px"><input type="checkbox" id="post-email" ${S.settings.factsheetEmail&&rv.fullMonth?'checked':''} ${S.settings.factsheetEmail?'':'disabled'}> Email me the ${M(rv.month)} factsheet afterwards</label>
+    <div class="row" style="margin-top:18px;justify-content:space-between"><label style="display:flex;gap:8px" data-testid="post-email-label"><input type="checkbox" id="post-email" ${S.settings.factsheetEmail&&rv.fullMonth?'checked':''} ${S.settings.factsheetEmail?'':'disabled'}> Email me the ${M(rv.month)} factsheet afterwards</label>
       <div class="row"><button class="btn" id="review-close">Close</button><button class="btn primary" id="post-statement" data-testid="post-statement" ${S.readOnly?'disabled':''}>Post to portfolio</button></div></div>
   </div>`;
 }

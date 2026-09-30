@@ -136,7 +136,7 @@ def main():
             if not re.fullmatch(r'[0-9a-f]{64}\s*', open(full).read()): hit(f, 0, 'shape', 'data.fingerprint must be one sha256 hex')
             continue
         # ---- content ----
-        if ext in BINARY_EXT or 'fonts' in parts[:-1]: continue
+        if ext in BINARY_EXT or 'fonts' in parts[:-1] or 'vendor' in parts[:-1]: continue   # vendor/: third-party builds (pdf.js)
         raw = open(full, 'rb').read()
         if b'\0' in raw[:8192]: continue
         text = raw.decode('utf-8', 'replace'); scanned += 1

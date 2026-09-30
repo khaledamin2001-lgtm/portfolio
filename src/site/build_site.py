@@ -20,7 +20,10 @@ for a, b in [("function currentPortfolioId(){ return", "function currentPortfoli
              ("}).join('');\n}\ndocument.addEventListener('click', e=>{\n  const menu = $('#pf-menu');", "}).join('') + (window.pdSwitch ? '<button type=\"button\" data-testid=\"switch-other\" onclick=\"pdSwitch()\">Another portfolio<small>sign in, or open one with a setup key</small></button>' : '');\n}\ndocument.addEventListener('click', e=>{\n  const menu = $('#pf-menu');"),
              ("toast('The watchlist is edited on the Claude page.','error')", "toast('Turn on editing at the bottom of the page to change the watchlist.','error')"),
              ("toast('Retrying is only possible on the Claude page.','error')", "toast('Turn on editing at the bottom of the page to retry held emails.','error')"),
-             ("as recorded on the Claude page.", "as recorded.")]:
+             ("as recorded on the Claude page.", "as recorded."),
+             # statement PDFs are read with the site's own copy of pdf.js (vendor/, the same 3.11.174 build the Claude page loads)
+             ("'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'", "'vendor/pdf.worker.min.js'"),
+             ("'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'", "'vendor/pdf.min.js'")]:
     assert page.count(a) == 1, 'page layout changed: ' + a
     page = page.replace(a, b)
 hook = "async function refreshNow(btn){"
@@ -56,8 +59,8 @@ head = '''<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>Stock Market Portfolio Tracker</title>
 <style>''' + face + ''':root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:#F3F6F4}img{max-width:100%}[hidden]{display:none!important}
 ''' + css + '''
-[data-testid=scan-gmail],[data-testid=factsheet-email],[data-testid=post-statement]{display:none!important}
-body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[data-testid=save-marks],[data-testid=save-assets],[data-testid=save-settings]){display:none!important}
+[data-testid=scan-gmail],[data-testid=factsheet-email],[data-testid=post-email-label]{display:none!important}
+body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[data-testid=save-marks],[data-testid=save-assets],[data-testid=save-settings],[data-testid=post-statement],[data-testid=statement-upload-label]){display:none!important}
 </style></head><body class="pd-locked">
 <div id="lock" role="dialog" aria-modal="true" aria-label="Unlock portfolio"></div>
 <div id="pd-offline" data-testid="offline-banner" role="status" hidden></div>
@@ -76,7 +79,10 @@ MANIFEST = {"id": "./", "name": "Portfolio Desk", "short_name": "Portfolio", "de
                       {"src": "icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable"},
                       {"src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}]}
 json.dump(MANIFEST, open(os.path.join(REPO, 'manifest.webmanifest'), 'w'), indent=1)
-STATIC = ['manifest.webmanifest'] + ICONS + ['fonts/' + f for f in sorted({x['file'] for x in FONTS})]
+VENDOR = ['pdf.min.js', 'pdf.worker.min.js', 'pdfjs-LICENSE']
+os.makedirs(os.path.join(REPO, 'vendor'), exist_ok=True)
+for f in VENDOR: shutil.copyfile(os.path.join('vendor', f), os.path.join(REPO, 'vendor', f))
+STATIC = ['manifest.webmanifest'] + ICONS + ['fonts/' + f for f in sorted({x['file'] for x in FONTS})] + ['vendor/' + f for f in VENDOR[:2]]
 sw = open('pwa/sw.js').read()
 h = hashlib.sha256((head + page + bar + sw + json.dumps(MANIFEST)).encode())
 for f in STATIC: h.update(open(os.path.join(REPO, f), 'rb').read())

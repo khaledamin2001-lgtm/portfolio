@@ -195,6 +195,26 @@ const up = (url) => new Promise((res) => { http.get(url, (r) => { r.resume(); re
     await page.waitForTimeout(1500);
     check('a save made from a stale copy is refused once and redone', FB.conflicts === c0 + 1, `conflicts ${FB.conflicts - c0}`);
 
+    // ---- 4b. a Thndr statement uploaded from this device (synthetic PDFs), the account confirmed once ----
+    const STMT = path.join(TMP, 'stmt');
+    sh('python3', [path.join(ROOT, 'src/tests/fixtures/make_statement_pdf.py'), STMT, '--symbol', SYM, '--price', String(QUOTES[SYM].price), '--close', String(QUOTES[SYM].price), '--month', new Date().toISOString().slice(0, 7)]);
+    let asked = '';
+    page.on('dialog', (d) => { asked = d.message(); d.accept(); });
+    const L0 = FB.docs[`users/${uid}/docs/ledger__y${new Date().getUTCFullYear()}`].updateTime;
+    await page.click('#tab-settings');
+    check('the statement upload is offered', await $t('statement-upload-label').isVisible());
+    await $t('statement-upload').setInputFiles([path.join(STMT, 'account-statement.pdf'), path.join(STMT, 'position-snapshot.pdf')]);
+    await $t('statement-review').waitFor({ timeout: 60000 }).catch(() => {});
+    check('the PDFs are read on the device and the account is confirmed once', /Thndr account 1234567/.test(asked) && await $t('statement-review').isVisible(), asked.slice(0, 60));   // private-scan: synthetic
+    await A.shot('statement-review');
+    await $t('post-statement').click();
+    for (let i = 0; i < 60 && !FB.docs[`users/${uid}/docs/imports__${new Date().toISOString().slice(0, 7)}`]; i++) await page.waitForTimeout(250);
+    check('posting the statement saves the ledger, the month-end marks and the import record to the account',
+      FB.docs[`users/${uid}/docs/ledger__y${new Date().getUTCFullYear()}`].updateTime !== L0 && !!FB.docs[`users/${uid}/docs/imports__${new Date().toISOString().slice(0, 7)}`]);
+    await page.waitForTimeout(1500);
+    await page.click('#tab-activity'); await page.waitForTimeout(300);
+    check('the statement rows are in the ledger on the page', /Deposit[\s\S]*10,000/.test(await page.locator('#main').textContent()));
+
     // ---- 5. lock + unlock ----
     await page.click('[data-testid=live-lock]');
     await $t('live-password').fill(PW); await $t('live-password-submit').click();
