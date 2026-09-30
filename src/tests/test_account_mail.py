@@ -186,6 +186,9 @@ try:
                     DB[path] = {"blob": body["fields"]["blob"]["stringValue"], "updateTime": stamp()}
                     return 200, {"updateTime": DB[path]["updateTime"]}
             deny = (403, {"error": {"status": "PERMISSION_DENIED"}})
+            if path == "status":
+                if uid_of(tok) != OUID: return deny
+                return 200, {"documents": [{"name": f"x/status/{u}", "fields": {k: {"stringValue": v} for k, v in f.items()}} for u, f in STATUS.items()]}
             if path.startswith("status/"):
                 u = path.split("/")[1]
                 if uid_of(tok) != u or method != "PATCH": return deny
@@ -272,6 +275,12 @@ try:
     check("friends: a second run rewrites no unchanged copy and emails no request again", share_writes == [], json.dumps(share_writes))
     check("a second run sends nothing (each alert once, one summary a week)", rc2 == 0 and sent == [], json.dumps([m["subject"] for m in sent]))
     check("gmail: a second run finds nothing new and changes no portfolio document", commits == [1] and sorted(r["id"] for r in (gdoc("ledger/y2026") or {}).get("rows") or []) == ["o1", "o2"], json.dumps(commits))
+    STATUS["Unewbie"] = {"name": "Newbie's Portfolio", "email": "newbie@example.com"}
+    sent.clear(); ram.main(argv, http=FakeHttp(), send=send)
+    ns = [m for m in sent if m["to"] == "owner@example.com"]
+    check("the owner is emailed once about a new account (name and email)", len(ns) == 1 and ns[0]["subject"] == "New on your portfolio site: Newbie's Portfolio" and "newbie@example.com" in ns[0]["text"], json.dumps([m["subject"] for m in sent]))
+    sent.clear(); ram.main(argv, http=FakeHttp(), send=send)
+    check("... and not again", not [m for m in sent if m["to"] == "owner@example.com"])
     # a wrong app password: emailed once, recorded, the portfolio untouched
     before = {k: v["updateTime"] for k, v in DB.items() if k.startswith(f"users/{GUID}/docs/") and not k.endswith("sync__mail")}
     login = DB[f"users/{GUID}/docs/sync__gmail"]

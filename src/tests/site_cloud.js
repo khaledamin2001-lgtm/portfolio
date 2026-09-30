@@ -54,6 +54,13 @@ const MARKET = { 'market/latest': rd('market/latest.json'), 'bench/egx30': rd('b
 for (const f of fs.readdirSync(path.join(SYN, 'history'))) MARKET['history/' + f.replace('.json', '')] = rd('history/' + f);
 const QUOTES = MARKET['market/latest'].quotes;
 const SYM = Object.keys(QUOTES).find((s) => QUOTES[s] && QUOTES[s].price > 0);
+// the owner's main portfolio (setup-key kind) under the throwaway key: the synthetic portfolio with the market data
+{ const mainDocs = Object.assign({}, MARKET, { 'portfolio/settings': rd('portfolio/settings.json'), 'portfolio/assets': rd('portfolio/assets.json'), 'portfolio/marks': rd('portfolio/marks.json') });
+  for (const f of fs.readdirSync(path.join(SYN, 'ledger'))) mainDocs['ledger/' + f.replace('.json', '')] = rd('ledger/' + f);
+  fs.writeFileSync(path.join(TMP, 'main-docs.json'), JSON.stringify(mainDocs));
+  const pub = JSON.parse(fs.readFileSync(path.join(SITE, 'p/khaled/keys.json'), 'utf8')).pub;
+  fs.writeFileSync(path.join(SITE, 'p/khaled/data.enc.json'), sh('python3', ['-c', `import sys, json; sys.path.insert(0, ${JSON.stringify(path.join(ROOT, 'src/jobs'))}); import run_shared_market as r
+print(r.seal_bundle(json.load(open(${JSON.stringify(path.join(TMP, 'main-docs.json'))})), ${JSON.stringify(pub)}, "2026-09-29T13:00:00+00:00"))`]).trim()); }
 function writeBundle(pub) {   // sealed exactly like run_shared_market.py (the Python code itself)
   const docs = path.join(TMP, 'market-docs.json'); fs.writeFileSync(docs, JSON.stringify(MARKET));
   const env = sh('python3', ['-c', `import sys, json; sys.path.insert(0, ${JSON.stringify(path.join(ROOT, 'src/jobs'))}); import run_shared_market as r
@@ -497,6 +504,36 @@ print(r.seal_json(json.load(open(${JSON.stringify(path.join(TMP, 'snap.json'))})
     await I.$t('delete-confirm').fill('DELETE'); await I.$t('delete-go').click();
     await I.$t('live-signup').waitFor({ timeout: 30000 }).catch(() => {});
     check('"Delete my account" removes the sign-in and everything else', !FB.users[uidT] && !Object.keys(FB.docs).some((k) => k.includes(uidT)) && await I.$t('live-signup').isVisible());
+
+    // ---- 10. one place: the owner's main portfolio carries the site account (no second portfolio) ----
+    await G.page.goto(ORIGIN + '/index.html'); await G.$t('live-switch').waitFor({ timeout: 30000 }); await G.$t('live-switch').click();
+    await G.$t('live-setup-key-list').click(); await G.$t('live-pick-khaled').click();
+    await G.$t('live-setup-key').fill(fs.readFileSync(path.join(TMP, 'mailsec', 'setup_key.txt'), 'utf8').trim()); await G.$t('live-setup-submit').click();
+    await G.$t('live-new-password').fill('main device 99'); await G.$t('live-new-password-repeat').fill('main device 99'); await G.$t('live-password-continue').click();
+    await G.lockHidden(60000).catch(() => {}); if (await G.$t('live-bio-skip').count()) await G.$t('live-bio-skip').click(); await G.lockHidden();
+    await G.page.waitForTimeout(600);
+    check('the main portfolio opens with its setup key', /Demo Portfolio/.test(await G.page.locator('#pf-name-text').textContent()));
+    await G.$t('account-menu').click(); await G.$t('link-email').waitFor();
+    await G.$t('link-email').fill(OWNER_EMAIL); await G.$t('link-password').fill('owner pass 777'); await G.$t('link-go').click();
+    await G.$t('link-signout').waitFor({ timeout: 30000 }).catch(() => {});
+    check('signing in from the main portfolio links the site account and removes its separate entry here',
+      await G.$t('account-friends').isVisible() && await G.$t('account-admin').isVisible() && (await G.page.evaluate(() => JSON.parse(localStorage.getItem('pd.accounts') || '[]').length)) === 0);
+    await G.shot('linked-account');
+    await G.$t('account-friends').click(); await G.$t('friend-email').fill(EMAIL); await G.$t('friend-add').click();
+    await G.$t('friend-sent').waitFor({ timeout: 15000 }).catch(() => {});
+    await E.$t('account-menu').click(); await E.$t('account-friends').click(); await E.$t('friend-accept').waitFor({ timeout: 15000 }); await E.$t('friend-accept').click();
+    await E.$t('friend-friends').waitFor({ timeout: 20000 }).catch(() => {});
+    await G.$t('friends-back').click(); await G.$t('account-friends').click(); await G.$t('friend-view').waitFor({ timeout: 15000 });
+    await G.$t('friend-view').click(); await G.lockHidden(30000).catch(() => {}); await G.page.waitForTimeout(800);
+    check("from the main portfolio, a friend's portfolio opens under the banner", /Omar/.test(await G.page.locator('#pf-name-text').textContent()) && await G.$t('view-banner').isVisible());
+    await G.$t('view-back').click(); await G.page.waitForTimeout(800);
+    check('"Back to mine" returns to the main portfolio', /Demo Portfolio/.test(await G.page.locator('#pf-name-text').textContent()));
+    await G.page.reload(); await G.$t('live-password').waitFor({ timeout: 30000 }); await G.$t('live-password').fill('main device 99'); await G.$t('live-password-submit').click();
+    await G.lockHidden(60000).catch(() => {}); await G.page.waitForTimeout(600);
+    await G.$t('account-menu').click(); await G.$t('account-admin').waitFor({ timeout: 15000 }).catch(() => {});
+    check('after unlocking the main portfolio again, Friends and Admin are right there (the link is remembered)', await G.$t('account-friends').isVisible() && await G.$t('account-admin').isVisible());
+    await G.$t('account-admin').click(); await G.$t('admin-row').first().waitFor({ timeout: 20000 }).catch(() => {});
+    check('Admin opens from the main portfolio', (await G.$t('admin-row').count()) >= 2);
   } catch (e) {
     check('run', false, e.stack || String(e));
   }

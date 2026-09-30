@@ -423,6 +423,13 @@ def friend_email(name, who, site):
     return f"{who} wants to be friends on the portfolio site", text
 
 
+def signup_email(rows, site):
+    names = [r.get("name") or "(no name)" for r in rows]
+    lines = [f"• {r.get('name') or '(no name)'} ({r.get('email') or 'no email'})" for r in rows]
+    text = ("New on your portfolio site:\n\n" + "\n".join(lines) + f"\n\nSee everyone on {site}: Account, then Admin.\n")
+    return ("New on your portfolio site: " + (names[0] if len(names) == 1 else f"{len(names)} people"))[:180], text
+
+
 def write_status_job(http, tok, uid, job):
     """status/{uid}.job for the admin screen; the rest of the status document is the site's."""
     try:
@@ -465,7 +472,8 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
     prefs = pkg.get("prefs") or {}
     # the site owner's own account is only a sign-in for the admin screen and friends: the main portfolio already reads
     # the owner's Thndr emails and sends the owner's emails, so this account gets no import and no emails of its own
-    if hashlib.sha256(str(token_claims(tok).get("email") or "").lower().encode()).hexdigest() == OWNER_HASH:
+    owner_acct = hashlib.sha256(str(token_claims(tok).get("email") or "").lower().encode()).hexdigest() == OWNER_HASH
+    if owner_acct:
         prefs = {"alerts": False, "weekly": False, "reports": False, "gmail": False, "shareMain": prefs.get("shareMain")}
     today = now.strftime("%Y-%m-%d")
     site = SITE
@@ -588,6 +596,23 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                         notes.append(f"{n} friend cop{'y' if n == 1 else 'ies'} refreshed{' (main portfolio)' if snap['full'] else ''}")
             except Exception as e:      # friends never stop the rest
                 notes.append(f"friends not done ({getattr(e, 'step', type(e).__name__)})")
+        # the owner hears about every new account (the admin list, read with the owner's verified sign-in)
+        if owner_acct and not dry:
+            try:
+                st, j = http.json("GET", f"{FS}/status?pageSize=300", headers={"Authorization": "Bearer " + tok})
+                if st == 200:
+                    rows = {d["name"].rsplit("/", 1)[-1]: {k: v.get("stringValue") for k, v in (d.get("fields") or {}).items()} for d in j.get("documents") or []}
+                    known = state.get("knownAccounts")
+                    new = [u for u in sorted(rows) if u != pkg["uid"] and known is not None and u not in known]
+                    if new:
+                        subj, body = signup_email([rows[u] for u in new], site)
+                        send(pkg["email"], subj, body, None)
+                        notes.append(f"{len(new)} new account(s) emailed")
+                    if known is None or sorted(known) != sorted(rows):
+                        state["knownAccounts"] = sorted(rows)
+                        changed = True
+            except Exception as e:
+                notes.append(f"new accounts not checked ({type(e).__name__})")
         if changed and not dry:
             cutoff = (now - datetime.timedelta(days=400)).strftime("%Y-%m-%d")
             state["alertsSent"] = {k: v for k, v in sent.items() if not (isinstance(v, str) and v < cutoff)}
