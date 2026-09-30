@@ -95,7 +95,8 @@ const sv = (f, k) => (f && f[k] && f[k].stringValue) || null;
 function allowed(a, method, p, cur, next) {
   const uid = a && a.uid, admin = !!(a && a.email === OWNER_EMAIL && a.verified), me = (x) => !!uid && uid === x;
   let m;
-  if ((m = p.match(/^users\/([^/]+)$/))) return me(m[1]) || (admin && method === 'DELETE');
+  if (p === 'users') return admin && method === 'GET';
+  if ((m = p.match(/^users\/([^/]+)$/))) return me(m[1]) || (admin && (method === 'DELETE' || method === 'GET'));
   if ((m = p.match(/^users\/([^/]+)\/docs(?:\/[^/]+)?$/))) return me(m[1]) || (admin && (method === 'GET' || method === 'DELETE'));
   if (p === 'shared/membersPub') return method === 'GET' || (!!uid && method === 'PATCH' && !cur);
   if (p === 'shared/members') return !!uid && (method === 'GET' || (method === 'PATCH' && !cur));
@@ -461,10 +462,12 @@ print(r.seal_json(json.load(open(${JSON.stringify(path.join(TMP, 'snap.json'))})
     await G.$t('account-admin').click();
     await G.$t('admin-verify-send').waitFor();
     check('the admin screen asks the owner to verify the email first', await G.$t('admin-verify-done').isVisible());
+    const omarStatus = FB.docs['status/' + uid]; delete FB.docs['status/' + uid];   // an account that has not opened the site since the admin page started
     await G.$t('admin-verify-send').click(); await G.page.waitForTimeout(300); await G.$t('admin-verify-done').click();
     await G.$t('admin-row').first().waitFor({ timeout: 20000 }).catch(() => {});
     const adminText = await G.page.locator('#lock').textContent();
-    check('the admin list shows every account with its name and email, and no figures', (await G.$t('admin-row').count()) === 3 && /Sara/.test(adminText) && /Omar/.test(adminText) && /sara@example\.com/.test(adminText) && !/10,000/.test(adminText), `${await G.$t('admin-row').count()} rows`);
+    check('the admin list shows everyone who signed up (also one who has not opened the site since), with names and emails, no figures', (await G.$t('admin-row').count()) === 3 && /Sara/.test(adminText) && /Omar/.test(adminText) && /sara@example\.com/.test(adminText) && /3 people have signed up/.test(adminText) && !/10,000/.test(adminText), `${await G.$t('admin-row').count()} rows`);
+    FB.docs['status/' + uid] = omarStatus;
     await G.shot('admin');
     await G.page.locator('[data-testid=admin-row]', { hasText: 'Sara' }).locator('[data-testid=admin-reset]').click();
     await G.$t('admin-reset-confirm').fill('reset'); await G.$t('admin-reset-go').click();

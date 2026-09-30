@@ -14,11 +14,11 @@ service cloud.firestore {
       return request.auth != null && request.auth.uid == uid;
     }
     // An account's profile (public key + its private key wrapped by the password and by the recovery code) and its
-    // encrypted documents: only that account. The admin may list and delete them (to reset an account); it cannot
-    // open them (they are encrypted to the account's key).
+    // encrypted documents: only that account. The admin may list profiles (the admin screen asks for the name and join
+    // date only) and delete them (reset / delete); it cannot open the documents (they are encrypted to the account's key).
     match /users/{uid} {
       allow read, write: if me(uid);
-      allow delete: if isAdmin();
+      allow read, delete: if isAdmin();
       match /docs/{docId} {
         allow read, write: if me(uid);
         allow read, delete: if isAdmin();

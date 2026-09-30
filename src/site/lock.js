@@ -1337,9 +1337,9 @@
   const jparse = (x) => { try { return JSON.parse(x); } catch (e) { return null; } };
   const dayOf = (iso) => (iso ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Cairo', day: 'numeric', month: 'short' }).format(new Date(iso)) : '—');
   const whenOf = (iso) => (iso ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Cairo', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(iso)) : '—');
-  async function listAll(path) {
+  async function listAll(path, extra) {
     const out = []; let t = '';
-    do { const j = await fsReq('GET', path, null, 'pageSize=300' + (t ? '&pageToken=' + encodeURIComponent(t) : '')); (j.documents || []).forEach((d) => out.push(d)); t = j.nextPageToken || ''; } while (t);
+    do { const j = await fsReq('GET', path, null, 'pageSize=300' + (extra ? '&' + extra : '') + (t ? '&pageToken=' + encodeURIComponent(t) : '')); (j.documents || []).forEach((d) => out.push(d)); t = j.nextPageToken || ''; } while (t);
     return out;
   }
   const fsDel = (p) => fsReq('DELETE', p).catch((e) => { if (e.code !== 'not_found') throw e; });
@@ -1576,9 +1576,13 @@
     screen('<h1>Admin</h1><p>Loading…</p>');
     try {
       if (!claims(await idToken()).email_verified) return verifyScreen();
-      const [docs, mk, dels] = await Promise.all([listAll('status'), fetch('m/market.enc.json?t=' + Date.now(), { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null), listAll('deleted').catch(() => [])]);
-      const rows = docs.map((d) => { const x = fsData(d); return Object.assign(x, { uid: d.name.split('/').pop(), site: jparse(x.site) || {}, job: jparse(x.job) || null }); })
-        .sort((a, b) => String(b.lastSeen || '').localeCompare(String(a.lastSeen || '')));
+      // everyone who signed up (their profiles: name and join date only), with the status line of those who opened the site since
+      const [docs, mk, dels, profs] = await Promise.all([listAll('status'), fetch('m/market.enc.json?t=' + Date.now(), { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null), listAll('deleted').catch(() => []),
+        listAll('users', 'mask.fieldPaths=name&mask.fieldPaths=createdAt').catch(() => [])]);
+      const byUid = {};
+      for (const d of profs) { const x = fsData(d); byUid[d.name.split('/').pop()] = { uid: d.name.split('/').pop(), name: x.name, createdAt: x.createdAt, site: {}, job: null, quiet: true }; }
+      for (const d of docs) { const x = fsData(d), u = d.name.split('/').pop(); byUid[u] = Object.assign(byUid[u] || {}, x, { uid: u, site: jparse(x.site) || {}, job: jparse(x.job) || null, quiet: false }); if (!x.createdAt && byUid[u].createdAt == null) delete byUid[u].createdAt; }
+      const rows = Object.values(byUid).sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
       const now = Date.now(), old = (iso, days) => !iso || now - Date.parse(iso) > days * 864e5;
       const card = (r) => {
         const s = r.site, j = r.job || {}, g = j.gmail || null, bad = [], ok = [];
@@ -1590,14 +1594,15 @@
         }
         if ((s.mail || s.reports || s.gmail) && r.job && old(j.at, 2)) bad.push(`The daily job has not reached this account since ${whenOf(j.at)}`);
         if (j.report) ok.push(`Last month-end report: ${j.report}`);
-        const facts = [`Joined ${dayOf(r.createdAt)} · last opened ${dayOf(r.lastSeen)}`, `Email updates ${s.mail ? 'on' : 'off'} · month-end report ${s.reports ? 'on' : 'off'} · Thndr emails ${s.gmail ? 'on' : 'off'} · friends ${s.friends || 0}`];
-        return `<div class="lk-card${bad.length ? ' bad' : ''}" data-testid="admin-row"><div class="lk-card-head"><b>${esc(r.name || '(no name)')}</b><small>${esc(r.email || '')}</small></div>
+        const facts = r.quiet ? [`Joined ${dayOf(r.createdAt)} · has not opened the site since the admin page started (details appear when they do)`]
+          : [`Joined ${dayOf(r.createdAt)} · last opened ${dayOf(r.lastSeen)}`, `Email updates ${s.mail ? 'on' : 'off'} · month-end report ${s.reports ? 'on' : 'off'} · Thndr emails ${s.gmail ? 'on' : 'off'} · friends ${s.friends || 0}`];
+        return `<div class="lk-card${bad.length ? ' bad' : ''}" data-testid="admin-row"><div class="lk-card-head"><b>${esc(r.name || '(no name)')}</b><small>${esc(r.email || (r.quiet ? 'email shown once they open the site' : ''))}</small></div>
           <ul class="lk-facts">${facts.map((t) => `<li>${esc(t)}</li>`).join('')}${ok.map((t) => `<li class="ok">${esc(t)}</li>`).join('')}${bad.map((t) => `<li class="bad">${esc(t)}</li>`).join('')}</ul>
           ${r.uid === CLOUD.uid ? '' : `<div class="lk-friend-btns"><button class="lk-btn ghost" data-reset="${esc(r.uid)}" data-testid="admin-reset">Reset (start over)</button><button class="lk-btn danger" data-delete="${esc(r.uid)}" data-testid="admin-delete">Delete account</button></div>`}</div>`;
       };
       const problems = rows.filter((r) => /class="lk-card bad/.test(card(r))).length;
-      screen(`<h1>Admin</h1><p>${rows.length} account${rows.length === 1 ? '' : 's'}${problems ? `, <b>${problems} with a problem</b>` : ', no problems'}. Shared prices updated ${esc(mk && mk.at ? whenOf(mk.at) : '—')}.</p>
-        <p class="lk-hint">You see names, emails and whether things work, never anyone's figures. Accounts appear here once they open the site.</p>
+      screen(`<h1>Admin</h1><p><b>${rows.length} ${rows.length === 1 ? 'person has' : 'people have'} signed up</b>${problems ? `, <b>${problems} with a problem</b>` : ', no problems'}, newest first. Shared prices updated ${esc(mk && mk.at ? whenOf(mk.at) : '—')}.</p>
+        <p class="lk-hint">You see names, emails and whether things work, never anyone's figures.</p>
         ${rows.map(card).join('') || '<p>No accounts yet.</p>'}
         ${dels.length ? `<p class="lk-hint" data-testid="admin-deleted">Deleted, sign-in removed the next time they try it: ${dels.map((d) => esc(fsData(d).email || '?')).join(', ')}</p>` : ''}
         <a class="lk-btn ghost" href="${JOB_URL}" target="_blank" rel="noopener noreferrer" data-testid="admin-job-link">Run the daily friends' job now (GitHub)</a>
