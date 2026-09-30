@@ -109,3 +109,7 @@ body.pd-locked>:not(#lock){display:none!important}
 .pd-friends small{font-size:11.5px;color:var(--ink-3,#5F6C67)}
 .pd-friends .pdf-tag{margin-top:4px;color:var(--accent,#0B6E5F);font-weight:600}
 .pd-friends .pdf-empty{margin:10px 0 0;font-size:12.5px;color:var(--ink-3,#5F6C67)}
+#lock .lk-btn small{display:block;font:400 12px/1.3 var(--f-ui,system-ui,sans-serif);opacity:.8;margin-top:4px}
+#lock .lk-btn:has(small){flex-direction:column}
+#lock .lk-or{display:flex;align-items:center;gap:10px;color:var(--ink-3,#5F6C67);font-size:12px}
+#lock .lk-or::before,#lock .lk-or::after{content:"";flex:1;border-top:1px solid var(--rule,#DAE2DE)}

@@ -1011,12 +1011,19 @@
   }
   // first-run: the starting point. Tracking starts today: cash plus the shares held now, valued at today's prices
   function onboardScreen(first, pname, note) {
-    screen(`<h1>Set up your portfolio</h1><p>Tracking starts today. Enter your cash and the shares you hold now; each holding is valued at today's price. After this you can connect your Gmail so new trades are added by themselves.</p>
+    screen(`<h1>Set up your portfolio</h1><p>The easiest way: the site builds it from your Thndr emails, with your holdings, trades and returns since your first monthly statement. No typing.</p>
+      <button class="lk-btn" id="lk-ob-hist" data-testid="onboard-history">Build it from my Thndr emails<small>recommended, if your Thndr emails go to Gmail (about 3 minutes)</small></button>
+      <div class="lk-or"><span>or type what you hold now</span></div>
       <form id="lk-ob" autocomplete="off"><input id="lk-ob-name" data-testid="onboard-name" value="${esc(pname)}" aria-label="Portfolio name" placeholder="Portfolio name">
       <input id="lk-ob-cash" type="number" step="any" min="0" inputmode="decimal" data-testid="onboard-cash" placeholder="Cash in your broker account (EGP)" aria-label="Cash in your broker account (EGP)">
-      <textarea id="lk-ob-hold" rows="5" data-testid="onboard-holdings" placeholder="Shares you hold, one per line, e.g.\nCOMI 100\nETEL 250" aria-label="Shares you hold"></textarea>
-      <button class="lk-btn" id="lk-ob-go" data-testid="onboard-submit">Start tracking</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>
+      <textarea id="lk-ob-hold" rows="4" data-testid="onboard-holdings" placeholder="Shares you hold, one per line, e.g.\nCOMI 100\nETEL 250" aria-label="Shares you hold"></textarea>
+      <button class="lk-btn ghost" id="lk-ob-go" data-testid="onboard-submit">Start tracking from today</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>
       <div class="lk-links"><button type="button" class="lk-link" id="lk-ob-skip" data-testid="onboard-skip">Skip: start with an empty portfolio</button></div>`);
+    $l('#lk-ob-hist').onclick = async () => {
+      const b = $l('#lk-ob-hist'); b.disabled = true; err('Setting up…');
+      try { await createPortfolio($l('#lk-ob-name').value.trim() || pname, first, '0', '', { history: true }); await start(); gmailSetupScreen(async () => { open(); await offerBio(PK8); }, true, false, true); }
+      catch (e) { console.error(e); b.disabled = false; err(e.message || String(e)); }
+    };
     const run = async (holdText, cashText) => {
       const go = $l('#lk-ob-go'); go.disabled = true; err('Setting up…');
       try { await createPortfolio($l('#lk-ob-name').value.trim() || pname, first, cashText, holdText); await start(); gmailScreen(async () => { open(); await offerBio(PK8); }, true); }
@@ -1025,7 +1032,9 @@
     $l('#lk-ob').onsubmit = (ev) => { ev.preventDefault(); run($l('#lk-ob-hold').value, $l('#lk-ob-cash').value); };
     $l('#lk-ob-skip').onclick = () => run('', '0');
   }
-  async function createPortfolio(pname, holder, cashText, holdText) {
+  // history: built later from the Thndr emails (run_account_mail.py + history_seed.js): no start date yet, nothing typed
+  async function createPortfolio(pname, holder, cashText, holdText, opts) {
+    const history = !!(opts && opts.history);
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date());
     const cash = cashText === '' || cashText == null ? 0 : parseFloat(String(cashText).replace(/[, ]/g, ''));
     if (!isFinite(cash) || cash < 0) throw new Error('Enter the cash as a number (0 if none).');
@@ -1050,9 +1059,10 @@
     if (invested + cash > 0) rows.unshift({ id: rid(), d: today, t: 'Deposit', amt: Math.round((invested + cash) * 100) / 100, acc: 'Main', src: 'manual', opening: true, note: 'Starting value at sign-up (cash + holdings at that day\'s prices)' });
     const L = (mk.docs || {})['market/latest'] || {}, ix = (L.index || {}).EGX30CAPPED || {}, pol = ((L.rates || {}).policy || {}).rate, fx = ((L.fx || {}).USDEGP || {}).price;
     // trackFrom: Thndr emails and statements are used from the day after sign-up; the opening rows cover everything before
-    const settings = { name: pname, portfolioId: CUR.id, inception: today.slice(0, 7), trackFrom: today, openingValue: 0, cash, cashDate: today, cashSource: 'entered at sign-up',
+    const settings = { name: pname, portfolioId: CUR.id, inception: today.slice(0, 7), openingValue: 0, cash, cashDate: today, cashSource: history ? 'from the Thndr emails (not built yet)' : 'entered at sign-up',
       account: { holder, unifiedCode: '' }, riskFree: typeof pol === 'number' ? pol : 0.22, fxStart: typeof fx === 'number' ? fx : 50, benchCloseStart: typeof ix.prevMonthClose === 'number' ? ix.prevMonthClose : null,
       openThreshold: 0.5, staleDays: 7, volLow: 0.03, volHigh: 0.08, priceDate: today, factsheetEmail: '', returnMethod: 'dietz' };
+    if (history) settings.historyImport = { status: 'pending' }; else settings.trackFrom = today;
     await saveDoc('set', 'portfolio/settings', settings);
     await saveDoc('set', 'portfolio/assets', { items });
     await saveDoc('set', 'portfolio/marks', { months: {} });
@@ -1207,7 +1217,7 @@
     };
   }
   /* Thndr emails (opt-in): the account connects its own Gmail with a Google app password, and the account job imports its
-     Thndr invoices and statements twice a day (run_account_mail.py: imap_fetch.py, then sync.js). The login is the
+     Thndr invoices and statements every hour of the day (run_account_mail.py: imap_fetch.py, then sync.js). The login is the
      account's own document sync/gmail, encrypted to its key like every other document; the mail package says gmail: true
      so the job opens it. Turning it off deletes that document. Every screen says plainly what to do and what it means. */
   const GOOGLE_2SV = 'https://myaccount.google.com/signinoptions/twosv', GOOGLE_APPPW = 'https://myaccount.google.com/apppasswords';
@@ -1223,14 +1233,15 @@
     $l('#lk-gm-skip').onclick = () => done();
   }
   // one screen: the Gmail address, the two Google pages (opened in that Google account), the code, the Thndr name
-  async function gmailSetupScreen(done, first, change) {
+  async function gmailSetupScreen(done, first, change, history) {
     const [set, login] = await Promise.all([readCloudDoc('portfolio', 'settings').catch(() => ({})), readCloudDoc('sync', 'gmail').catch(() => ({}))]);
     const S0 = (set.doc && set.doc.data) || {}, L0 = (login.doc && login.doc.data) || {};
     const email = CUR.email || (CLOUD && CLOUD.email) || '';
     const addr0 = L0.address || (/@(gmail|googlemail)\.com$/i.test(email) ? email : '');
     let n = 0;
     const step = (title, sub) => `<div class="lk-step"><span class="lk-num">${++n}</span><div><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}</div></div>`;
-    screen(`<h1>${change ? 'New app password' : 'Connect your Gmail'}</h1>
+    screen(`<h1>${change ? 'New app password' : history ? 'Build it from your Thndr emails' : 'Connect your Gmail'}</h1>
+      ${history ? '<p>Connect the Gmail your Thndr emails go to. The site finds your first monthly Thndr statement there and builds your portfolio from it, with every statement and trade since. It keeps adding new ones every hour.</p>' : ''}
       <form id="lk-gm" autocomplete="off">
       ${step('Type your Gmail', 'The one your Thndr emails go to.')}
       <input id="lk-gm-addr" type="email" data-testid="gmail-address" value="${esc(addr0)}" placeholder="you@gmail.com" autocapitalize="none" spellcheck="false" aria-label="Your Gmail address">
@@ -1247,7 +1258,7 @@
       <p class="lk-hint">Google says "not available for your account"? Do the 2-Step Verification step first. Work or school Gmail accounts may not allow this.</p>
       <details class="lk-more"><summary>Is this safe?</summary><p>The app password lets the site open your Gmail, but it only searches for emails from Thndr. It never sends, changes or deletes anything. While this is on, the site's daily job can open your portfolio to add the trades. To stop it, turn it off in Account → Thndr emails, or delete "EGX Tracker" in your Google App passwords.</p></details>
       <div class="lk-links"><button type="button" class="lk-link" id="lk-gm-back" data-testid="gmail-back">Back</button></div>`);
-    $l('#lk-gm-back').onclick = () => (change ? gmailStatusScreen(done) : gmailScreen(done, first));
+    $l('#lk-gm-back').onclick = () => (change ? gmailStatusScreen(done) : history ? done() : gmailScreen(done, first));
     // the Google buttons open the Google account of the address typed (authuser), not whichever is signed in first
     const links = () => { const a = $l('#lk-gm-addr').value.trim(), q = /@/.test(a) ? '?authuser=' + encodeURIComponent(a) : '';
       const s = $l('#lk-gm-2sv'); if (s) s.href = GOOGLE_2SV + q; $l('#lk-gm-app').href = GOOGLE_APPPW + q; };
@@ -1266,20 +1277,30 @@
         if (!change) {
           const patch = {};
           if (((S0.account || {}).holder || '') !== holder) patch.account = { holder };
-          if (!S0.trackFrom) patch.trackFrom = cairoDay(Date.now() / 1000);   // the ledger so far stands; emails count from the next day
+          if (!S0.trackFrom && !(S0.historyImport && S0.historyImport.status === 'pending')) patch.trackFrom = cairoDay(Date.now() / 1000);   // the ledger so far stands; emails count from the next day
           if (Object.keys(patch).length) await saveDoc('update', 'portfolio/settings', patch);
           const m = Object.assign({ email: email || address, alerts: false, weekly: false, reports: false }, mailPrefs() || {});
           if (also) Object.assign(m, { email: m.email || address, alerts: true, weekly: true, reports: true });
           await writeMail(Object.assign(m, { gmail: true }));
-          return gmailDoneScreen(done);
+          return gmailDoneScreen(done, history || !!(S0.historyImport && S0.historyImport.status === 'pending'));
         }
         toast('App password saved. The next check uses it.'); gmailStatusScreen(done);
       } catch (e) { console.error(e); b.disabled = false; err(e.message || String(e)); }
     };
   }
-  function gmailDoneScreen(done) {
+  function gmailDoneScreen(done, history) {
+    if (history) {
+      screen(`<h1>You're connected</h1>
+        <p>Your portfolio is built from your Thndr emails <b>within the hour</b>, and you get an email when it is ready. Until then it looks empty: that is expected.</p>
+        <ul class="lk-steps"><li>It starts from your first monthly Thndr statement in Gmail: your holdings and cash on that date, exactly as Thndr printed them.</li>
+          <li>Every statement and trade since then is added on top, so your returns go back to that date.</li>
+          <li>If a monthly statement is missing from your Gmail, the email says which one: request it in the Thndr app and it is added by itself.</li></ul>
+        <button class="lk-btn" id="lk-gm-done" data-testid="gmail-done">Done</button>`);
+      $l('#lk-gm-done').onclick = () => done();
+      return;
+    }
     screen(`<h1>You're connected</h1>
-      <p>From now on the site checks your Gmail at about <b>4 pm</b> and <b>6:30 pm</b> (Cairo time) and adds your new Thndr trades by itself.</p>
+      <p>From now on the site checks your Gmail <b>every hour</b> (9 am to 11 pm Cairo time) and adds your new Thndr trades by itself.</p>
       <ul class="lk-steps"><li>Your monthly Thndr statement corrects everything to Thndr's numbers${(mailPrefs() || {}).reports ? ', and your month-end report is emailed to you' : ''}.</li>
         <li>If something does not match, nothing is changed and you get an email saying what to check.</li>
         <li>Only trades from after today are added: what you entered today covers everything before.</li></ul>
@@ -1290,10 +1311,13 @@
     const [login, rec] = await Promise.all([readCloudDoc('sync', 'gmail').catch(() => ({})), readCloudDoc('sync', 'mail').catch(() => ({}))]);
     const addr = ((login.doc && login.doc.data) || {}).address || '', g = (((rec.doc && rec.doc.data) || {}).gmail) || null;
     const when = g && g.at ? new Date(g.at).toLocaleString('en-GB', { timeZone: 'Africa/Cairo', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
-    const status = !g ? 'Not checked yet. The first check is at about 4 pm or 6:30 pm Cairo time, whichever comes next.'
+    const hs = (((rec.doc && rec.doc.data) || {}).history) || null;
+    const status = !g ? 'Not checked yet. The first check is within the hour (checks run every hour, 9 am to 11 pm Cairo time).'
       : g.ok ? `<span class="lk-ok">Working.</span> Last checked ${esc(when)}: ${g.new ? `${g.new} new Thndr email${g.new > 1 ? 's' : ''}` : 'no new Thndr emails'}${g.held ? `, ${g.held} need${g.held > 1 ? '' : 's'} a look (see the email you got)` : ''}.`
       : `<b>The last check failed</b> (${esc(when)}): ${esc(g.error || 'unknown error')}. Usually the app password was deleted or changed: tap <b>Change app password</b>.`;
-    screen(`<h1>Thndr emails</h1><p>Connected to <b>${esc(addr)}</b>. New Thndr invoices and statements are added to your portfolio twice a day.</p>
+    const hline = !hs ? '' : hs.status === 'waiting' ? `<p class="lk-tip" data-testid="gmail-history">Building your portfolio from your Thndr emails: waiting, because ${esc(hs.reason || 'no monthly statement was found yet')}. It is built by itself as soon as one arrives.</p>`
+      : hs.status === 'done' ? `<p class="lk-hint" data-testid="gmail-history">Built from your Thndr emails, starting from your ${esc(hs.from || '')} monthly statement.</p>` : '';
+    screen(`<h1>Thndr emails</h1><p>Connected to <b>${esc(addr)}</b>. New Thndr invoices and statements are added to your portfolio every hour (9 am to 11 pm Cairo time).</p>${hline}
       <p class="lk-tip" data-testid="gmail-status">${status}</p>
       <button class="lk-btn ghost" id="lk-gm-change" data-testid="gmail-change">Change app password</button>
       <button class="lk-btn ghost" id="lk-gm-off" data-testid="gmail-off">Turn off</button>
@@ -1437,7 +1461,7 @@
       <input id="lk-fr-email" type="email" data-testid="friend-email" placeholder="The email they sign in with" autocapitalize="none" spellcheck="false">
       <button class="lk-btn" id="lk-fr-go" data-testid="friend-add">Send friend request</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>
       <p class="lk-hint">They see your request next time they open the site (and by email if they have email updates on). Once they accept, you both see each other's portfolio. Either of you can remove it any time and it stops at once.</p>
-      ${isOwner() ? `<p class="lk-tip" data-testid="friend-owner">${main ? 'Friends see <b>your main portfolio</b>, refreshed by the daily job at about 4 pm and 6:30 pm.' : "Friends see this account's portfolio."} <button type="button" class="lk-link" id="lk-fr-main" data-testid="friend-owner-toggle">${main ? "Show this account's portfolio instead" : 'Show my main portfolio instead'}</button></p>` : ''}
+      ${isOwner() ? `<p class="lk-tip" data-testid="friend-owner">${main ? 'Friends see <b>your main portfolio</b>, refreshed by the job every hour, 9 am to 11 pm and 6:30 pm.' : "Friends see this account's portfolio."} <button type="button" class="lk-link" id="lk-fr-main" data-testid="friend-owner-toggle">${main ? "Show this account's portfolio instead" : 'Show my main portfolio instead'}</button></p>` : ''}
       <div class="lk-links"><button type="button" class="lk-link" id="lk-fr-back" data-testid="friends-back">Back</button></div>`);
     $l('#lk-fr-back').onclick = accountScreen;
     const find = (uid) => FRIENDS.find((f) => f.uid === uid);
@@ -1774,7 +1798,9 @@
   window.pdFriendsPanel = () => {
     if (!hasAcct()) return '';
     setTimeout(() => refreshHub(document.getElementById('pf-menu'), true).catch(() => {}), 0);
-    return `<section class="pd-friends" id="pd-friends" data-testid="friends-panel">${panelInner()}</section>`;
+    const pend = !VIEW && ((DOCS['portfolio/settings'] || {}).historyImport || {}).status === 'pending';
+    return (pend ? '<section class="pd-friends" data-testid="history-pending"><h3>Building your portfolio</h3><p class="pdf-empty">Your holdings, trades and returns are being built from your Thndr emails at the next hourly check (9 am to 11 pm Cairo time). You get an email when it is ready; until then this page is empty. Not connected Gmail yet? Account, then Thndr emails.</p></section>' : '')
+      + `<section class="pd-friends" id="pd-friends" data-testid="friends-panel">${panelInner()}</section>`;
   };
   function hubHTML() {
     const acct = hasAcct(), rows = hubRows();

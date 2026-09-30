@@ -21,6 +21,8 @@ import os, re, sys, ssl, json, base64, imaplib, argparse, datetime, email
 from email import policy
 
 QUERY = 'from:no-reply@system.thndr.app (subject:Invoice OR subject:E-statement) -subject:"US Market" after:{after}'
+# only the monthly statements (the history import looks for its starting point first, without downloading every invoice)
+QUERY_MONTHLY = 'from:no-reply@system.thndr.app subject:"monthly E-statement" -subject:"US Market" after:{after}'
 KEEP = ("Your Thndr Invoice", "Your requested E-statement", "Your monthly E-statement")
 ALL_MAIL = '"[Gmail]/All Mail"'
 
@@ -79,9 +81,9 @@ def connect(addr=None, pw=None):
     return M
 
 
-def fetch(after, seen, out_dir, addr=None, pw=None):
+def fetch(after, seen, out_dir, addr=None, pw=None, query=None):
     """-> counts dict. `seen`: set of ids already processed. Writes out_dir/<id>.json + manifest.json.
-    addr / pw: the Gmail login (default: env GMAIL_ADDRESS / GMAIL_APP_PASSWORD)."""
+    addr / pw: the Gmail login (default: env GMAIL_ADDRESS / GMAIL_APP_PASSWORD). query: QUERY (default) or QUERY_MONTHLY."""
     if not re.match(r"^\d{4}/\d{2}/\d{2}$", after or ""):
         raise FetchError("--after must be YYYY/MM/DD")
     os.makedirs(out_dir, exist_ok=True)
@@ -92,7 +94,7 @@ def fetch(after, seen, out_dir, addr=None, pw=None):
         typ, _ = M.select(all_mail_box(M), readonly=True)
         if typ != "OK":
             raise FetchError("cannot open All Mail")
-        typ, data = M.uid("SEARCH", "X-GM-RAW", imap_quote(QUERY.format(after=after)))
+        typ, data = M.uid("SEARCH", "X-GM-RAW", imap_quote((query or QUERY).format(after=after)))
         if typ != "OK":
             raise FetchError("Gmail search failed")
         uids = (data[0] or b"").split()

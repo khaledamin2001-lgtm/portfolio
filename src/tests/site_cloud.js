@@ -233,7 +233,7 @@ const up = (url) => new Promise((res) => { http.get(url, (r) => { r.resume(); re
     await $t('gmail-holder').fill('Omar Test'); await A.shot('gmail-step3');
     await $t('gmail-connect').click();
     await $t('gmail-done').waitFor({ timeout: 30000 }).catch(() => {});
-    check('connected: what happens next is explained', /4 pm/.test(await page.locator('#lock').textContent()));
+    check('connected: what happens next is explained', /every hour/.test(await page.locator('#lock').textContent()));
     await A.shot('gmail-done');
     await $t('gmail-done').click();
     await A.lockHidden(60000).catch(() => {});
@@ -563,6 +563,28 @@ print(r.seal_json(json.load(open(${JSON.stringify(path.join(TMP, 'snap.json'))})
     check('after unlocking the main portfolio again, Friends and Admin are right there (the link is remembered)', await G.$t('account-friends').isVisible() && await G.$t('account-admin').isVisible());
     await G.$t('account-admin').click(); await G.$t('admin-row').first().waitFor({ timeout: 20000 }).catch(() => {});
     check('Admin opens from the main portfolio', (await G.$t('admin-row').count()) >= 2);
+
+    // ---- 11. "Build it from my Thndr emails": no typing at sign-up; the job builds it (test_account_mail.py) ----
+    const K = await device('K');
+    await K.page.goto(ORIGIN + '/index.html'); await K.$t('live-signup').click();
+    await K.$t('signup-name').fill('Nour'); await K.$t('signup-email').fill('nour@example.com'); await K.$t('signup-password').fill('violet pier 31'); await K.$t('signup-password-repeat').fill('violet pier 31');
+    await K.$t('signup-submit').click(); await K.$t('recovery-code').waitFor({ timeout: 60000 }); await K.$t('recovery-saved').check(); await K.$t('recovery-continue').click();
+    await K.$t('onboard-history').waitFor(); await K.shot('onboard-history');
+    await K.$t('onboard-history').click(); await K.$t('gmail-connect').waitFor({ timeout: 60000 });
+    check('"Build it from my Thndr emails" goes straight to connecting Gmail, and says what will happen', /first monthly Thndr statement/.test(await K.page.locator('#lock').textContent()));
+    await K.$t('gmail-address').fill('nour.test@example.com'); await K.$t('gmail-app-password').fill('abcd efgh ijkl mnop'); await K.$t('gmail-holder').fill('Nour Test');
+    await K.$t('gmail-connect').click(); await K.$t('gmail-done').waitFor({ timeout: 30000 }).catch(() => {});
+    check('connected: it says the portfolio is built within the hour, from the first monthly statement', /within the hour/.test(await K.page.locator('#lock').textContent()));
+    await K.$t('gmail-done').click(); await K.lockHidden(60000).catch(() => {}); if (await K.$t('live-bio-skip').count()) await K.$t('live-bio-skip').click();
+    await K.page.click('#tab-overview'); await K.$t('history-pending').waitFor({ timeout: 15000 }).catch(() => {});
+    check('until it is built, the Overview says so (and shows the friends section)', await K.$t('history-pending').isVisible() && await K.$t('friends-panel').isVisible());
+    await K.shot('history-pending');
+    const nuid = FB.byEmail['nour@example.com'].uid, npk = FB.docs['mail/' + nuid] && FB.docs['mail/' + nuid].fields.pkg.stringValue;
+    const nset = npk ? JSON.parse(sh('python3', ['-c', `import sys, json; sys.path.insert(0, ${JSON.stringify(path.join(ROOT, 'src/jobs'))}); import store, run_account_mail as r
+k = store.unlock(${JSON.stringify(path.join(SITE, 'p/khaled/keys.json'))}, open(${JSON.stringify(path.join(TMP, 'mailsec', 'setup_key.txt'))}).read().strip())
+i = json.loads(sys.stdin.read()); p = r.open_mail_pkg(k, i["pkg"]); priv, _ = r.account_key(p["pk8"])
+print(json.dumps(json.loads(store.unseal(priv, i["settings"]).decode())["data"]))`], { input: JSON.stringify({ pkg: npk, settings: FB.docs[`users/${nuid}/docs/portfolio__settings`].fields.blob.stringValue }), stdio: ['pipe', 'pipe', 'inherit'] })) : {};
+    check('the settings ask the job for a history import (no start date yet) with the Thndr name', (nset.historyImport || {}).status === 'pending' && !nset.trackFrom && (nset.account || {}).holder === 'Nour Test', JSON.stringify({ h: nset.historyImport, t: nset.trackFrom, a: nset.account }));
   } catch (e) {
     check('run', false, e.stack || String(e));
   }

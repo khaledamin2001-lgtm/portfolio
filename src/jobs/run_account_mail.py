@@ -18,6 +18,12 @@ its portfolio (the site says so when it is switched on). For each package this j
      wrote in ONE Firestore commit pinned to the versions read (redone once on a conflict). The sync summary email
      (heads-up items included) goes to the account's address when it notifies. The result, or the Gmail error, is kept
      in sync/mail.gmail; a new error is emailed once. When the import ran, its heads-up digest replaces step 3.
+     History import (settings.historyImport.status 'pending', the site's "Build it from my Thndr emails"): first only the
+     monthly statements since 2019 are fetched and src/tools/history_seed.js makes the starting point from the earliest
+     one (its holdings and cash, as opening rows); then every Thndr email after it is fetched and sync.js applies them,
+     all in the same commit. Older months' reports are marked skipped (only the latest is emailed) and one summary email
+     says what was built. With no usable monthly statement yet, nothing is written: the account is told once, and every
+     run looks again.
   3. adds the shared market data (engine shared/: latest, history, bench) and runs src/jobs/account_alerts.js (the same
      PA.headsUp checks the page shows); items whose key is not in its alertsSent list are emailed, once;
   4. on Thursday from 18:00 Cairo (or --weekly), runs src/tools/weekly.js and emails the summary, once a week;
@@ -224,6 +230,39 @@ class Conflict(Exception):
     pass
 
 
+class HistoryWait(Exception):
+    """The history import has no starting point yet (no usable monthly statement in the Gmail)."""
+    def __init__(self, detail):
+        super().__init__(detail)
+        self.detail = detail
+
+
+HISTORY_AFTER = "2019/01/01"
+
+
+def apply_to_data(data, writes):
+    """Writes (run_sync.writes_from_plan shape) applied to a materialized data dir, so sync.js starts from them."""
+    for w in writes:
+        p = os.path.join(data, w["collection"], w["doc_id"] + ".json")
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        cur = jc.load_data(p, {}) if w["op"] == "update" else {}
+        body = store.deep_merge(cur or {}, w["data"]) if w["op"] == "update" else store.strip_markers(w["data"])
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump({"id": w["doc_id"], "data": body}, f)
+
+
+def merge_writes(first, second):
+    """One write per document: a later 'set' wins; a later 'update' merges into what is there."""
+    out = {}
+    for w in list(first) + list(second):
+        k = (w["collection"], w["doc_id"])
+        if k in out and w["op"] == "update":
+            out[k] = dict(out[k], data=store.deep_merge(out[k]["data"], w["data"]))
+        else:
+            out[k] = w
+    return list(out.values())
+
+
 def gmail_after(code, state, settings, now):
     """The Gmail search start: plan.js from the last import (minus 5 days); the first time, the day tracking started
     (settings.trackFrom; everything before it is in the opening rows) or else the last 7 days."""
@@ -245,13 +284,29 @@ def gmail_import(http, tok, pkg, keys, docs, shared, code, work, now, dry, read_
         raise jc.JobError("Gmail", "no Gmail login saved in the account (connect Gmail again on the site)")
     settings = (docs.get("portfolio/settings") or {}).get("data") or {}
     st = (docs.get("sync/state") or {}).get("data") or {}
-    after = gmail_after(code, st, settings, now)
-    inbox = os.path.join(work, "inbox")
+    hist = (settings.get("historyImport") or {}).get("status") == "pending"
+    today = now.strftime("%Y-%m-%d")
+    seed = None
     try:
+        if hist:
+            # the starting point first: the earliest monthly statement (only those are fetched for it)
+            inbox_m = os.path.join(work, "inbox-monthly")
+            imap_fetch.fetch(HISTORY_AFTER, set(), inbox_m, login["address"], login["appPassword"], query=imap_fetch.QUERY_MONTHLY)
+            d0 = os.path.join(work, "seed-data")
+            materialize(docs, shared, d0)
+            seed_out = os.path.join(work, "seed")
+            r = subprocess.run(["node", os.path.join(code, "src", "tools", "history_seed.js"), "--data", d0, "--inbox", inbox_m, "--out", seed_out, "--now", jc.now_iso()],
+                               capture_output=True, text=True, timeout=900)
+            seed = json.loads((r.stdout or "{}").strip().splitlines()[-1] if (r.stdout or "").strip() else "{}")
+            if not seed.get("ok"):
+                raise HistoryWait(seed.get("error") or "the starting point could not be made")
+            after = seed["to"].replace("-", "/")
+        else:
+            after = gmail_after(code, st, settings, now)
+        inbox = os.path.join(work, "inbox")
         c = imap_fetch.fetch(after, set(st.get("seen") or {}), inbox, login["address"], login["appPassword"])
     except imap_fetch.FetchError as e:
         raise jc.JobError("Gmail", str(e)) from None
-    today = now.strftime("%Y-%m-%d")
     for attempt in range(2):
         data, run = os.path.join(work, f"sdata{attempt}"), os.path.join(work, f"srun{attempt}")
         materialize(docs, shared, data)
@@ -262,6 +317,8 @@ def gmail_import(http, tok, pkg, keys, docs, shared, code, work, now, dry, read_
         os.makedirs(os.path.dirname(sp), exist_ok=True)
         with open(sp, "w", encoding="utf-8") as f:
             json.dump({"id": "state", "data": sd}, f)
+        seed_writes = run_sync.writes_from_plan(os.path.join(work, "seed"), {}) if seed else []
+        apply_to_data(data, seed_writes)
         os.makedirs(run)
         r = subprocess.run(["node", os.path.join(code, "src", "tools", "sync.js"), "--data", data, "--inbox", inbox, "--out", run, "--today", today],
                            capture_output=True, text=True, timeout=600)
@@ -270,7 +327,13 @@ def gmail_import(http, tok, pkg, keys, docs, shared, code, work, now, dry, read_
         with open(os.path.join(run, "summary.json"), encoding="utf-8") as f:
             summary = json.load(f)
         vers = {k: v.get("version", 0) for k, v in docs.items()}
-        writes = run_sync.writes_from_plan(os.path.join(run, "write"), vers)
+        writes = merge_writes(seed_writes, run_sync.writes_from_plan(os.path.join(run, "write"), vers))
+        if seed:   # a history import: only the latest month's report is emailed; the rest are history
+            months = sorted(w["doc_id"] for w in writes if w["collection"] == "imports")
+            for w in writes:
+                if w["collection"] == "imports" and w["doc_id"] != months[-1]:
+                    w["data"] = dict({k: v for k, v in w["data"].items() if k != "reportsPending"}, reports={"emailedAt": "skipped (history import)"})
+            summary["_history"] = seed
         if dry:
             break
         try:
@@ -439,6 +502,30 @@ def write_status_job(http, tok, uid, job):
         jc.log(f"status not written ({type(e).__name__})")
 
 
+def history_email(name, seed, summary, site):
+    posted = summary.get("monthlyPosted") or []
+    held = [e for e in summary.get("log") or [] if e.get("status") == "hold"]
+    other = max(0, (summary.get("applied") or 0) - len(posted))
+    lines = [f"{name} has been built from your Thndr emails.", "",
+             f"• Starting point: your {jc.short(seed['month'])} monthly statement, with your {seed.get('holdings', 0)} holdings and your cash as Thndr printed them on {seed['to']}.",
+             f"• Since then: {len(posted)} more monthly statement{'s' if len(posted) != 1 else ''} and {other} other Thndr email{'s' if other != 1 else ''} applied."]
+    if held:
+        lines += ["", f"{len(held)} email{'s' if len(held) > 1 else ''} could not be applied (nothing from {'them' if len(held) > 1 else 'it'} was used):"]
+        lines += [f"  - {e.get('subject')}{(' (' + e['period'] + ')') if e.get('period') else ''}: {(e.get('reasons') or ['see the site'])[0]}" for e in held[:8]]
+    if summary.get("alert"):
+        lines += ["", "Monthly statements not in your Gmail: " + ", ".join(jc.short(m) for m in summary["alert"]) + ". Request them in the Thndr app; they are added by themselves."]
+    lines += ["", f"Open it: {site}", "From now on, new Thndr emails are added every hour during the day.", ""]
+    return f"{name}: built from your Thndr emails", "\n".join(lines)
+
+
+def history_wait_email(name, reason, site):
+    text = (f"{name} could not be built from your Thndr emails yet: {reason}.\n\n"
+            "Thndr emails a statement at the start of every month (subject \"Your monthly E-statement\"). As soon as one is in "
+            "your Gmail, your portfolio is built by itself: nothing else to do. You can also request statements in the Thndr app.\n\n"
+            f"{site}\n")
+    return f"{name}: waiting for a monthly Thndr statement", text
+
+
 def gmail_error_email(name, err, site):
     text = (f"The site could not read the Thndr emails in your Gmail for {name}:\n\n  {err}\n\n"
             "Usually the app password was deleted or changed. To fix it: open the site, tap Account, then Thndr emails, "
@@ -491,7 +578,13 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                                                          lambda: read_account(http, tok, pkg["uid"], priv))
                 em = summary.get("email") or {}
                 imported = summary.get("held") or summary.get("alert") or any(e.get("kind") != "invoice" and e.get("status") == "applied" for e in summary.get("log") or [])
-                if em.get("notify") and (prefs.get("alerts", True) or imported):
+                if summary.get("_history"):
+                    subj, body = history_email(name, summary["_history"], summary, site)
+                    if not dry:
+                        send(pkg["email"], subj, body, None)
+                    state["history"] = {"status": "done", "from": summary["_history"]["month"], "at": jc.now_iso()}
+                    notes.append("history import done")
+                elif em.get("notify") and (prefs.get("alerts", True) or imported):
                     if not dry:
                         send(pkg["email"], em["subject"], em["text"], None)
                     notes.append("import email sent")
@@ -500,6 +593,17 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                 state["gmail"] = {"ok": True, "at": jc.now_iso(), "found": c.get("found", 0), "new": c.get("kept", 0),
                                   "applied": summary.get("applied", 0), "held": summary.get("held", 0)}
                 notes.append(f"gmail {c.get('kept', 0)} new, {summary.get('applied', 0)} applied, {summary.get('held', 0)} held")
+            except HistoryWait as e:
+                reason = str(e.detail)[:200]
+                state["gmail"] = {"ok": True, "at": jc.now_iso(), "found": 0, "new": 0, "applied": 0, "held": 0}
+                if (state.get("history") or {}).get("reason") != reason:
+                    subj, body = history_wait_email(name, reason, site)
+                    if not dry:
+                        send(pkg["email"], subj, body, None)
+                state["history"] = {"status": "waiting", "reason": reason, "at": jc.now_iso()}
+                notes.append("history import waiting for a monthly statement")
+                overlay = None
+                data = os.path.join(work, "data")
             except Exception as e:
                 err = jc.mask(str(getattr(e, "detail", e)))[:200]
                 state["gmail"] = {"ok": False, "at": jc.now_iso(), "error": err, "errorSent": prev.get("errorSent")}

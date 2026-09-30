@@ -13,6 +13,10 @@ Friends: a friend request is emailed once; each account's copy for its friends (
 with the friend's key and carries the portfolio documents without the Thndr account or the Gmail login; the site owner's
 verified account shares the MAIN portfolio (the engine's documents) while another account asking for that gets its own;
 status/{uid}.job is written for the admin screen.
+History import: an account created with "Build it from my Thndr emails" starts from its earliest monthly statement in
+Gmail (Aug-26: holdings and cash as opening rows) and the later one (Sep-26) is applied on top in the same run; only the
+latest month's report is emailed, with one summary email; an account with no monthly statement yet is told once and
+nothing in its portfolio changes.
     python3 src/tests/test_account_mail.py <synthetic export dir> <tools dir with node_modules/pdfjs-dist>   (exit 0 = all pass)"""
 import os, sys, json, gzip, base64, hashlib, shutil, tempfile, subprocess
 from email.message import EmailMessage
@@ -104,9 +108,29 @@ try:
     for f in ("account-statement.pdf", "position-snapshot.pdf"):
         msg.add_attachment(open(os.path.join(pdfs, f), "rb").read(), maintype="application", subtype="pdf", filename=f)
     RAW = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+    def statement_raw(month, *extra):
+        d = os.path.join(tmp, "pdfs-" + month)
+        subprocess.run([sys.executable, os.path.join(ROOT, "tests", "fixtures", "make_statement_pdf.py"), d, "--month", month, *extra], check=True, capture_output=True)
+        m = EmailMessage()
+        for k in ("Authentication-Results", "From", "To", "Subject"):
+            m[k] = msg[k]
+        m.set_content("Your monthly statement is attached.")
+        for f in ("account-statement.pdf", "position-snapshot.pdf"):
+            m.add_attachment(open(os.path.join(d, f), "rb").read(), maintype="application", subtype="pdf", filename=f)
+        return base64.urlsafe_b64encode(m.as_bytes()).decode()
+    RAW_SEP = statement_raw("2026-09", "--start", "9145", "--deposit", "1000", "--qty", "5", "--price", "90", "--close", "91", "--hold", "15")
+    HIST_MAIL = {"h-aug": ("1788400000000", RAW), "h-sep": ("1791000000000", RAW_SEP)}   # private-scan: synthetic
     fetches = []
-    def fake_fetch(after, seen, out_dir, addr=None, pw=None):
-        fetches.append({"after": after, "addr": addr, "pw": pw})
+    def fake_fetch(after, seen, out_dir, addr=None, pw=None, query=None):
+        fetches.append({"after": after, "addr": addr, "pw": pw, "query": "monthly" if query else "all"})
+        if addr in ("hist@example.com", "wait@example.com"):
+            os.makedirs(out_dir, exist_ok=True)
+            ids = [] if addr == "wait@example.com" else ["h-aug", "h-sep"] if query else ["h-sep"]
+            man = [{"id": i, "subject": "Your monthly E-statement", "date": HIST_MAIL[i][0]} for i in ids if i not in seen]
+            for mm in man:
+                json.dump({"id": mm["id"], "raw": HIST_MAIL[mm["id"]][1], "internalDate": mm["date"]}, open(os.path.join(out_dir, mm["id"] + ".json"), "w"))
+            json.dump(man, open(os.path.join(out_dir, "manifest.json"), "w"))
+            return {"found": len(man), "kept": len(man), "seen": 0, "otherSubject": 0}
         if pw != "abcdefghijklmnop":
             raise imap_fetch.FetchError("Gmail refused the app password (IMAP login)")
         os.makedirs(out_dir, exist_ok=True)
@@ -120,6 +144,25 @@ try:
     def gdoc(k):
         rec = DB.get(f"users/{GUID}/docs/{k.replace('/', '__')}")
         return json.loads(store.unseal(gacct, rec["blob"]).decode())["data"] if rec else None
+    # two accounts made with "Build it from my Thndr emails": one whose Gmail has monthly statements, one with none yet
+    def new_account(uid, email, gmail, refresh):
+        k = ec.generate_private_key(ec.SECP256R1())
+        pub = base64.b64encode(k.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)).decode()
+        pk = base64.b64encode(k.private_bytes(serialization.Encoding.DER, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())).decode()
+        docs = {"portfolio/settings": {**syn_settings, "name": "History Portfolio", "portfolioId": "acct-h", "inception": "2026-09", "cash": 0, "cashDate": "2026-09-20",
+                                       "account": {"holder": "Test Friend", "unifiedCode": ""}, "factsheetEmail": "", "historyImport": {"status": "pending"}},   # private-scan: synthetic
+                "portfolio/assets": {"items": {}}, "portfolio/marks": {"months": {}}, "ledger/y2026": {"rows": []},
+                "sync/gmail": {"address": gmail, "appPassword": "historyhistoryhi"}}
+        for kk, v in docs.items():
+            DB[f"users/{uid}/docs/{kk.replace('/', '__')}"] = {"blob": store.encode_doc({"pub": pub}, kk.split("/")[1], 1, v, "2026-09-20T10:00:00Z").decode().strip(), "updateTime": stamp()}
+        DB[f"mail/{uid}"] = {"pkg": seal_mail({"uid": uid, "email": email, "refresh": refresh, "pk8": pk, "prefs": {"alerts": True, "weekly": False, "gmail": True}})}
+        return k
+    HUID, WUID = "Uhistory", "Uwaiting"
+    hacct = new_account(HUID, "hist2@example.com", "hist@example.com", "RT4")
+    wacct = new_account(WUID, "wait2@example.com", "wait@example.com", "RT5")
+    def adoc(uid, key, k):
+        rec = DB.get(f"users/{uid}/docs/{k.replace('/', '__')}")
+        return json.loads(store.unseal(key, rec["blob"]).decode())["data"] if rec else None
     # the site owner's own account: shares the MAIN portfolio (the engine's documents, from the synthetic export)
     oacct = ec.generate_private_key(ec.SECP256R1())
     opk8 = base64.b64encode(oacct.private_bytes(serialization.Encoding.DER, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())).decode()
@@ -157,10 +200,10 @@ try:
             calls.append((method, url.split("?")[0].replace(FS, "")))
             tok = (headers or {}).get("Authorization", "").replace("Bearer ", "")
             if url.startswith("https://securetoken"):
-                u = {"RT1": UID, "RT2": GUID, "RT3": OUID}.get(body.get("refresh_token"))
+                u = {"RT1": UID, "RT2": GUID, "RT3": OUID, "RT4": HUID, "RT5": WUID}.get(body.get("refresh_token"))
                 return (200, {"id_token": jwt(u), "user_id": u}) if u else (400, {"error": {"message": "INVALID_REFRESH_TOKEN"}})
             if url.startswith(FS + ":commit"):
-                commits.append(len(body["writes"]))
+                commits.append((uid_of(tok), len(body["writes"])))
                 for w in body["writes"]:
                     k = w["update"]["name"].split("/documents/", 1)[1]
                     if uid_of(tok) != k.split("/")[1]: return 403, {"error": {"status": "PERMISSION_DENIED"}}
@@ -211,8 +254,9 @@ try:
     rc = ram.main(argv, http=FakeHttp(), send=send)
     check("the job succeeds", rc == 0)
     gsent = [m for m in sent if m["to"] == "friend2@example.com"]
+    hsent = [m for m in sent if m["to"] in ("hist2@example.com", "wait2@example.com")]
     check("the owner account (Gmail and emails switched on) gets no import and no email: it only shares",
-          not [m for m in sent if m["to"] == "owner@example.com"] and all(f["addr"] == "friend.gmail@example.com" for f in fetches), json.dumps([m["subject"] for m in sent if m["to"] == "owner@example.com"]))
+          not [m for m in sent if m["to"] == "owner@example.com"] and all(f["addr"] in ("friend.gmail@example.com", "hist@example.com", "wait@example.com") for f in fetches), json.dumps([m["subject"] for m in sent if m["to"] == "owner@example.com"]))
     sent[:] = [m for m in sent if m["to"] == "friend@example.com"]
     check("account 1: new heads-up items, the weekly summary, then the friend request, to its own address",
           len(sent) == 3 and "heads-up" in sent[0]["subject"] and sent[1]["html"] and sent[2]["subject"] == "Zeyad's Portfolio wants to be friends on the portfolio site"
@@ -234,14 +278,14 @@ try:
     check("admin status: the job writes each account's line (Gmail result, month-end report, friends), no figures",
           jg.get("gmail", {}).get("ok") and jg.get("friends") == 2 and jg.get("report") == "Aug-26 sent 2026-09-24" and j1.get("friends") == 1 and not j1.get("gmail"), json.dumps([jg, j1]))
     # the Gmail account
-    check("gmail: its own Gmail login is used, searching from the day tracking started", fetches and fetches[0] == {"after": "2026/08/15", "addr": "friend.gmail@example.com", "pw": "abcdefghijklmnop"}, json.dumps(fetches))
+    check("gmail: its own Gmail login is used, searching from the day tracking started", fetches and fetches[0] == {"after": "2026/08/15", "addr": "friend.gmail@example.com", "pw": "abcdefghijklmnop", "query": "all"}, json.dumps(fetches))
     rows = (gdoc("ledger/y2026") or {}).get("rows") or []
     check("gmail: the opening rows are kept and the statement rows before the tracking start are not added again",
           sorted(r["id"] for r in rows) == ["o1", "o2"], json.dumps(rows)[:400])
     mk = ((gdoc("portfolio/marks") or {}).get("months") or {}).get("2026-08") or {}
     check("gmail: August is posted from the statement (month-end cash and securities, final)", mk.get("source") == "statement" and not mk.get("provisional") and abs(mk.get("cash", 0) - 9145) < 0.01 and abs(mk.get("securities", 0) - 860) < 0.01, json.dumps(mk))
     check("gmail: the Thndr account code is recorded from the statement", ((gdoc("portfolio/settings") or {}).get("account") or {}).get("unifiedCode") == "1234567")   # private-scan: synthetic
-    check("gmail: the import and sync state are saved in ONE commit (the month-end stamp is a second)", len(commits) == 2 and commits[1] == 1 and (gdoc("imports/2026-08") or {}).get("fullMonth") and "18a0b0c0d0e0f001" in ((gdoc("sync/state") or {}).get("seen") or {}), json.dumps(commits))
+    check("gmail: the import and sync state are saved in ONE commit (the month-end stamp is a second)", [n for u, n in commits if u == GUID][1:] == [1] and len([n for u, n in commits if u == GUID]) == 2 and (gdoc("imports/2026-08") or {}).get("fullMonth") and "18a0b0c0d0e0f001" in ((gdoc("sync/state") or {}).get("seen") or {}), json.dumps(commits))
     check("gmail: the summary email goes to the account's own address", len(gsent) == 2 and "Aug-26 statement posted" in gsent[0]["subject"], json.dumps([m["subject"] for m in gsent]))
     rep = gsent[1] if len(gsent) > 1 else {"subject": "", "att": []}
     names = [a[0] for a in rep["att"]]
@@ -263,6 +307,28 @@ try:
         print("SKIP month-end PDF: no Playwright next to the tools (CI step 5f checks it)")
     imp = gdoc("imports/2026-08") or {}
     check("month-end: the month is stamped as sent in the account", (imp.get("reports") or {}).get("emailedAt") and "reportsPending" not in imp, json.dumps(imp)[:300])
+    # history import
+    hs = [m for m in hsent if m["to"] == "hist2@example.com"]
+    hrows = (adoc(HUID, hacct, "ledger/y2026") or {}).get("rows") or []
+    hset = adoc(HUID, hacct, "portfolio/settings") or {}
+    hmk = (adoc(HUID, hacct, "portfolio/marks") or {}).get("months") or {}
+    check("history: the monthly statements are looked for first, then everything after the starting point",
+          [f["query"] for f in fetches if f["addr"] == "hist@example.com"] == ["monthly", "all"] and [f["after"] for f in fetches if f["addr"] == "hist@example.com"] == ["2019/01/01", "2026/08/31"], json.dumps([f for f in fetches if f["addr"] == "hist@example.com"]))
+    check("history: the earliest statement (Aug-26) is the starting point: its holding and cash as opening rows on its last day",
+          [(r["d"], r["t"], r.get("q"), r.get("opening")) for r in hrows if r.get("opening")] == [("2026-08-31", "Deposit", None, True), ("2026-08-31", "Buy", 10, True)]
+          and abs([r for r in hrows if r.get("opening") and r["t"] == "Deposit"][0]["amt"] - 10005) < 0.01, json.dumps(hrows)[:400])
+    check("history: the later statement (Sep-26) is applied on top (its deposit and buy)", sorted((r["d"], r["t"]) for r in hrows if not r.get("opening")) == [("2026-09-01", "Deposit"), ("2026-09-02", "Buy")], json.dumps(hrows)[:400])
+    check("history: settings start at Aug-26 with the account code; the import is marked done",
+          hset.get("inception") == "2026-08" and hset.get("trackFrom") == "2026-08-31" and (hset.get("historyImport") or {}).get("status") == "done" and (hset.get("account") or {}).get("unifiedCode") == "1234567", json.dumps({k: hset.get(k) for k in ("inception", "trackFrom", "historyImport", "account")}))   # private-scan: synthetic
+    check("history: both months' marks come from the statements", (hmk.get("2026-08") or {}).get("source") == "statement" and abs((hmk.get("2026-09") or {}).get("cash", 0) - 9695) < 0.01 and abs((hmk.get("2026-09") or {}).get("securities", 0) - 1365) < 0.01, json.dumps(hmk))
+    check("history: one summary email, and only the latest month's report (Sep-26), not the old one",
+          [m["subject"] for m in hs] == ["History Portfolio: built from your Thndr emails", "History Portfolio · month-end report Sep-26"] and "Aug-26" in hs[0]["text"] and "1 more monthly statement" in hs[0]["text"]
+          and ((adoc(HUID, hacct, "imports/2026-08") or {}).get("reports") or {}).get("emailedAt") == "skipped (history import)", json.dumps([m["subject"] for m in hs]))
+    ws = [m for m in hsent if m["to"] == "wait2@example.com"]
+    wstate = adoc(WUID, wacct, "sync/mail") or {}
+    check("history: with no monthly statement yet, the account is told once and its portfolio is untouched",
+          [m["subject"] for m in ws] == ["History Portfolio: waiting for a monthly Thndr statement"] and (wstate.get("history") or {}).get("status") == "waiting"
+          and (adoc(WUID, wacct, "portfolio/settings") or {}).get("historyImport") == {"status": "pending"} and not [u for u, n in commits if u == WUID], json.dumps([m["subject"] for m in ws]))
     gm = (gdoc("sync/mail") or {}).get("gmail") or {}
     check("gmail: the result is recorded for the site (ok, 1 new, 1 applied)", gm.get("ok") and gm.get("new") == 1 and gm.get("applied") == 1, json.dumps(gm))
     check("the heads-up email lists the synthetic ex-dividend and target items", "Ex-dividend" in sent[0]["text"] and "Target reached" in sent[0]["text"])
@@ -274,7 +340,7 @@ try:
     rc2 = ram.main(argv, http=FakeHttp(), send=send)
     check("friends: a second run rewrites no unchanged copy and emails no request again", share_writes == [], json.dumps(share_writes))
     check("a second run sends nothing (each alert once, one summary a week)", rc2 == 0 and sent == [], json.dumps([m["subject"] for m in sent]))
-    check("gmail: a second run finds nothing new and changes no portfolio document", commits == [1] and sorted(r["id"] for r in (gdoc("ledger/y2026") or {}).get("rows") or []) == ["o1", "o2"], json.dumps(commits))
+    check("gmail: a second run finds nothing new and changes no portfolio document", [n for u, n in commits if u == GUID] == [1] and sorted(r["id"] for r in (gdoc("ledger/y2026") or {}).get("rows") or []) == ["o1", "o2"], json.dumps(commits))
     STATUS["Unewbie"] = {"name": "Newbie's Portfolio", "email": "newbie@example.com"}
     sent.clear(); ram.main(argv, http=FakeHttp(), send=send)
     ns = [m for m in sent if m["to"] == "owner@example.com"]

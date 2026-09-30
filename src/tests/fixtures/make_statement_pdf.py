@@ -3,6 +3,7 @@
 
     python3 make_statement_pdf.py <out dir> [--code 1234567] [--name "Test Friend"] [--month 2026-09] [--symbol COMI]   # private-scan: synthetic
         [--company "Commercial International Bank"] [--qty 10] [--price 85.50] [--close 86.00] [--deposit 10000]
+        [--start 0] [--hold N]      (opening cash; shares on the snapshot, default --qty)
 
 Writes <out dir>/account-statement.pdf (the brokerage cash account: header with the holder name and Unified Code, the
 period "From d/m/yyyy To d/m/yyyy", Start/End Balance and two rows: a deposit on the 1st and a buy on the 2nd) and
@@ -47,29 +48,33 @@ def main():
     ap.add_argument("--price", type=float, default=85.50)
     ap.add_argument("--close", type=float, default=86.00)
     ap.add_argument("--deposit", type=float, default=10000)
+    ap.add_argument("--start", type=float, default=0)
+    ap.add_argument("--hold", type=float, default=None)
     a = ap.parse_args()
     y, m = int(a.month[:4]), int(a.month[5:])
     last = calendar.monthrange(y, m)[1]
     f = lambda x: f"{x:,.2f}"
     cost = round(a.qty * a.price, 2)
-    end = round(a.deposit - cost, 2)
+    end = round(a.start + a.deposit - cost, 2)
+    hold = a.qty if a.hold is None else a.hold
     q = int(a.qty) if a.qty == int(a.qty) else a.qty
+    hq = int(hold) if hold == int(hold) else hold
     acct = ["Thndr Securities Brokerage", "Account Statement", f"Client Name {a.name} Unified Code {a.code}",
-            f"From 1/{m}/{y} To {last}/{m}/{y}", "Start Balance 0.00", "Date Description Value Balance",
-            f"1/{m}/{y} Deposit {f(a.deposit)} {f(a.deposit)}",
+            f"From 1/{m}/{y} To {last}/{m}/{y}", f"Start Balance {f(a.start)}", "Date Description Value Balance",
+            f"1/{m}/{y} Deposit {f(a.deposit)} {f(a.start + a.deposit)}",
             f"2/{m}/{y} Buy {a.company} ( {q} @ {a.price:.2f} ) -{f(cost)} {f(end)}",
             f"End Balance {f(end)}"]
     snap = ["Thndr Securities Brokerage", f"Client Name {a.name} Unified Code {a.code}",
             f"Position Snapshot as of {calendar.month_name[m]} {last}, {y}", "Stocks holdings",
             "Ticker Name Quantity Price Value",
-            f"{a.symbol} {a.company} EGP {q} {a.close:.2f} {f(round(a.qty * a.close, 2))}"]
+            f"{a.symbol} {a.company} EGP {hq} {a.close:.2f} {f(round(hold * a.close, 2))}"]
     os.makedirs(a.out, exist_ok=True)
     for name, lines in (("account-statement.pdf", acct), ("position-snapshot.pdf", snap)):
         with open(os.path.join(a.out, name), "wb") as fh:
             fh.write(pdf(lines))
     print(json.dumps({"ok": True, "files": ["account-statement.pdf", "position-snapshot.pdf"], "code": a.code, "month": a.month,
                       "deposit": a.deposit, "buy": {"symbol": a.symbol, "qty": a.qty, "price": a.price, "cost": cost}, "cashEnd": end,
-                      "securities": round(a.qty * a.close, 2)}))
+                      "securities": round(hold * a.close, 2)}))
 
 
 if __name__ == "__main__":
