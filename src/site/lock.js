@@ -1751,11 +1751,33 @@
   const pctH = (x) => (x == null || !isFinite(x) ? '—' : (x > 0 ? '+' : x < 0 ? '−' : '') + (Math.abs(x) * 100).toFixed(1) + '%');
   const toneH = (x) => (x == null || Math.abs(x) < 0.0005 ? '' : x > 0 ? 'pos' : 'neg');
   const egpH = (x) => (x == null || !isFinite(x) ? '' : new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(x) + ' EGP');
-  function hubHTML() {
-    const acct = !!(CLOUD && PK8 && (CUR.cloud || LINK)), you = HUB.you || {};
-    const rows = [{ uid: 'me', me: true, name: you.name || CUR.name, s: HUB.you }].concat(((acct && FRIENDS) || []).filter((f) => f.status === 'friends')
+  const hasAcct = () => !!(CLOUD && PK8 && CUR && (CUR.cloud || LINK));
+  function hubRows() {
+    const you = HUB.you || {};
+    const rows = [{ uid: 'me', me: true, name: you.name || CUR.name, s: HUB.you }].concat(((hasAcct() && FRIENDS) || []).filter((f) => f.status === 'friends')
       .map((f) => ({ uid: f.uid, name: f.name, s: (HUB.friends[f.uid] || {}).s, err: (HUB.friends[f.uid] || {}).err })));
-    rows.sort((a, b) => ((b.s && b.s.ytd != null ? b.s.ytd : -1e9) - (a.s && a.s.ytd != null ? a.s.ytd : -1e9)));
+    return rows.sort((a, b) => ((b.s && b.s.ytd != null ? b.s.ytd : -1e9) - (a.s && a.s.ytd != null ? a.s.ytd : -1e9)));
+  }
+  // the Overview section: the same ranking as cards
+  function panelInner() {
+    const rows = hubRows(), viewing = VIEW ? VIEW.uid : 'me', inc = incoming();
+    const card = (r, i) => `<button type="button" class="pdf-card${r.uid === viewing ? ' cur' : ''}" data-hub="view" data-uid="${esc(r.uid)}" data-testid="panel-${r.me ? 'me' : 'friend'}">
+        <span class="pdf-top"><span class="pdf-rank">#${i + 1}</span><b>${esc(r.name || '')}</b></span>
+        <span class="pdf-ytd ${toneH(r.s && r.s.ytd)}">${pctH(r.s && r.s.ytd)}</span><small>this year</small>
+        <small>${r.err ? esc(r.err) : r.s ? `Month ${pctH(r.s.month)} · All-time ${pctH(r.s.all)}` : 'Loading…'}</small>
+        <small class="pdf-tag">${r.me ? (viewing === 'me' ? 'You' : 'You · tap to go back') : r.uid === viewing ? 'Viewing now' : 'Tap to view'}</small></button>`;
+    return `<div class="pdf-head"><h3>Friends · this year</h3><button type="button" class="pdf-add" data-hub="friends" data-testid="panel-add">+ Add friend</button></div>
+      ${inc ? `<button type="button" class="pdf-note" data-hub="friends" data-testid="panel-requests">${inc} friend request${inc > 1 ? 's' : ''} waiting: tap to answer</button>` : ''}
+      <div class="pdf-cards">${rows.map(card).join('')}</div>
+      ${rows.length === 1 ? '<p class="pdf-empty">Add friends to see their portfolios here and compare returns. They need an account on this site first: send them the link.</p>' : ''}`;
+  }
+  window.pdFriendsPanel = () => {
+    if (!hasAcct()) return '';
+    setTimeout(() => refreshHub(document.getElementById('pf-menu'), true).catch(() => {}), 0);
+    return `<section class="pd-friends" id="pd-friends" data-testid="friends-panel">${panelInner()}</section>`;
+  };
+  function hubHTML() {
+    const acct = hasAcct(), rows = hubRows();
     const viewing = VIEW ? VIEW.uid : 'me';
     const row = (r, i) => `<button type="button" class="hub-row${r.uid === viewing ? ' cur' : ''}" data-hub="view" data-uid="${esc(r.uid)}" data-testid="hub-${r.me ? 'me' : 'friend'}">
         <span class="hub-rank">${i + 1}</span>
@@ -1768,13 +1790,14 @@
       ${rows.map(row).join('')}
       ${!acct ? `<button type="button" class="hub-note" data-hub="link" data-testid="hub-signin">See your friends here<small>${CUR.cloud ? 'sign in again to load them' : 'sign in with your site account'}</small></button>`
         : rows.length === 1 ? '<p class="hub-empty">Add friends to see their portfolios and compare returns.</p>' : ''}
-      ${others.length ? `<div class="hub-head"><span>Your other portfolios</span></div>${others.map((p) => `<button type="button" class="hub-other" data-pid="${esc(p.id)}" data-testid="switch-${esc(p.id)}">${esc(p.name)}</button>`).join('')}` : ''}
+      ${others.length ? `<div class="hub-head"><span>Your other portfolios</span></div>${others.map((p) => `<div class="hub-otherrow"><button type="button" class="hub-other" data-pid="${esc(p.id)}" data-testid="switch-${esc(p.id)}">${esc(p.name)}</button><button type="button" class="hub-forget" data-hub="forget" data-id="${esc(p.id)}" data-testid="forget-${esc(p.id)}" title="Remove from this device">Remove</button></div>`).join('')}` : ''}
       <button type="button" class="hub-other" data-testid="switch-other" onclick="pdSwitch()">Another portfolio<small>sign in, or open one with a setup key</small></button>`;
   }
-  async function refreshHub(m) {
-    const draw = () => { if (m && !m.hidden) m.innerHTML = hubHTML(); };
+  async function refreshHub(m, fromPanel) {
+    const draw = () => { if (m && !m.hidden) m.innerHTML = hubHTML(); const p = document.getElementById('pd-friends'); if (p) p.innerHTML = panelInner(); };
     if (!VIEW && (!HUB.you || Date.now() - HUB.youAt > 60e3 || HUB.youData !== DATA_AT)) { HUB.you = summarize(DOCS); HUB.youAt = Date.now(); HUB.youData = DATA_AT; }
-    m.innerHTML = hubHTML();   // drawn now; the page shows the menu right after this returns
+    if (m && !fromPanel) m.innerHTML = hubHTML();   // drawn now; the page shows the menu right after this returns
+    if (fromPanel) draw();
     if (HUB.busy || !(CLOUD && PK8 && (CUR.cloud || LINK))) return;
     HUB.busy = true;
     try {
@@ -1790,10 +1813,22 @@
     } finally { HUB.busy = false; }
   }
   window.pdHub = (m) => { m.classList.add('pd-hub'); refreshHub(m); };
+  // a portfolio in "Your other portfolios" leaves this device's list (nothing is deleted: its setup key or sign-in adds it again)
+  async function forgetOther(id) {
+    const p = findPortfolio(id); if (!p || (CUR && CUR.id === id)) return;
+    ls.del('pd.dev.' + id); for (const k of ['dev:', 'bio:', 'tok:', 'link:', 'acct:', 'cache:']) await idbDel(k + id).catch(() => {});
+    if (p.cloud) dropAccount(id);
+    ['pd.mail.', 'pd.dir.', 'pd.status.'].forEach((k) => ls.del(k + id));
+  }
   document.addEventListener('click', async (e) => {
-    const b = e.target.closest('#pf-menu [data-hub]'); if (!b) return;
-    const m = document.getElementById('pf-menu'); m.hidden = true; const t = document.getElementById('pf-name'); if (t) t.setAttribute('aria-expanded', 'false');
-    const what = b.dataset.hub;
+    const b = e.target.closest('#pf-menu [data-hub], #pd-friends [data-hub]'); if (!b) return;
+    const m = document.getElementById('pf-menu'), what = b.dataset.hub;
+    if (what === 'forget') {
+      const p = findPortfolio(b.dataset.id); if (!p) return;
+      if (!confirm(`Remove ${p.name} from this device?\n\nNothing is deleted and it keeps updating. To add it back: open this menu, tap Another portfolio, and open it with its ${p.cloud ? 'email and password' : 'setup key'}.`)) return;
+      await forgetOther(p.id); m.innerHTML = hubHTML(); toast(`${p.name} removed from this device.`); return;
+    }
+    m.hidden = true; const t = document.getElementById('pf-name'); if (t) t.setAttribute('aria-expanded', 'false');
     if (what === 'friends') return friendsScreen();
     if (what === 'link') return CUR.cloud ? lock(false) : linkScreen();
     if (what === 'view') {

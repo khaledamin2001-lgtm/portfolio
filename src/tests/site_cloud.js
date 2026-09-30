@@ -541,6 +541,22 @@ print(r.seal_json(json.load(open(${JSON.stringify(path.join(TMP, 'snap.json'))})
     check("tapping a friend in the hub opens their portfolio", /Omar/.test(await G.page.locator('#pf-name-text').textContent()) && await G.$t('view-banner').isVisible());
     await G.page.click('#pf-name'); await G.$t('hub-me').click(); await G.page.waitForTimeout(800);
     check('tapping yourself in the hub returns to your portfolio', /Demo Portfolio/.test(await G.page.locator('#pf-name-text').textContent()) && !(await G.page.locator('#pd-view').isVisible()));
+    // the same ranking on the Overview tab
+    await G.page.click('#tab-overview'); await G.$t('friends-panel').waitFor({ timeout: 10000 });
+    await G.page.waitForFunction(() => { const f = document.querySelector('[data-testid=panel-friend]'); return f && /Month/.test(f.textContent); }, null, { timeout: 30000 }).catch(() => {});
+    check('the Overview tab shows the friends ranking with returns', /Omar/.test(await G.$t('panel-friend').textContent()) && /%/.test(await G.$t('panel-friend').textContent()) && /this year/.test(await G.$t('panel-me').textContent()));
+    await G.shot('overview-friends');
+    await G.$t('panel-friend').click(); await G.page.waitForTimeout(1000);
+    check('tapping a friend card on the Overview opens their portfolio', /Omar/.test(await G.page.locator('#pf-name-text').textContent()) && await G.$t('view-banner').isVisible());
+    await G.$t('panel-me').click(); await G.page.waitForTimeout(1000);
+    check('tapping your own card goes back to yours', /Demo Portfolio/.test(await G.page.locator('#pf-name-text').textContent()));
+    // another portfolio on this device can be removed from the list by the user
+    await G.page.evaluate(() => localStorage.setItem('pd.dev.yassin', JSON.stringify({ v: 3, ct: 'x' })));
+    await G.page.click('#pf-name'); await G.$t('forget-yassin').waitFor({ timeout: 10000 });
+    G.page.once('dialog', (d) => d.accept());
+    await G.$t('forget-yassin').click(); await G.page.waitForTimeout(500);
+    check('"Remove" takes a portfolio off this device\'s list (after a confirmation)', !(await G.$t('switch-yassin').count()) && (await G.page.evaluate(() => localStorage.getItem('pd.dev.yassin'))) === null);
+    await G.page.keyboard.press('Escape');
     await G.page.reload(); await G.$t('live-password').waitFor({ timeout: 30000 }); await G.$t('live-password').fill('main device 99'); await G.$t('live-password-submit').click();
     await G.lockHidden(60000).catch(() => {}); await G.page.waitForTimeout(600);
     await G.$t('account-menu').click(); await G.$t('account-admin').waitFor({ timeout: 15000 }).catch(() => {});

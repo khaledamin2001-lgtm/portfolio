@@ -19,6 +19,8 @@ for a, b in [("function currentPortfolioId(){ return", "function currentPortfoli
              ("m.innerHTML = PORTFOLIOS.map(p=>{", "m.innerHTML = (window.pdPortfolioList ? window.pdPortfolioList() : PORTFOLIOS).map(p=>{"),
              # the top-left menu is the friends hub on the site (lock.js pdHub): you and your friends, ranked, tap to view
              ("function renderSwitch(){\n", "function renderSwitch(){ if(window.pdHub){ window.pdHub($('#pf-menu')); return; }\n"),
+             # the same ranking as a section at the top of the Overview tab (lock.js pdFriendsPanel; empty without an account)
+             ("const ht=headTwr(st), cc=cashCum(rows);\n  return `${statementBanner()}", "const ht=headTwr(st), cc=cashCum(rows);\n  return `${window.pdFriendsPanel ? window.pdFriendsPanel() : ''}${statementBanner()}"),
              ("}).join('');\n}\ndocument.addEventListener('click', e=>{\n  const menu = $('#pf-menu');", "}).join('') + (window.pdSwitch ? '<button type=\"button\" data-testid=\"switch-other\" onclick=\"pdSwitch()\">Another portfolio<small>sign in, or open one with a setup key</small></button>' : '');\n}\ndocument.addEventListener('click', e=>{\n  const menu = $('#pf-menu');"),
              ("toast('The watchlist is edited on the Claude page.','error')", "toast('Turn on editing at the bottom of the page to change the watchlist.','error')"),
              ("toast('Retrying is only possible on the Claude page.','error')", "toast('Turn on editing at the bottom of the page to retry held emails.','error')"),
