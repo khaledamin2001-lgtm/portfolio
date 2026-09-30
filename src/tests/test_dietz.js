@@ -41,8 +41,10 @@ if (fs.existsSync(dir)) {
   const market = J(D('market', 'latest.json'));
   const RK = PE.run({ settings: s, marks: mk, assets, tx: ktx, market }, { type: 'Since Inception' }, { today: '2026-09-27' });
   const aug = RK.months.find((r) => r.month === '2025-08');
-  check('Khaled 2025-08 Modified Dietz return between -7% and -6%', aug.ret > -0.07 && aug.ret < -0.06, `${(aug.ret * 100).toFixed(3)}% (legacy ${(aug.retSimple * 100).toFixed(3)}%)`);
-  check('Khaled since-inception TWR below 0.4585', RK.stats.twr < 0.4585, `${RK.stats.twr}`);
+  // the real Aug-25 return and since-inception TWR are private: pinned in expected.json → pins.aug25 {lo, hi} / pins.twrMax
+  if (PIN.aug25) check('Khaled 2025-08 Modified Dietz return within the pinned range', aug.ret > PIN.aug25.lo && aug.ret < PIN.aug25.hi, `${(aug.ret * 100).toFixed(3)}% (legacy ${(aug.retSimple * 100).toFixed(3)}%)`);
+  else check('Khaled 2025-08 Modified Dietz return is a finite number (pinned range skipped)', isFinite(aug.ret));
+  if (PIN.twrMax != null) check('Khaled since-inception TWR below the pinned ceiling', RK.stats.twr < PIN.twrMax, `${RK.stats.twr}`);
   const over = RK.ledger.filter((t) => t.oversold);
   check('Khaled: no oversold rows after same-day ordering', over.length === 0, over.map((t) => `${t.a} ${t.d}`).join(', ') || 'none');
   const X = process.env.EXPECTED_JSON || path.join(__dirname, 'expected.json');   // private workbook figures, see tests/test.js
