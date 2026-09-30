@@ -18,6 +18,10 @@
 const path = require('path'), fs = require('fs'), os = require('os'), cp = require('child_process'), crypto = require('crypto'), net = require('net'), http = require('http');
 const argv = process.argv.slice(2);
 const outIx = argv.indexOf('--out'), OUT = outIx >= 0 ? argv.splice(outIx, 2)[1] : null;
+// --engine-dir yassin: the portfolio's engine data sits in a folder of the repository (portfolios.json "engineDir"), with its
+// own market workflow and no inbox sync, the way Yassin's does
+const dirIx = argv.indexOf('--engine-dir'), DIR = dirIx >= 0 ? argv.splice(dirIx, 2)[1] : '';
+const MARKET = DIR ? DIR + '-market.yml' : 'market.yml';
 const ROOT = path.resolve(__dirname, '..', '..');
 let playwright;
 for (const p of [__dirname, process.cwd(), (() => { try { return cp.execSync('npm root -g', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch (e) { return null; } })()].filter(Boolean)) {
@@ -33,6 +37,7 @@ const REPO = 'khaledamin2001-lgtm/portfolio-engine', TOKEN = 'github_pat_' + 'T'
 
 // ---- fixtures: synthetic export, throwaway keys, site build, engine repo ----
 const SYN = path.join(TMP, 'syn'), KEYS = path.join(TMP, 'keys.json'), SEC = path.join(TMP, 'secret'), SITE = path.join(TMP, 'site'), ENG = path.join(TMP, 'engine'), BLD = path.join(TMP, 'build');
+const EDIR = DIR ? path.join(ENG, DIR) : ENG;   // the portfolio's engine folder inside the fake repository
 sh('node', [path.join(ROOT, 'src/tests/fixtures/make_synthetic.js'), SYN]);
 sh('python3', [path.join(ROOT, 'src/site/make_keys.py'), KEYS, SEC]);
 const SETUP = fs.readFileSync(path.join(SEC, 'setup_key.txt'), 'utf8').trim();
@@ -43,9 +48,14 @@ sh('python3', ['build_site.py', SITE], { cwd: path.join(BLD, 'site') });
 fs.mkdirSync(path.join(SITE, 'p/khaled'), { recursive: true });
 fs.copyFileSync(KEYS, path.join(SITE, 'p/khaled/keys.json'));
 sh('python3', [path.join(ROOT, 'tools/export.py'), SYN, KEYS, path.join(SITE, 'p/khaled/data.enc.json')]);
-sh('python3', [path.join(ROOT, 'src/jobs/store.py'), 'migrate', '--export', SYN, '--engine', ENG, '--keys', KEYS, '--portfolio-id', 'khaled']);
+sh('python3', [path.join(ROOT, 'src/jobs/store.py'), 'migrate', '--export', SYN, '--engine', EDIR, '--keys', KEYS, '--portfolio-id', 'khaled']);
+if (DIR) {
+  const pf = JSON.parse(fs.readFileSync(path.join(SITE, 'portfolios.json'), 'utf8'));
+  Object.assign(pf.find((p) => p.id === 'khaled'), { engineDir: DIR, workflows: { market: MARKET } });
+  fs.writeFileSync(path.join(SITE, 'portfolios.json'), JSON.stringify(pf));
+}
 const PY = `import sys, json; sys.path.insert(0, ${JSON.stringify(path.join(ROOT, 'src/jobs'))}); import store
-K, E, S = ${JSON.stringify(KEYS)}, ${JSON.stringify(ENG)}, open(${JSON.stringify(path.join(SEC, 'setup_key.txt'))}).read().strip()
+K, E, S = ${JSON.stringify(KEYS)}, ${JSON.stringify(EDIR)}, open(${JSON.stringify(path.join(SEC, 'setup_key.txt'))}).read().strip()
 `;
 const py = (code) => JSON.parse(sh('python3', ['-c', PY + code]).trim().split('\n').pop());
 const readDoc = (c, d) => py(`print(json.dumps(store.read_doc(E, K, S, ${JSON.stringify(c)}, ${JSON.stringify(d)})))`);
@@ -70,7 +80,7 @@ function api(method, url, headers, body) {
       return [200, { type: 'file', path: rel, sha: gitSha(cur), encoding: 'base64', size: cur.length, content: cur.toString('base64').replace(/.{60}/g, '$&\n') }];
     }
     const b = JSON.parse(body || '{}');
-    if (b.branch !== 'main' || !/^db\/[A-Za-z0-9][A-Za-z0-9_-]*\/[A-Za-z0-9][A-Za-z0-9_-]*\.enc\.json$/.test(rel)) { API.bad.push(method + ' ' + rel); return [422, { message: 'refused by the test' }]; }
+    if (b.branch !== 'main' || !new RegExp('^' + (DIR ? DIR + '/' : '') + 'db/[A-Za-z0-9][A-Za-z0-9_-]*/[A-Za-z0-9][A-Za-z0-9_-]*\\.enc\\.json$').test(rel)) { API.bad.push(method + ' ' + rel); return [422, { message: 'refused by the test' }]; }
     if (exists && b.sha !== gitSha(cur)) { API.conflicts++; return [409, { message: `${rel} does not match ${b.sha}` }]; }
     if (!exists && b.sha) return [404, { message: 'Not Found' }];
     if (method === 'PUT') {
@@ -83,7 +93,7 @@ function api(method, url, headers, body) {
   }
   if (rest.startsWith('git/blobs/')) return [404, { message: 'Not Found' }];
   if (rest === 'actions/workflows' && method === 'GET') return [200, { total_count: 5, workflows: [] }];
-  if ((m = rest.match(/^actions\/workflows\/([a-z]+\.yml)\/(dispatches|runs)$/))) {
+  if ((m = rest.match(/^actions\/workflows\/([a-z-]+\.yml)\/(dispatches|runs)$/))) {
     if (m[2] === 'dispatches' && method === 'POST') {
       API.dispatches.push({ file: m[1], body: JSON.parse(body || '{}') });
       API.runs.unshift({ id: 1000 + API.runs.length, file: m[1], status: 'completed', conclusion: 'success', created_at: new Date().toISOString() });
@@ -151,7 +161,7 @@ const cleanup = [];
     check('a token GitHub rejects is refused', true);
     await $t('edit-token').fill(TOKEN); await $t('edit-token-submit').click();
     await page.waitForFunction(() => document.getElementById('lock').hidden, null, { timeout: 30000 });
-    check('editing on: state, buttons', /Editing on/.test(await $t('edit-state').textContent()) && (await $t('run-market').isVisible()) && (await $t('run-sync').isVisible()) && !(await $t('edit-on').isVisible()));
+    check('editing on: state, buttons', /Editing on/.test(await $t('edit-state').textContent()) && (await $t('run-market').isVisible()) && (await $t('run-sync').isVisible()) === !DIR && !(await $t('edit-on').isVisible()));
     await shot('editing-on');
 
     // ---- 1. settings: the risk-free rate ----
@@ -208,7 +218,7 @@ const cleanup = [];
     check('after lock + unlock: editing is still on', /Editing on/.test(await $t('edit-state').textContent()));
     check('after lock + unlock: the page shows the saved rate', await page.evaluate(() => { const t = document.getElementById('main').textContent; return t.length > 0; }));
     await $t('run-market').click();
-    check('Update prices: dispatched market.yml and followed the run to the end', (await toastSaid(/Price update finished/, 30000)) && API.dispatches.length === 1 && API.dispatches[0].file === 'market.yml' && API.dispatches[0].body.ref === 'main');
+    check('Update prices: dispatched ' + MARKET + ' and followed the run to the end', (await toastSaid(/Price update finished/, 30000)) && API.dispatches.length === 1 && API.dispatches[0].file === MARKET && API.dispatches[0].body.ref === 'main');
     await $t('edit-menu').click(); await $t('edit-off').click();
     await page.waitForFunction(() => !document.getElementById('pd-edit-on').hidden, null, { timeout: 10000 }).catch(() => {});
     check('Turn off editing: view only again', (await $t('edit-on').isVisible()) && /View only on this device/.test(await $t('edit-state').textContent()), `edit-on ${await $t('edit-on').isVisible()} state "${await $t('edit-state').textContent()}" lock hidden ${await page.evaluate(() => document.getElementById('lock').hidden)}`);
@@ -219,10 +229,10 @@ const cleanup = [];
     // ---- 6. the store opens everything the browser wrote ----
     const v = py('print(json.dumps(store.verify(E, K, S)))');
     check('store.py verify: every engine document opens and has the right shape', v.ok && !v.problems.length, JSON.stringify(v.problems));
-    check('commits went only to db/*.enc.json', API.bad.length === 0 && API.commits.every((c) => /^db\/.+\.enc\.json$/.test(c.path) && /^Site edit: /.test(c.message)), JSON.stringify(API.bad));
+    check('commits went only to db/*.enc.json', API.bad.length === 0 && API.commits.every((c) => c.path.startsWith((DIR ? DIR + '/' : '') + 'db/') && c.path.endsWith('.enc.json') && /^Site edit: /.test(c.message)), JSON.stringify(API.bad));
     const envs = API.commits.map((c) => JSON.parse(fs.readFileSync(path.join(ENG, c.path), 'utf8')));
     check('envelopes: the store\'s six fields, name <doc>.json', envs.every((e, i) => JSON.stringify(Object.keys(e)) === '["v","name","bytes","epk","iv","ct"]' && e.name === path.basename(API.commits[i].path).replace('.enc.json', '.json')));
-    check('the token never reached the engine files or the page\'s storage', !fs.readdirSync(path.join(ENG, 'db'), { recursive: true }).some((f) => { const p = path.join(ENG, 'db', f); return fs.statSync(p).isFile() && fs.readFileSync(p, 'utf8').includes(TOKEN); }) && !(await page.evaluate((t) => JSON.stringify(localStorage).includes(t), TOKEN)));
+    check('the token never reached the engine files or the page\'s storage', !fs.readdirSync(path.join(EDIR, 'db'), { recursive: true }).some((f) => { const p = path.join(EDIR, 'db', f); return fs.statSync(p).isFile() && fs.readFileSync(p, 'utf8').includes(TOKEN); }) && !(await page.evaluate((t) => JSON.stringify(localStorage).includes(t), TOKEN)));
   } catch (e) {
     await shot('failure');
     check('run', false, e.stack || String(e));

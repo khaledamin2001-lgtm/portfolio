@@ -365,7 +365,11 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
      commit and republishes the site's data within a few minutes; until then this page keeps showing the saved version. The
      price update and the inbox check can be started from here too (workflow_dispatch). */
   const GH_API = 'https://api.github.com', TOK_LABEL = 'portfolio-token-v1', FILE_LABEL = 'portfolio-file-v1';
-  const JOBS = { market: { file: 'market.yml', what: 'Price update' }, sync: { file: 'sync.yml', what: 'Inbox check' } };
+  // a portfolio's engine data may sit in a folder of the repository ("engineDir", e.g. Yassin's under yassin/) with its own
+  // workflows ("workflows": {market, sync}; a kind left out has no button)
+  const JOB_NAMES = { market: 'Price update', sync: 'Inbox check' };
+  const jobFile = (kind) => { const w = (CUR && CUR.workflows) || { market: 'market.yml', sync: 'sync.yml' }; return w[kind] || null; };
+  const edir = () => (CUR && CUR.engineDir ? CUR.engineDir.replace(/^\/+|\/+$/g, '') + '/' : '');
   let EDIT = null;                  // {token, repo, expires} while unlocked and this device is set up for editing
   const OVERLAY = new Map();        // 'coll/doc' -> {data, at}: saves the published data does not show yet
   const RECENT = new Map();         // 'coll/doc' -> {sha, doc, at}: this device's last commit of a document (the API can lag)
@@ -424,7 +428,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   async function readEngineDoc(c, d, token, repo) {
     repo = repo || EDIT.repo;
     let f;
-    try { f = await gh('GET', `/repos/${repo}/contents/db/${c}/${d}.enc.json?ref=main`, null, token); }
+    try { f = await gh('GET', `/repos/${repo}/contents/${edir()}db/${c}/${d}.enc.json?ref=main`, null, token); }
     catch (e) { if (e.code === 'not_found') return { sha: null, doc: null }; throw e; }
     const b = f.content && f.encoding === 'base64' ? f.content : (await gh('GET', `/repos/${repo}/git/blobs/${f.sha}`, null, token)).content;   // files over 1 MB come as a blob
     let p;
@@ -444,7 +448,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
     if (!canEdit()) throw Object.assign(new Error('The portfolio was locked before the change was saved'), { code: 'read_only' });
     const parts = String(p).split('/'), c = parts[0], d = parts[1];
     if (parts.length !== 2 || !pdStore.NAME_RE.test(c) || !pdStore.NAME_RE.test(d)) throw Object.assign(new Error('invalid document ' + p), { code: 'invalid' });
-    const repo = EDIT.repo, path = `db/${c}/${d}.enc.json`, msg = `Site edit: ${p}`;
+    const repo = EDIT.repo, path = `${edir()}db/${c}/${d}.enc.json`, msg = `Site edit: ${CUR.id} ${p}`;
     for (let attempt = 0; ; attempt++) {
       const rc = RECENT.get(p);
       const cur = attempt === 0 && rc && Date.now() - rc.at < 120e3 ? rc : await readEngineDoc(c, d);
@@ -491,7 +495,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
         st.textContent = !engineRepo() ? 'View only' : !on ? 'View only on this device' : JOB_NOTE || (soon ? `Editing on · the editing key expires ${dayText(exp)}` : 'Editing on · saved changes reach the site in a few minutes');
         st.classList.toggle('stale', !!soon && !JOB_NOTE);
       }
-      for (const id of ['pd-run-market', 'pd-run-sync', 'pd-edit-menu']) { const b = el(id); if (b) b.hidden = !on; }
+      for (const [id, kind] of [['pd-run-market', 'market'], ['pd-run-sync', 'sync'], ['pd-edit-menu', null]]) { const b = el(id); if (b) b.hidden = !on || (kind && !jobFile(kind)); }
       const b = el('pd-edit-on'); if (b) b.hidden = on || !engineRepo() || !PK8;
       document.body.classList.toggle('pd-edit', on);
     });
@@ -517,7 +521,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
       if (!/^(github_pat_|ghp_)[A-Za-z0-9_]{20,}$/.test(tok)) return err('That is not a GitHub token. It starts with github_pat_ and is about 90 characters long.');
       go.disabled = true; err('Checking the key with GitHub…'); ghExp = null;
       try {
-        const cfg = await gh('GET', `/repos/${repo}/contents/config.json?ref=main`, null, tok).catch((e) => { throw e.code === 'not_found' ? new Error(`The key cannot open ${name}. Under "Repository access" pick Only select repositories → ${name}`) : e; });
+        const cfg = await gh('GET', `/repos/${repo}/contents/${edir()}config.json?ref=main`, null, tok).catch((e) => { throw e.code === 'not_found' ? new Error(`The key cannot open ${name}. Under "Repository access" pick Only select repositories → ${name}`) : e; });
         let id = null; try { id = JSON.parse(fileText(cfg.content)).portfolioId; } catch (e) { /* checked below */ }
         if (id !== CUR.id) throw new Error(`${name} does not hold ${CUR.name}`);
         await readEngineDoc('portfolio', 'settings', tok, repo);   // opens with this portfolio's key: the right data
@@ -544,7 +548,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   window.pdEditMenu = () => { if (canEdit()) editMenuScreen(); };
   // start the price update or the inbox check on GitHub, follow it, and load the new figures when it is done
   window.pdRunJob = async (kind, btn) => {
-    const j = JOBS[kind]; if (!j || !canEdit()) return;
+    const f = jobFile(kind), j = f && { file: f, what: JOB_NAMES[kind] }; if (!j || !canEdit()) return;
     const repo = EDIT.repo, runs = async () => ((await gh('GET', `/repos/${repo}/actions/workflows/${j.file}/runs?per_page=10`)).workflow_runs || []);
     if (btn) btn.disabled = true;
     const note = (t) => { JOB_NOTE = t; editBar(); };
@@ -959,7 +963,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   })();
 })();
 </script>
-<meta name="pd-build" content="498b520390fd 2026-09-29 19:59">
+<meta name="pd-build" content="498b520390fd 2026-09-30 01:23">
 <style>
 :root{
   --bg:#F3F6F4; --surface:#FFFFFF; --surface-2:#EDF2EF; --ink:#0F1A17; --ink-2:#46534E; --ink-3:#5F6C67;

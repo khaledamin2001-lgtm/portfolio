@@ -83,3 +83,8 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: ${{ runner.temp }}/pw
         run: node "$GITHUB_WORKSPACE/src/tests/site_edit.js"
+
+      - name: 5d. Live-site editing test, data in a folder of the engine repository (Yassin's layout)
+        if: ${{ !cancelled() }}
+        working-directory: ${{ runner.temp }}/pw
+        run: node "$GITHUB_WORKSPACE/src/tests/site_edit.js" --engine-dir yassin

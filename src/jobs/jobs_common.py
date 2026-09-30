@@ -8,7 +8,9 @@ Nothing here holds private data, and nothing any job prints carries a portfolio 
 statuses only. Plaintext documents exist only in a temporary work directory that is removed when the job ends.
 
 config.json (plain, in the engine repo):
-    {"portfolioId", "name", "siteRepo", "siteFolder", "timezone", "mode"?}
+    {"portfolioId", "name", "siteRepo", "siteFolder", "timezone", "mode"?, "recipient"?, "marketEmail"?}
+    recipient     the one address every email goes to (default: portfolio/settings.factsheetEmail)
+    marketEmail   false = the market job sends no "market updated" email (default true)
     mode "live"   emails go out through Gmail and the site is pushed;
          "shadow" (the default when absent) the job does everything else - fetches, writes and commits the engine
                   repo's own data, builds reports, prepares the site commit - but sends no email (each one is saved
@@ -154,8 +156,9 @@ class Ctx:
         return (d or {}).get("data") or {}
 
     def recipient(self):
-        """The one address any job may email: portfolio/settings.factsheetEmail."""
-        to = str(self.settings().get("factsheetEmail") or "").strip()
+        """The one address any job may email: config.json "recipient" when set (a portfolio whose owner does not get the
+        emails himself, e.g. Yassin's: they go to Khaled), else portfolio/settings.factsheetEmail."""
+        to = str(self.config.get("recipient") or self.settings().get("factsheetEmail") or "").strip()
         if not re.match(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[A-Za-z]{2,}$", to):
             raise JobError("email", "portfolio/settings has no valid factsheetEmail")
         return to

@@ -135,6 +135,35 @@ try:
 except jc.JobError:
     check("mail: another recipient is refused", True)
 
+# ---- recipient: config.json "recipient" wins over settings.factsheetEmail (Yassin's emails go to Khaled)
+class RCtx:
+    def __init__(self, config, settings):
+        self.config, self._s = config, settings
+    def settings(self):
+        return self._s
+check("recipient: settings.factsheetEmail by default", jc.Ctx.recipient(RCtx({}, {"factsheetEmail": "a@example.com"})) == "a@example.com")
+check("recipient: config.json recipient overrides it", jc.Ctx.recipient(RCtx({"recipient": "owner@example.com"}, {"factsheetEmail": "b@example.com"})) == "owner@example.com")
+try:
+    jc.Ctx.recipient(RCtx({"recipient": "not an address"}, {}))
+    check("recipient: an invalid address is refused", False)
+except jc.JobError:
+    check("recipient: an invalid address is refused", True)
+
+# ---- reports: months already on the site are skipped
+import run_reports   # noqa: E402
+tmp = tempfile.mkdtemp()
+try:
+    os.makedirs(f"{tmp}/p/demo/exports")
+    json.dump([{"month": "2026-08", "file": "exports/x.enc.json"}], open(f"{tmp}/p/demo/exports/index.json", "w"))
+    class PCtx:
+        code = tmp
+        config = {"siteFolder": "p/demo"}
+    check("reports: published months come from the site's exports index", run_reports.published_months(PCtx()) == {"2026-08"})
+    PCtx.config = {"siteFolder": "p/none"}
+    check("reports: no index means nothing published yet", run_reports.published_months(PCtx()) == set())
+finally:
+    shutil.rmtree(tmp)
+
 # ---- log masking
 m = jc.mask("value 1,234,567.89 and 98765.43 at line 12")   # private-scan: synthetic
 check("mask: figures hidden in logs, small numbers kept", "1,234" not in m and "98765" not in m and "12" in m)

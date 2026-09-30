@@ -29,7 +29,7 @@ Steps (routine step numbers):
       Ledger, settings, imports and sync documents are never written. If someone saved meanwhile (version conflict
       or rejected push) the patches are recomputed on the fresh documents once with the same prices.
  5.   Publish this portfolio's site folder (publish.py). Then jobs.json records the run.
- 6.   Scheduled runs only: the "Portfolio: market updated <close date>" email, market figures only (never holdings, cash,
+ 6.   Scheduled runs only, unless config.json "marketEmail" is false: the "Portfolio: market updated <close date>" email, market figures only (never holdings, cash,
       values or anything from the ledger, marks or settings). A failure to send it is logged, not a job failure.
 Output: one line of counts. Any failure: email "Portfolio: market FAILED <date>" and exit 1.
 """
@@ -222,7 +222,7 @@ def main(argv=None):
             r = publish.publish(ctx, f"Daily data update {plan['today']}", push=ctx.live, remote=a.site_remote, force=a.force_publish)
             jc.log(f"publish: {'pushed' if r['pushed'] else 'committed locally (shadow)' if r['committed'] else 'nothing to publish'}"
                    f"{', data unchanged' if r['dataUnchanged'] else ''}, head {r['head']}, {len(r['files'])} files")
-        if slot != "manual":
+        if slot != "manual" and ctx.config.get("marketEmail", True) is not False:
             try:
                 import mail_send
                 subj, body = success_email(out, info, bool(r and r["pushed"]))

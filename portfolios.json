@@ -1,1 +1,1 @@
-[{"id": "khaled", "name": "Khaled's Portfolio", "engine": "khaledamin2001-lgtm/portfolio-engine"}, {"id": "yassin", "name": "Yassin's Portfolio"}]
+[{"id": "khaled", "name": "Khaled's Portfolio", "engine": "khaledamin2001-lgtm/portfolio-engine"}, {"id": "yassin", "name": "Yassin's Portfolio", "engine": "khaledamin2001-lgtm/portfolio-engine", "engineDir": "yassin", "workflows": {"market": "yassin-market.yml"}}]
