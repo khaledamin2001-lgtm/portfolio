@@ -854,13 +854,13 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
       { ok: p.length > 0 && !banned.has(low), text: `Not the portfolio name, "${bare || first}" or "password"` },
       { ok: p.length > 0 && rep.trim() === p, text: 'Both fields match' }];
   }
-  function passwordScreen({ title, intro, done, back }) {
+  function passwordScreen({ title, intro, done, back, backText }) {
     screen(`<h1>${title}</h1><p>${intro}</p>
       <form id="lk-choose" autocomplete="off"><input id="lk-new" type="password" data-testid="live-new-password" placeholder="Password" aria-label="Password" autocomplete="new-password">
       <input id="lk-rep" type="password" data-testid="live-new-password-repeat" placeholder="Repeat the password" aria-label="Repeat the password" autocomplete="new-password">
       <ul class="lk-rules" id="lk-rules" data-testid="live-password-rules"></ul>
       <button class="lk-btn" id="lk-choose-go" data-testid="live-password-continue" disabled>Continue</button><div class="lk-err" role="alert"></div></form>
-      ${safariTip()}${back ? '<div class="lk-links"><button type="button" class="lk-link" id="lk-choose-back" data-testid="live-password-back">Back</button></div>' : ''}`);
+      ${safariTip()}${back ? '<div class="lk-links"><button type="button" class="lk-link" id="lk-choose-back" data-testid="live-password-back">' + esc(backText || 'Back') + '</button></div>' : ''}`);
     const nw = $l('#lk-new'), rp = $l('#lk-rep'), go = $l('#lk-choose-go'), ul = $l('#lk-rules');
     const check = () => { const rs = pwRules(nw.value, rp.value); ul.innerHTML = rs.map((r) => `<li class="${r.ok ? 'ok' : ''}">${esc(r.text)}</li>`).join(''); go.disabled = !rs.every((r) => r.ok); return !go.disabled; };
     nw.oninput = rp.oninput = check; check(); nw.focus();
@@ -880,10 +880,12 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
     catch (e) {   // only a store that is really gone sends the user back to the setup key; anything else keeps it for a retry
       console.error(e);
       if (e && e.code === 'not_set_up') { ls.del(devLS()); await idbDel('dev:' + CUR.id); return setupScreen('This portfolio needs to be set up again on this device.'); }
-      return screen(`<h1>${esc(CUR.name)}</h1><p>This device's saved setup could not be opened just now. Nothing was removed.</p><button class="lk-btn" id="lk-mig-retry" data-testid="live-migrate-retry">Try again</button>`), ($l('#lk-mig-retry').onclick = () => migrateScreen());
+      screen(`<h1>${esc(CUR.name)}</h1><p>This device's saved setup could not be opened just now. Nothing was removed.</p><button class="lk-btn" id="lk-mig-retry" data-testid="live-migrate-retry">Try again</button><div class="lk-links"><button type="button" class="lk-link" id="lk-mig-other">Open another portfolio</button></div>`);
+      $l('#lk-mig-retry').onclick = () => migrateScreen(); $l('#lk-mig-other').onclick = () => chooseScreen(); return;
     }
     passwordScreen({ title: 'Choose a password for this device', intro: `${esc(CUR.name)} is already set up here. The site now protects it with a password that only this device knows, so pick one now; the old password no longer applies. ${esc(bio)} can be turned on again afterwards.`,
-      done: async (pw) => { await storeV3(pk8, pw); ls.del(OLD_BIO_LS); await idbDel('bio:' + CUR.id); await afterSetup(pk8); } });
+      done: async (pw) => { await storeV3(pk8, pw); ls.del(OLD_BIO_LS); await idbDel('bio:' + CUR.id); await afterSetup(pk8); },
+      back: () => chooseScreen(), backText: 'Not now: open another portfolio' });   // nothing changes until a password is chosen
   }
   async function offerBio(pk8) {
     if (await bioReady() || !(await canBio())) return open();
@@ -1884,7 +1886,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   })();
 })();
 </script>
-<meta name="pd-build" content="3aea8ec32a0c 2026-09-30 04:35">
+<meta name="pd-build" content="3aea8ec32a0c 2026-09-30 04:37">
 <style>
 :root{
   --bg:#F3F6F4; --surface:#FFFFFF; --surface-2:#EDF2EF; --ink:#0F1A17; --ink-2:#46534E; --ink-3:#5F6C67;
