@@ -261,9 +261,11 @@
     });
     // transfers with no itemised fund trade are the savings wallet (thndrsavings, priced at 1)
     mfOut.concat(mfIn).filter((x) => !x.used).forEach((x) => { const a = Math.round(x.amt * 100) / 100; cand.push({ d: x.d, t: a < 0 ? 'Buy' : 'Sell', a: 'thndrsavings', q: Math.abs(a), p: 1, amt: a, acc: 'MF', src: 'statement' }); });
-    // match against existing ledger rows (the ledger may come from the app export, so allow small date/amount differences)
+    // match against existing ledger rows (the ledger may come from the app export, so allow small date/amount differences).
+    // Opening rows (t.opening: the holdings and cash typed at sign-up) stand for everything before tracking started; they
+    // are never matched, corrected or removed by a statement, only counted in the holdings and cash checks.
     const used = new Set();
-    const pool = tx.filter((t) => t.d >= addDays(from, -6) && t.d <= addDays(to, 6));
+    const pool = tx.filter((t) => !t.opening && t.d >= addDays(from, -6) && t.d <= addDays(to, 6));
     const same = (t, r) => {
       if (t.t !== r.t || used.has(t)) return false;
       const dd = days(t.d, r.d);
@@ -389,6 +391,15 @@
     return r;
   }
 
-  const api = { attachments, pdfLines, parseDoc, parseStatement, reconcile, classify, accountRows, accountOf, ownerCheck, authCheck, eom };
+  // Tracking start (settings.trackFrom, set for accounts made on the site): the opening rows typed at sign-up stand for
+  // everything up to and including that day, so a statement is used from the next day only (null when it ends before).
+  function fromTrackStart(st, tf) {
+    if (!tf || !st || !st.cash || st.from > tf) return st;
+    if (st.to <= tf) return null;
+    const d = new Date(Date.parse(tf + 'T00:00:00Z') + 864e5).toISOString().slice(0, 10), keep = (r) => r.date && r.date >= d;
+    return Object.assign({}, st, { from: d, cash: Object.assign({}, st.cash, { start: null, rows: st.cash.rows.filter(keep) }), mf: st.mf ? Object.assign({}, st.mf, { rows: st.mf.rows.filter(keep) }) : st.mf });
+  }
+
+  const api = { attachments, pdfLines, parseDoc, parseStatement, reconcile, classify, accountRows, accountOf, ownerCheck, authCheck, eom, fromTrackStart };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.TS = api;
 })(this);

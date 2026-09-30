@@ -5,7 +5,9 @@
         account's key only wrapped (users/{uid}.keys: pub, wrap, pwrap) and creates the members key (shared/members +
         shared/membersPub);
      2. the shared market bundle (sealed to the members key the way run_shared_market.py seals it) gives the onboarding its
-        prices: cash + "SYM shares" lines become a starting deposit and buys; the app opens with the holding priced;
+        prices: cash + "SYM shares" lines become a starting deposit and buys; then the optional "Thndr emails" steps (2-Step
+        Verification, app password, connect) save the Gmail login as the account's own encrypted document, the Thndr name
+        on the settings, and the mail package (gmail on); the app opens with the holding priced;
      3. every stored document is an encrypted envelope (no symbol or figure in the clear), and another account's token is
         refused on it;
      4. a settings save goes to the account (updateTime changes); a save whose remembered updateTime is stale is refused
@@ -161,11 +163,34 @@ const up = (url) => new Promise((res) => { http.get(url, (r) => { r.resume(); re
     await $t('onboard-cash').fill('1000'); await $t('onboard-holdings').fill(`${SYM} 10`);
     await A.shot('onboard');
     await $t('onboard-submit').click();
+    // ---- 2b. the optional Gmail steps, explained one at a time ----
+    await $t('gmail-start').waitFor({ timeout: 60000 });
+    check('after onboarding, the optional Thndr emails step explains itself and can be skipped', /Thndr emails you after every trade/.test(await page.locator('#lock').textContent()) && await $t('gmail-skip').isVisible());
+    await A.shot('gmail-intro');
+    await $t('gmail-start').click();
+    check('step 1 links to Google 2-Step Verification in a new tab', (await $t('gmail-2sv-link').getAttribute('href')) === 'https://myaccount.google.com/signinoptions/twosv' && (await $t('gmail-2sv-link').getAttribute('target')) === '_blank');
+    await $t('gmail-step1-next').click();
+    check('step 2 links to Google app passwords and says what to type', (await $t('gmail-apppw-link').getAttribute('href')) === 'https://myaccount.google.com/apppasswords' && /EGX Tracker/.test(await page.locator('#lock').textContent()));
+    await A.shot('gmail-step2');
+    await $t('gmail-step2-next').click();
+    check('step 3 asks for the Gmail, the app password and the name as in Thndr (prefilled)', (await $t('gmail-holder').inputValue()) === 'Omar' && await $t('gmail-app-password').isVisible());
+    await $t('gmail-address').fill('friend.test@example.com'); await $t('gmail-app-password').fill('abc');
+    await $t('gmail-connect').click();
+    check('an app password that is not 16 letters is refused with a hint', /16 letters/.test(await A.lockErr()));
+    await $t('gmail-app-password').fill('abcd efgh ijkl mnop'); await $t('gmail-connect').click();
+    check('a one-word name is refused (Thndr prints the full name)', /full name/.test(await A.lockErr()));
+    await $t('gmail-holder').fill('Omar Test'); await A.shot('gmail-step3');
+    await $t('gmail-connect').click();
+    await $t('gmail-done').waitFor({ timeout: 30000 }).catch(() => {});
+    check('connected: what happens next is explained', /Twice a day/.test(await page.locator('#lock').textContent()));
+    await A.shot('gmail-done');
+    await $t('gmail-done').click();
     await A.lockHidden(60000).catch(() => {});
     if (!(await page.evaluate(() => document.getElementById('lock').hidden)) && (await $t('live-bio-skip').count())) await $t('live-bio-skip').click();
     await A.lockHidden();
     const docs = Object.keys(FB.docs).filter((k) => k.startsWith(`users/${uid}/docs/`)).map((k) => k.split('/').pop()).sort();
-    check('onboarding created the portfolio documents', JSON.stringify(docs) === JSON.stringify(['ledger__y' + new Date().getUTCFullYear(), 'portfolio__assets', 'portfolio__marks', 'portfolio__settings'].sort()) || docs.length === 4, docs.join(','));
+    check('onboarding created the portfolio documents and the Gmail login', JSON.stringify(docs) === JSON.stringify(['ledger__y' + new Date().getUTCFullYear(), 'portfolio__assets', 'portfolio__marks', 'portfolio__settings', 'sync__gmail'].sort()) || docs.length === 5, docs.join(','));
+    check('Gmail on: the mail package exists', !!FB.docs['mail/' + uid]);
     await page.waitForTimeout(800);
     const main = await page.locator('#main').textContent();
     check('the app opens on the new portfolio', /Omar/.test(await page.locator('#pf-name-text').textContent()) && main.length > 100);
@@ -177,7 +202,9 @@ const up = (url) => new Promise((res) => { http.get(url, (r) => { r.resume(); re
 
     // ---- 3. everything stored is encrypted, and private ----
     const blobs = Object.entries(FB.docs).filter(([k]) => k.startsWith(`users/${uid}/docs/`)).map(([, v]) => v.fields.blob.stringValue);
-    check('every stored document is an encrypted envelope with nothing in the clear', blobs.length === 4 && blobs.every((b) => { const e = JSON.parse(b); return e.v === 1 && e.epk && e.iv && e.ct && !b.includes(SYM) && !b.includes('Omar'); }));
+    check('every stored document is an encrypted envelope with nothing in the clear', blobs.length === 5 && blobs.every((b) => { const e = JSON.parse(b); return e.v === 1 && e.epk && e.iv && e.ct && !b.includes(SYM) && !b.includes('Omar') && !b.includes('abcdefgh'); }));
+    await page.click('#tab-settings'); await page.waitForTimeout(300);
+    check('the Thndr name from the Gmail step is on the settings', (await page.inputValue('#st-holder')) === 'Omar Test');
     const other = identity('signUp', { email: 'other@example.com', password: 'x'.repeat(10), returnSecureToken: true })[1];
     const denied = firestore('GET', `https://firestore.googleapis.com${FSB}users/${uid}/docs/portfolio__settings`, { authorization: 'Bearer ' + other.idToken });
     check("another account's token is refused on this account's documents", denied[0] === 403);
@@ -199,10 +226,12 @@ const up = (url) => new Promise((res) => { http.get(url, (r) => { r.resume(); re
 
     // ---- 4b. a Thndr statement uploaded from this device (synthetic PDFs), the account confirmed once ----
     const STMT = path.join(TMP, 'stmt');
-    sh('python3', [path.join(ROOT, 'src/tests/fixtures/make_statement_pdf.py'), STMT, '--symbol', SYM, '--price', String(QUOTES[SYM].price), '--close', String(QUOTES[SYM].price), '--month', new Date().toISOString().slice(0, 7)]);
+    // next month's statement: tracking started today, so this month's statement would count only from tomorrow
+    const NM = (() => { const d = new Date(); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + 1); return d.toISOString().slice(0, 7); })(), NY = NM.slice(0, 4);
+    sh('python3', [path.join(ROOT, 'src/tests/fixtures/make_statement_pdf.py'), STMT, '--symbol', SYM, '--price', String(QUOTES[SYM].price), '--close', String(QUOTES[SYM].price), '--month', NM]);
     let asked = '';
     page.on('dialog', (d) => { asked = d.message(); d.accept(); });
-    const L0 = FB.docs[`users/${uid}/docs/ledger__y${new Date().getUTCFullYear()}`].updateTime;
+    const L0 = (FB.docs[`users/${uid}/docs/ledger__y${NY}`] || {}).updateTime;
     await page.click('#tab-settings');
     check('the statement upload is offered', await $t('statement-upload-label').isVisible());
     await $t('statement-upload').setInputFiles([path.join(STMT, 'account-statement.pdf'), path.join(STMT, 'position-snapshot.pdf')]);
@@ -210,22 +239,38 @@ const up = (url) => new Promise((res) => { http.get(url, (r) => { r.resume(); re
     check('the PDFs are read on the device and the account is confirmed once', /Thndr account 1234567/.test(asked) && await $t('statement-review').isVisible(), asked.slice(0, 60));   // private-scan: synthetic
     await A.shot('statement-review');
     await $t('post-statement').click();
-    for (let i = 0; i < 60 && !FB.docs[`users/${uid}/docs/imports__${new Date().toISOString().slice(0, 7)}`]; i++) await page.waitForTimeout(250);
+    for (let i = 0; i < 60 && !FB.docs[`users/${uid}/docs/imports__${NM}`]; i++) await page.waitForTimeout(250);
     check('posting the statement saves the ledger, the month-end marks and the import record to the account',
-      FB.docs[`users/${uid}/docs/ledger__y${new Date().getUTCFullYear()}`].updateTime !== L0 && !!FB.docs[`users/${uid}/docs/imports__${new Date().toISOString().slice(0, 7)}`]);
+      (FB.docs[`users/${uid}/docs/ledger__y${NY}`] || {}).updateTime !== L0 && !!FB.docs[`users/${uid}/docs/imports__${NM}`]);
     await page.waitForTimeout(1500);
     await page.click('#tab-activity'); await page.waitForTimeout(300);
     check('the statement rows are in the ledger on the page', /Deposit[\s\S]*10,000/.test(await page.locator('#main').textContent()));
 
     // ---- 4c. email updates: the package is sealed to the mail key and names this account ----
-    await $t('account-menu').click(); await $t('account-email').click();
+    const pkg0 = FB.docs['mail/' + uid].updateTime;
+    await $t('account-menu').click();
+    check('the Account menu shows Thndr emails connected and email updates on', /connected/.test(await $t('account-gmail').textContent()) && /on/.test(await $t('account-email').textContent()));
+    await $t('account-email').click();
     await $t('mail-on').click();
-    for (let i = 0; i < 40 && !FB.docs['mail/' + uid]; i++) await page.waitForTimeout(250);
+    for (let i = 0; i < 40 && FB.docs['mail/' + uid].updateTime === pkg0; i++) await page.waitForTimeout(250);
     const pkgEnv = FB.docs['mail/' + uid] && FB.docs['mail/' + uid].fields.pkg.stringValue;
+    const gmailEnv = FB.docs[`users/${uid}/docs/sync__gmail`].fields.blob.stringValue;
     const opened = pkgEnv ? JSON.parse(sh('python3', ['-c', `import sys, json, os; sys.path.insert(0, ${JSON.stringify(path.join(ROOT, 'src/jobs'))}); import store, run_account_mail as r
 k = store.unlock(${JSON.stringify(path.join(SITE, 'p/khaled/keys.json'))}, open(${JSON.stringify(path.join(TMP, 'mailsec', 'setup_key.txt'))}).read().strip())
-p = r.open_mail_pkg(k, sys.stdin.read()); print(json.dumps({"uid": p["uid"], "email": p["email"], "prefs": p["prefs"], "refresh": bool(p["refresh"]), "pk8": bool(p["pk8"])}))`], { input: pkgEnv, stdio: ['pipe', 'pipe', 'inherit'] })) : null;
-    check('email updates: the package opens only with the mail key and names this account, its address and choices', !!opened && opened.uid === uid && opened.email === EMAIL && opened.prefs.alerts && opened.prefs.weekly && opened.refresh && opened.pk8 && !pkgEnv.includes(EMAIL), JSON.stringify(opened));
+i = json.loads(sys.stdin.read()); p = r.open_mail_pkg(k, i["pkg"]); priv, _ = r.account_key(p["pk8"])
+g = json.loads(store.unseal(priv, i["gmail"]).decode())["data"]
+print(json.dumps({"uid": p["uid"], "email": p["email"], "prefs": p["prefs"], "refresh": bool(p["refresh"]), "pk8": bool(p["pk8"]), "gmail": [g["address"], g["appPassword"]]}))`], { input: JSON.stringify({ pkg: pkgEnv, gmail: gmailEnv }), stdio: ['pipe', 'pipe', 'inherit'] })) : null;
+    check('email updates: the package opens only with the mail key and names this account, its address and choices', !!opened && opened.uid === uid && opened.email === EMAIL && opened.prefs.alerts && opened.prefs.weekly && opened.prefs.gmail && opened.refresh && opened.pk8 && !pkgEnv.includes(EMAIL), JSON.stringify(opened));
+    check('the job can open the Gmail login with the account key from the package (spaces removed)', !!opened && JSON.stringify(opened.gmail) === JSON.stringify(['friend.test@example.com', 'abcdefghijklmnop']));
+    await $t('account-menu').click(); await $t('account-gmail').click();
+    await $t('gmail-status').waitFor();
+    check('Thndr emails: the status says it is connected and not checked yet', /friend\.test@example\.com/.test(await page.locator('#lock').textContent()) && /Not checked yet/.test(await $t('gmail-status').textContent()));
+    await A.shot('gmail-status');
+    await $t('gmail-off').click();
+    for (let i = 0; i < 40 && FB.docs[`users/${uid}/docs/sync__gmail`]; i++) await page.waitForTimeout(250);
+    check('turning Thndr emails off deletes the Gmail login and keeps email updates', !FB.docs[`users/${uid}/docs/sync__gmail`] && !!FB.docs['mail/' + uid]);
+    await page.waitForTimeout(500);
+    if (!(await page.evaluate(() => document.getElementById('lock').hidden))) await $t('account-back').click();
     await $t('account-menu').click(); await $t('account-email').click(); await $t('mail-off').click();
     for (let i = 0; i < 40 && FB.docs['mail/' + uid]; i++) await page.waitForTimeout(250);
     check('switching email updates off deletes the package', !FB.docs['mail/' + uid]);

@@ -49,7 +49,12 @@
    item makes the email notify with a "Heads-up" section at the top of its text; statement items keep their own
    "Monthly statements still missing" line (state.alerts) and are stamped in alertsSent when that line goes out.
    state.heartbeat.sync = this run's time. A digest check that fails (e.g. no engine) is skipped and listed in
-   summary.digest.errors; it never stops the sync. */
+   summary.digest.errors; it never stops the sync.
+   Tracking start (settings.trackFrom, 'YYYY-MM-DD'; set for accounts made on the site): the opening rows typed at
+   sign-up (t.opening) stand for everything up to and including that day. Invoice trades dated on or before it are
+   skipped (already in the opening holdings); a statement ending on or before it is skipped; a statement that starts on
+   or before it is used from the next day only (its opening balance is not compared). Opening rows are never matched,
+   corrected or removed by a statement; they count in its holdings and cash checks. */
 'use strict';
 const fs = require('fs'), path = require('path'), crypto = require('crypto');
 const TS = require('./statement.js');
@@ -149,6 +154,7 @@ function parseInvoices(lines) {
 // units at NAV, see the header); otherwise the trade is added.
 function applyInvoice(v, entry) {
   if (!v.d || !v.type || !v.qty || v.total == null) { entry.reasons.push(`could not read an invoice block (${v.name || 'unknown security'})`); return; }
+  if (settings.trackFrom && v.d <= settings.trackFrom) { entry.unchanged++; entry.notes.push(`${v.d} ${v.type} ${v.name || v.code}: before tracking started (${settings.trackFrom}), already in the starting holdings`); return; }
   const fund = v.fund, name = fund ? v.code.toLowerCase() : resolveName(v.name).name;
   const known = fund || resolveName(v.name).known;
   const row = { d: v.d, t: v.type, a: name, q: v.qty, p: +(v.gross / v.qty).toFixed(fund ? 6 : 4), amt: r2(v.type === 'Buy' ? -v.total : v.total), acc: fund ? 'MF' : 'Main' };
@@ -199,6 +205,9 @@ function applyInvoiceEmail(blocks, entry) {
 // ---------- statements ----------
 function applyStatement(st, entry, msg) {
   if (!st.cash) { entry.reasons.push('no account statement among the PDFs'); return 'hold'; }
+  const tf = settings.trackFrom, st2 = TS.fromTrackStart(st, tf);
+  if (!st2) { entry.period = `${st.from} to ${st.to}`; entry.notes.push(`covers only days up to ${tf}, when tracking started (already in the starting holdings); nothing to do`); return 'skip'; }
+  if (st2 !== st) { entry.notes.push(`used from ${st2.from}: tracking started on ${tf} with the holdings and cash entered then`); st = st2; }
   const M = st.month, final = !!(st.fullMonth && st.snapshot);
   entry.period = `${st.from} to ${st.to}`; entry.final = final;
   if (imports[M] && imports[M].fullMonth) { entry.notes.push(`${lbl(M)} is already final from its monthly statement; nothing to do`); return 'skip'; }

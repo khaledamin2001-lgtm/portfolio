@@ -65,7 +65,7 @@ step_tools() {
   else (cd "$T" && npm install --no-save --no-package-lock --no-audit --no-fund --loglevel=error pdfjs-dist@3.11.174 >/dev/null) || die "npm install pdfjs-dist"; fi
 
   say "tools: the account email job (fake Firebase and mailer, synthetic data)"
-  python3 src/tests/test_account_mail.py "$S" > "$O/acctmail.out" 2>&1 || { tail -20 "$O/acctmail.out"; die "test_account_mail.py"; }
+  python3 src/tests/test_account_mail.py "$S" "$T" > "$O/acctmail.out" 2>&1 || { tail -20 "$O/acctmail.out"; die "test_account_mail.py"; }
   echo "  test_account_mail.py: $(tail -1 "$O/acctmail.out")"
 
   say "tools: plan.js"

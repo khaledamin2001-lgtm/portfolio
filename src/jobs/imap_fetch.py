@@ -14,7 +14,8 @@ Writes, in exactly the shape the Gmail connector produced (so sync.js is unchang
     <out>/manifest.json  [{"id", "subject", "date": internalDate}]   ([] when nothing is new)
 The id is the Gmail API message id = lowercase hex of IMAP X-GM-MSGID, so the ids already in sync/state.seen match.
 The mailbox is opened with EXAMINE (select readonly) and bodies are fetched with BODY.PEEK: nothing is marked read,
-moved or changed. Login: env GMAIL_ADDRESS and GMAIL_APP_PASSWORD (IMAP_HOST / IMAP_PORT / IMAP_SSL=0 for tests).
+moved or changed. Login: env GMAIL_ADDRESS and GMAIL_APP_PASSWORD, or the address / app password passed to fetch() (a
+site account's own Gmail, run_account_mail.py); IMAP_HOST / IMAP_PORT / IMAP_SSL=0 for tests.
 Prints one JSON line of counts; never a subject, address or secret."""
 import os, re, sys, ssl, json, base64, imaplib, argparse, datetime, email
 from email import policy
@@ -59,11 +60,11 @@ def _meta(blob):
     return (uid and uid.group(1)), (gm and int(gm.group(1))), (idate and idate.group(1))
 
 
-def connect():
+def connect(addr=None, pw=None):
     host = os.environ.get("IMAP_HOST", "imap.gmail.com")
     port = int(os.environ.get("IMAP_PORT", "993"))
-    addr = os.environ.get("GMAIL_ADDRESS", "").strip()
-    pw = os.environ.get("GMAIL_APP_PASSWORD", "").replace(" ", "").strip()
+    addr = (addr if addr is not None else os.environ.get("GMAIL_ADDRESS", "")).strip()
+    pw = (pw if pw is not None else os.environ.get("GMAIL_APP_PASSWORD", "")).replace(" ", "").strip()
     if not addr or not pw:
         raise FetchError("GMAIL_ADDRESS / GMAIL_APP_PASSWORD are not set")
     try:
@@ -78,12 +79,13 @@ def connect():
     return M
 
 
-def fetch(after, seen, out_dir):
-    """-> counts dict. `seen`: set of ids already processed. Writes out_dir/<id>.json + manifest.json."""
+def fetch(after, seen, out_dir, addr=None, pw=None):
+    """-> counts dict. `seen`: set of ids already processed. Writes out_dir/<id>.json + manifest.json.
+    addr / pw: the Gmail login (default: env GMAIL_ADDRESS / GMAIL_APP_PASSWORD)."""
     if not re.match(r"^\d{4}/\d{2}/\d{2}$", after or ""):
         raise FetchError("--after must be YYYY/MM/DD")
     os.makedirs(out_dir, exist_ok=True)
-    M = connect()
+    M = connect(addr, pw)
     counts = {"found": 0, "kept": 0, "seen": 0, "otherSubject": 0}
     manifest = []
     try:

@@ -1,19 +1,27 @@
 #!/usr/bin/env python3
-"""Emails for site ACCOUNTS that switched them on (Account → Email updates on the site): heads-up alerts after each
-market close, and the weekly summary on Thursday night. Nothing is sent to an account that has not opted in.
+"""Emails, and the Thndr inbox import, for site ACCOUNTS that switched them on (Account → Email updates / Thndr emails on
+the site): heads-up alerts after each market close, the weekly summary on Thursday night, and (accounts that connected
+their Gmail) new Thndr invoices and statements posted to the portfolio. Nothing is done for an account that has not
+opted in.
 
     python3 run_account_mail.py --engine DIR [--code DIR] [--now ISO] [--weekly | --no-weekly] [--dry-run]
 
 An account that opts in stores Firestore mail/{uid} = {pkg}: an envelope sealed in its browser to the MAIL key (the public
 key of p/khaled/keys.json on the site, label 'portfolio-mail-v1'; this job opens it with SETUP_KEY = KHALED_SETUP_KEY)
-holding {uid, email, refresh, pk8, prefs: {alerts, weekly}}. That is the account's own choice to let this job open its
-portfolio (the site says so when it is switched on). For each package this job:
+holding {uid, email, refresh, pk8, prefs: {alerts, weekly, gmail}}. That is the account's own choice to let this job open
+its portfolio (the site says so when it is switched on). For each package this job:
   1. exchanges the refresh token for an ID token (Secure Token API) and reads users/{uid}/docs AS THAT ACCOUNT (the
      Firestore rules are unchanged: only the account itself can read its documents), opening each with the account key;
-  2. adds the shared market data (engine shared/: latest, history, bench) and runs src/jobs/account_alerts.js (the same
+  2. Gmail (prefs.gmail): opens the account's own document sync/gmail {address, appPassword} (written by the site,
+     encrypted to the account key), fetches new Thndr emails with imap_fetch.py (read-only, the same search as the
+     owner's sync), runs src/tools/sync.js on the account's documents and the shared market data, and saves what it
+     wrote in ONE Firestore commit pinned to the versions read (redone once on a conflict). The sync summary email
+     (heads-up items included) goes to the account's address when it notifies. The result, or the Gmail error, is kept
+     in sync/mail.gmail; a new error is emailed once. When the import ran, its heads-up digest replaces step 3.
+  3. adds the shared market data (engine shared/: latest, history, bench) and runs src/jobs/account_alerts.js (the same
      PA.headsUp checks the page shows); items whose key is not in its alertsSent list are emailed, once;
-  3. on Thursday from 21:00 Cairo (or --weekly), runs src/tools/weekly.js and emails the summary, once a week;
-  4. saves {alertsSent, weeklySent} back to the account as users/{uid}/docs/sync__mail, encrypted to the account key.
+  4. on Thursday from 21:00 Cairo (or --weekly), runs src/tools/weekly.js and emails the summary, once a week;
+  5. saves {alertsSent, weeklySent, gmail} back to the account as users/{uid}/docs/sync__mail, encrypted to the account key.
 Emails go from GMAIL_ADDRESS to the address in the package only. One account failing never stops the others; the job
 exits 1 (and emails the owner) only when nothing could be done at all. Logs carry counts, never figures or addresses.
 """
@@ -132,10 +140,11 @@ def write_state(http, tok, uid, keys, cur, data, now_iso):
 
 
 def materialize(docs, shared, out):
-    """The account's documents plus the shared market data as <coll>/<doc>.json (what weekly.js / account_alerts.js read)."""
+    """The account's documents plus the shared market data as <coll>/<doc>.json (what sync.js / weekly.js /
+    account_alerts.js read). Never the Gmail login (sync/gmail) or this job's own record (sync/mail)."""
     for k, v in docs.items():
         c, d = k.split("/", 1)
-        if c in ("market", "history", "bench"):
+        if c in ("market", "history", "bench") or k in ("sync/gmail", "sync/mail"):
             continue
         os.makedirs(os.path.join(out, c), exist_ok=True)
         with open(os.path.join(out, c, d + ".json"), "w", encoding="utf-8") as f:
@@ -155,6 +164,107 @@ def alerts_email(name, items, site):
     lines += ["", f"Open your portfolio: {site}", "", "You get these because you switched on email updates in your account. Switch them off there any time."]
     subj = f"{name}: heads-up — " + (items[0]["text"] if len(items) == 1 else f"{len(items)} new items")
     return subj[:180], "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------- Thndr emails from the account's own Gmail
+DOC_NAME = f"projects/{PROJECT}/databases/(default)/documents/users/{{uid}}/docs/{{c}}__{{d}}"
+
+
+def commit_writes(http, tok, uid, keys, docs, writes, now_iso):
+    """sync.js writes (run_sync.writes_from_plan) as ONE Firestore commit, each document pinned to the updateTime read
+    (or to not existing). Returns the documents changed; raises Conflict when one changed meanwhile."""
+    out = []
+    for w in writes:
+        k = f"{w['collection']}/{w['doc_id']}"
+        cur = docs.get(k)
+        data = store.deep_merge((cur or {}).get("data") or {}, w["data"]) if w["op"] == "update" else store.strip_markers(w["data"])
+        version = (cur or {}).get("version", 0) + 1
+        env = store.encode_doc(keys, w["doc_id"], version, data, now_iso).decode().strip()
+        pre = {"updateTime": cur["updateTime"]} if cur and cur.get("updateTime") else {"exists": False}
+        out.append({"update": {"name": DOC_NAME.format(uid=uid, c=w["collection"], d=w["doc_id"]),
+                               "fields": {"blob": {"stringValue": env}, "v": {"integerValue": str(version)}, "at": {"stringValue": now_iso}}},
+                    "currentDocument": pre})
+    if not out:
+        return []
+    st, j = http.json("POST", f"{FS}:commit", {"writes": out}, headers={"Authorization": "Bearer " + tok})
+    if st != 200:
+        status = (j.get("error") or {}).get("status") or ""
+        if status in ("FAILED_PRECONDITION", "ABORTED", "NOT_FOUND", "ALREADY_EXISTS") or st == 409:
+            raise Conflict()
+        raise jc.JobError("save", f"Firestore answered {st} {status} saving the import")
+    return [f"{w['collection']}/{w['doc_id']}" for w in writes]
+
+
+class Conflict(Exception):
+    pass
+
+
+def gmail_after(code, state, settings, now):
+    """The Gmail search start: plan.js from the last import (minus 5 days); the first time, the day tracking started
+    (settings.trackFrom; everything before it is in the opening rows) or else the last 7 days."""
+    last = state.get("lastRun")
+    if not last and settings.get("trackFrom"):
+        return settings["trackFrom"].replace("-", "/")
+    cmd = ["node", os.path.join(code, "src", "tools", "plan.js"), "--now", now.isoformat()] + (["--lastRun", last] if last else [])
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if r.returncode != 0:
+        raise jc.JobError("plan", "plan.js failed")
+    return json.loads(r.stdout)["gmailAfter"]
+
+
+def gmail_import(http, tok, pkg, keys, docs, shared, code, work, now, dry, read_again):
+    """Fetch new Thndr emails, run sync.js, save its writes. Returns (summary, write_dir, data_dir, counts)."""
+    import imap_fetch, run_sync
+    login = (docs.get("sync/gmail") or {}).get("data") or {}
+    if not login.get("address") or not login.get("appPassword"):
+        raise jc.JobError("Gmail", "no Gmail login saved in the account (connect Gmail again on the site)")
+    settings = (docs.get("portfolio/settings") or {}).get("data") or {}
+    st = (docs.get("sync/state") or {}).get("data") or {}
+    after = gmail_after(code, st, settings, now)
+    inbox = os.path.join(work, "inbox")
+    try:
+        c = imap_fetch.fetch(after, set(st.get("seen") or {}), inbox, login["address"], login["appPassword"])
+    except imap_fetch.FetchError as e:
+        raise jc.JobError("Gmail", str(e)) from None
+    today = now.strftime("%Y-%m-%d")
+    for attempt in range(2):
+        data, run = os.path.join(work, f"sdata{attempt}"), os.path.join(work, f"srun{attempt}")
+        materialize(docs, shared, data)
+        # heads-up items already emailed by the plain alerts (before Gmail was connected) are not emailed again
+        sp = os.path.join(data, "sync", "state.json")
+        sd = jc.load_data(sp, {}) or {}
+        sd["alertsSent"] = {**(((docs.get("sync/mail") or {}).get("data") or {}).get("alertsSent") or {}), **(sd.get("alertsSent") or {})}
+        os.makedirs(os.path.dirname(sp), exist_ok=True)
+        with open(sp, "w", encoding="utf-8") as f:
+            json.dump({"id": "state", "data": sd}, f)
+        os.makedirs(run)
+        r = subprocess.run(["node", os.path.join(code, "src", "tools", "sync.js"), "--data", data, "--inbox", inbox, "--out", run, "--today", today],
+                           capture_output=True, text=True, timeout=600)
+        if r.returncode != 0:
+            raise jc.JobError("sync.js", jc.mask((r.stderr or r.stdout or "failed").strip().splitlines()[-1][:200]))
+        with open(os.path.join(run, "summary.json"), encoding="utf-8") as f:
+            summary = json.load(f)
+        vers = {k: v.get("version", 0) for k, v in docs.items()}
+        writes = run_sync.writes_from_plan(os.path.join(run, "write"), vers)
+        if dry:
+            break
+        try:
+            commit_writes(http, tok, pkg["uid"], keys, docs, writes, jc.now_iso())
+            break
+        except Conflict:
+            if attempt:
+                raise jc.JobError("save", "the portfolio changed again while saving the import; nothing was saved")
+            docs.clear()
+            docs.update(read_again())
+    return summary, os.path.join(run, "write"), data, {"after": after, **c}
+
+
+def gmail_error_email(name, err, site):
+    text = (f"The site could not read the Thndr emails in your Gmail for {name}:\n\n  {err}\n\n"
+            "Usually the app password was deleted or changed. To fix it: open the site, tap Account, then Thndr emails, "
+            "then Change app password, and follow the steps.\n\n"
+            f"Nothing in your portfolio was changed. {site}\n")
+    return f"{name}: Thndr emails could not be read", text
 
 
 def run_one(http, pkg, shared, code, now, weekly_due, dry, send):
@@ -178,7 +288,36 @@ def run_one(http, pkg, shared, code, now, weekly_due, dry, send):
         data = os.path.join(work, "data")
         materialize(docs, shared, data)
         changed = False
-        if prefs.get("alerts", True):
+        overlay = None
+        if prefs.get("gmail"):
+            prev = state.get("gmail") or {}
+            try:
+                summary, overlay, data, c = gmail_import(http, tok, pkg, keys, docs, shared, code, work, now, dry,
+                                                         lambda: read_account(http, tok, pkg["uid"], priv))
+                em = summary.get("email") or {}
+                imported = summary.get("held") or summary.get("alert") or any(e.get("kind") != "invoice" and e.get("status") == "applied" for e in summary.get("log") or [])
+                if em.get("notify") and (prefs.get("alerts", True) or imported):
+                    if not dry:
+                        send(pkg["email"], em["subject"], em["text"], None)
+                    notes.append("import email sent")
+                for k in (summary.get("digest") or {}).get("emailed") or []:
+                    sent[k] = today
+                state["gmail"] = {"ok": True, "at": jc.now_iso(), "found": c.get("found", 0), "new": c.get("kept", 0),
+                                  "applied": summary.get("applied", 0), "held": summary.get("held", 0)}
+                notes.append(f"gmail {c.get('kept', 0)} new, {summary.get('applied', 0)} applied, {summary.get('held', 0)} held")
+            except Exception as e:
+                err = jc.mask(str(getattr(e, "detail", e)))[:200]
+                state["gmail"] = {"ok": False, "at": jc.now_iso(), "error": err, "errorSent": prev.get("errorSent")}
+                if prev.get("errorSent") != err:
+                    subj, body = gmail_error_email(name, err, site)
+                    if not dry:
+                        send(pkg["email"], subj, body, None)
+                    state["gmail"]["errorSent"] = err
+                notes.append(f"gmail not done ({getattr(e, 'step', type(e).__name__)})")
+                overlay = None
+                data = os.path.join(work, "data")
+            changed = True
+        if prefs.get("alerts", True) and overlay is None:
             r = subprocess.run(["node", os.path.join(code, "src", "jobs", "account_alerts.js"), "--data", data, "--today", today], capture_output=True, text=True, timeout=300)
             out = json.loads((r.stdout or "{}").strip().splitlines()[-1] if r.stdout.strip() else "{}")
             if not out.get("ok"):
@@ -195,7 +334,7 @@ def run_one(http, pkg, shared, code, now, weekly_due, dry, send):
         if prefs.get("weekly", True) and weekly_due and state.get("weeklySent") != today:
             htmlp, txtp, jsp = (os.path.join(work, f) for f in ("weekly.html", "weekly.txt", "weekly.json"))
             r = subprocess.run(["node", os.path.join(code, "src", "tools", "weekly.js"), "--data", data, "--week-ending", today, "--today", today,
-                                "--out", htmlp, "--text", txtp, "--json", jsp], capture_output=True, text=True, timeout=300)
+                                "--out", htmlp, "--text", txtp, "--json", jsp] + (["--overlay", overlay] if overlay else []), capture_output=True, text=True, timeout=300)
             if r.returncode == 2:
                 notes.append("weekly skipped (no closes this week)")
             elif r.returncode != 0:

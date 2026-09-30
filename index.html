@@ -73,6 +73,11 @@ body.pd-locked>:not(#lock){display:none!important}
 #lock .lk-more summary{cursor:pointer;padding:6px 0;text-align:center;text-decoration:underline}
 #lock .lk-more .lk-list{margin-top:8px}
 #pd-bar #pd-account{color:var(--accent,#0B6E5F);border-color:var(--accent,#0B6E5F)}
+#lock a.lk-btn{text-decoration:none;box-sizing:border-box}
+#lock .lk-stepno{font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--accent,#0B6E5F)}
+#lock .lk-lbl{font-size:13px;font-weight:600;text-align:left;color:var(--ink-2,#46534E);margin:4px 0 -4px}
+#lock .lk-hint{font-size:12px;text-align:left;color:var(--ink-3,#5F6C67);margin-top:-4px}
+#lock .lk-ok{color:var(--accent,#0B6E5F);font-weight:600}
 
 [data-testid=scan-gmail],[data-testid=factsheet-email],[data-testid=post-email-label]{display:none!important}
 body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[data-testid=save-marks],[data-testid=save-assets],[data-testid=save-settings],[data-testid=post-statement],[data-testid=statement-upload-label]){display:none!important}
@@ -1186,7 +1191,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   }
   // first-run: the starting point. Tracking starts today: cash plus the shares held now, valued at today's prices
   function onboardScreen(first, pname, note) {
-    screen(`<h1>Set up your portfolio</h1><p>Tracking starts today. Enter your cash and the shares you hold now; each holding is valued at today's price. You can add past trades later on the Activity tab.</p>
+    screen(`<h1>Set up your portfolio</h1><p>Tracking starts today. Enter your cash and the shares you hold now; each holding is valued at today's price. After this you can connect your Gmail so new trades are added by themselves.</p>
       <form id="lk-ob" autocomplete="off"><input id="lk-ob-name" data-testid="onboard-name" value="${esc(pname)}" aria-label="Portfolio name" placeholder="Portfolio name">
       <input id="lk-ob-cash" type="number" step="any" min="0" inputmode="decimal" data-testid="onboard-cash" placeholder="Cash in your broker account (EGP)" aria-label="Cash in your broker account (EGP)">
       <textarea id="lk-ob-hold" rows="5" data-testid="onboard-holdings" placeholder="Shares you hold, one per line, e.g.\nCOMI 100\nETEL 250" aria-label="Shares you hold"></textarea>
@@ -1194,7 +1199,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
       <div class="lk-links"><button type="button" class="lk-link" id="lk-ob-skip" data-testid="onboard-skip">Skip: start with an empty portfolio</button></div>`);
     const run = async (holdText, cashText) => {
       const go = $l('#lk-ob-go'); go.disabled = true; err('Setting up…');
-      try { await createPortfolio($l('#lk-ob-name').value.trim() || pname, first, cashText, holdText); await start(); open(); await offerBio(PK8); }
+      try { await createPortfolio($l('#lk-ob-name').value.trim() || pname, first, cashText, holdText); await start(); gmailScreen(async () => { open(); await offerBio(PK8); }, true); }
       catch (e) { console.error(e); go.disabled = false; err(e.message || String(e)); }
     };
     $l('#lk-ob').onsubmit = (ev) => { ev.preventDefault(); run($l('#lk-ob-hold').value, $l('#lk-ob-cash').value); };
@@ -1220,11 +1225,12 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
       const name = qt.name || sym, mem = members.find((x) => x.s === sym);
       items[name] = { name, symbol: sym, sector: (mem && mem.sector) || 'Unclassified' };
       const amt = Math.round(q * qt.price * 100) / 100; invested += amt;
-      rows.push({ id: rid(), d: today, t: 'Buy', a: name, q, p: qt.price, amt: -amt, acc: 'Main', src: 'manual', note: 'Holding at sign-up, valued at that day\'s price' });
+      rows.push({ id: rid(), d: today, t: 'Buy', a: name, q, p: qt.price, amt: -amt, acc: 'Main', src: 'manual', opening: true, note: 'Holding at sign-up, valued at that day\'s price' });
     }
-    if (invested + cash > 0) rows.unshift({ id: rid(), d: today, t: 'Deposit', amt: Math.round((invested + cash) * 100) / 100, acc: 'Main', src: 'manual', note: 'Starting value at sign-up (cash + holdings at that day\'s prices)' });
+    if (invested + cash > 0) rows.unshift({ id: rid(), d: today, t: 'Deposit', amt: Math.round((invested + cash) * 100) / 100, acc: 'Main', src: 'manual', opening: true, note: 'Starting value at sign-up (cash + holdings at that day\'s prices)' });
     const L = (mk.docs || {})['market/latest'] || {}, ix = (L.index || {}).EGX30CAPPED || {}, pol = ((L.rates || {}).policy || {}).rate, fx = ((L.fx || {}).USDEGP || {}).price;
-    const settings = { name: pname, portfolioId: CUR.id, inception: today.slice(0, 7), openingValue: 0, cash, cashDate: today, cashSource: 'entered at sign-up',
+    // trackFrom: Thndr emails and statements are used from the day after sign-up; the opening rows cover everything before
+    const settings = { name: pname, portfolioId: CUR.id, inception: today.slice(0, 7), trackFrom: today, openingValue: 0, cash, cashDate: today, cashSource: 'entered at sign-up',
       account: { holder, unifiedCode: '' }, riskFree: typeof pol === 'number' ? pol : 0.22, fxStart: typeof fx === 'number' ? fx : 50, benchCloseStart: typeof ix.prevMonthClose === 'number' ? ix.prevMonthClose : null,
       openThreshold: 0.5, staleDays: 7, volLow: 0.03, volHigh: 0.08, priceDate: today, factsheetEmail: '', returnMethod: 'dietz' };
     await saveDoc('set', 'portfolio/settings', settings);
@@ -1283,12 +1289,14 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   function accountScreen() {
     screen(`<h1>${esc(CUR.name)}</h1><p>Signed in as <b>${esc(CUR.email || (CLOUD && CLOUD.email) || '')}</b>. Your portfolio is saved in your account, locked with your password.</p>
       <button class="lk-btn ghost" id="lk-ac-pw" data-testid="account-password">Change password</button>
-      <button class="lk-btn ghost" id="lk-ac-mail" data-testid="account-email">Email updates${mailPrefs() ? ' · on' : ''}</button>
+      <button class="lk-btn ghost" id="lk-ac-gmail" data-testid="account-gmail">Thndr emails${gmailOn() ? ' · connected' : ''}</button>
+      <button class="lk-btn ghost" id="lk-ac-mail" data-testid="account-email">Email updates${mailOn() ? ' · on' : ''}</button>
       <button class="lk-btn ghost" id="lk-ac-code" data-testid="account-new-code">Make a new recovery code</button>
       <button class="lk-btn ghost" id="lk-ac-out" data-testid="account-signout">Sign out on this device</button>
       <div class="lk-links"><button type="button" class="lk-link" id="lk-ac-back" data-testid="account-back">Back</button></div>`);
     $l('#lk-ac-back').onclick = open;
     $l('#lk-ac-mail').onclick = () => mailScreen();
+    $l('#lk-ac-gmail').onclick = () => gmailScreen(accountScreen);
     $l('#lk-ac-out').onclick = () => forgetScreen(() => accountScreen(), 'Your portfolio stays in your account; sign in again to open it here. ');
     $l('#lk-ac-code').onclick = async () => {
       const b = $l('#lk-ac-code'); b.disabled = true;
@@ -1319,6 +1327,8 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   const MAIL_LABEL = 'portfolio-mail-v1';
   const mailLS = () => 'pd.mail.' + CUR.id;
   const mailPrefs = () => ls.get(mailLS());
+  const mailOn = () => { const m = mailPrefs(); return !!(m && (m.alerts || m.weekly)); };
+  const gmailOn = () => !!(mailPrefs() || {}).gmail;
   const sha = async (s) => b64big(await crypto.subtle.digest('SHA-256', enc.encode(s)));
   async function sealTo(pubB64, bytes, label) {
     const saved = KEYS; KEYS = { pub: pubB64 };
@@ -1326,22 +1336,27 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   }
   async function writeMail(prefs) {
     const mk = await (await fetch('p/khaled/keys.json', { cache: 'no-store' })).json();
-    const pkg = { v: 1, uid: CLOUD.uid, email: prefs.email, refresh: CLOUD.refresh, pk8: b64big(PK8), prefs: { alerts: !!prefs.alerts, weekly: !!prefs.weekly }, at: new Date().toISOString() };
+    const pkg = { v: 1, uid: CLOUD.uid, email: prefs.email, refresh: CLOUD.refresh, pk8: b64big(PK8), prefs: { alerts: !!prefs.alerts, weekly: !!prefs.weekly, gmail: !!prefs.gmail }, at: new Date().toISOString() };
     const env = Object.assign({ v: 1 }, await sealTo(mk.pub, enc.encode(JSON.stringify(pkg)), MAIL_LABEL));
     await fsReq('PATCH', `mail/${CLOUD.uid}`, { fields: { pkg: { stringValue: JSON.stringify(env) }, at: { stringValue: pkg.at } } });
     ls.set(mailLS(), Object.assign({}, prefs, { ref: await sha(CLOUD.refresh) }));
   }
+  // nothing left on: the package is deleted, so the job no longer opens the portfolio
+  async function setMail(prefs) {
+    if (prefs.alerts || prefs.weekly || prefs.gmail) return writeMail(prefs);
+    await fsReq('DELETE', `mail/${CLOUD.uid}`); ls.del(mailLS());
+  }
   // the job signs in with the saved refresh token: after a password change (which ends old sessions) it is sealed again
   async function resealMail() { const m = mailPrefs(); if (m && CLOUD && CLOUD.refresh && m.ref !== (await sha(CLOUD.refresh))) await writeMail(m); }
   function mailScreen(note) {
-    const m = mailPrefs() || { email: CUR.email || (CLOUD && CLOUD.email) || '', alerts: true, weekly: true };
+    const on = mailOn(), m = on ? mailPrefs() : Object.assign({ email: CUR.email || (CLOUD && CLOUD.email) || '' }, mailPrefs() || {}, { alerts: true, weekly: true });
     screen(`<h1>Email updates</h1><p>Get an email when something needs your attention (a dividend coming up, a target or stop reached, a big drop), and a summary every Thursday night.</p>
       <p class="lk-tip">To write these, the site owner's email job has to open your portfolio, so while this is on your figures are not private from that job. Switch it off any time: nothing is kept after that.</p>
       <form id="lk-ml" autocomplete="off"><input id="lk-ml-email" type="email" data-testid="mail-address" value="${esc(m.email)}" placeholder="Email address" aria-label="Email address">
       <label class="lk-check"><input type="checkbox" id="lk-ml-alerts" data-testid="mail-alerts" ${m.alerts ? 'checked' : ''}> Heads-up alerts</label>
       <label class="lk-check"><input type="checkbox" id="lk-ml-weekly" data-testid="mail-weekly" ${m.weekly ? 'checked' : ''}> Weekly summary (Thursday night)</label>
-      <button class="lk-btn" id="lk-ml-go" data-testid="mail-on">${mailPrefs() ? 'Save' : 'Turn on email updates'}</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>
-      ${mailPrefs() ? '<button class="lk-btn ghost" id="lk-ml-off" data-testid="mail-off">Turn off email updates</button>' : ''}
+      <button class="lk-btn" id="lk-ml-go" data-testid="mail-on">${on ? 'Save' : 'Turn on email updates'}</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>
+      ${on ? '<button class="lk-btn ghost" id="lk-ml-off" data-testid="mail-off">Turn off email updates</button>' : ''}
       <div class="lk-links"><button type="button" class="lk-link" id="lk-ml-back" data-testid="mail-back">Back</button></div>`);
     $l('#lk-ml-back').onclick = accountScreen;
     $l('#lk-ml').onsubmit = async (ev) => {
@@ -1349,14 +1364,137 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return err('Enter an email address.');
       if (!alerts && !weekly) return err('Pick at least one kind of email, or turn email updates off.');
       const b = $l('#lk-ml-go'); b.disabled = true; err('Saving…');
-      try { await writeMail({ email, alerts, weekly }); open(); toast('Email updates are on. The first ones come after the next market close.'); }
+      try { await writeMail({ email, alerts, weekly, gmail: gmailOn() }); open(); toast('Email updates are on. The first ones come after the next market close.'); }
       catch (e) { console.error(e); b.disabled = false; err(e.message || String(e)); }
     };
     const off = $l('#lk-ml-off');
     if (off) off.onclick = async () => {
       off.disabled = true;
-      try { await fsReq('DELETE', `mail/${CLOUD.uid}`); ls.del(mailLS()); open(); toast('Email updates are off.'); }
+      try { await setMail(Object.assign({}, mailPrefs(), { alerts: false, weekly: false })); open(); toast('Email updates are off.'); }
       catch (e) { console.error(e); off.disabled = false; err(e.message || String(e)); }
+    };
+  }
+  /* Thndr emails (opt-in): the account connects its own Gmail with a Google app password, and the account job imports its
+     Thndr invoices and statements twice a day (run_account_mail.py: imap_fetch.py, then sync.js). The login is the
+     account's own document sync/gmail, encrypted to its key like every other document; the mail package says gmail: true
+     so the job opens it. Turning it off deletes that document. Every screen says plainly what to do and what it means. */
+  const GOOGLE_2SV = 'https://myaccount.google.com/signinoptions/twosv', GOOGLE_APPPW = 'https://myaccount.google.com/apppasswords';
+  // done: where "Not now" / "Done" leads (the portfolio after sign-up, the Account menu otherwise)
+  function gmailScreen(done, first) {
+    if (gmailOn()) return gmailStatusScreen(done);
+    screen(`<h1>${first ? 'One more step (optional)' : 'Automatic updates from Thndr'}</h1>
+      <p>Thndr emails you after every trade and sends a statement each month. Connect the Gmail that gets those emails and the site reads them for you twice a day: new trades, dividends and fees are added to your portfolio by themselves, and each monthly statement corrects everything to Thndr's own figures.</p>
+      <p><b>Three short steps, about 3 minutes:</b></p>
+      <ol class="lk-steps"><li>Turn on Google's 2-Step Verification (if it isn't on already).</li><li>Make an "app password" in your Google account.</li><li>Paste it here.</li></ol>
+      <p class="lk-tip"><b>Good to know.</b> An app password lets the site sign in to your Gmail. It only searches for emails from Thndr and never sends, changes or deletes anything. While this is on, the site owner's job can open your portfolio to update it. Turn it off here any time, or delete the app password in your Google account and access stops at once.</p>
+      <button class="lk-btn" id="lk-gm-go" data-testid="gmail-start">Set it up</button>
+      <div class="lk-links"><button type="button" class="lk-link" id="lk-gm-skip" data-testid="gmail-skip">${first ? 'Not now' : 'Back'}</button></div>
+      <p class="lk-tip">Rather not, or your Thndr emails go to another provider? Add trades yourself on the Activity tab, and upload each monthly statement PDF under Settings → Statements &amp; imports. You can connect Gmail later from Account.</p>`);
+    $l('#lk-gm-go').onclick = () => gmailStep1(done, first);
+    $l('#lk-gm-skip').onclick = () => done();
+  }
+  function gmailStep1(done, first) {
+    screen(`<p class="lk-stepno">Step 1 of 3</p><h1>Turn on 2-Step Verification</h1>
+      <p>Google only lets you make an app password when 2-Step Verification is on.</p>
+      <ol class="lk-steps"><li>Tap <b>Open Google 2-Step Verification</b> below. It opens in a new tab.</li>
+        <li>Sign in with the Gmail that gets your Thndr emails.</li>
+        <li>If it says <b>2-Step Verification is on</b>, you are done here. If not, tap <b>Turn on 2-Step Verification</b> and follow Google's steps (it sends a code to your phone).</li>
+        <li>Come back to this tab and tap <b>Next</b>.</li></ol>
+      <a class="lk-btn ghost" href="${GOOGLE_2SV}" target="_blank" rel="noopener noreferrer" data-testid="gmail-2sv-link">Open Google 2-Step Verification</a>
+      <button class="lk-btn" id="lk-gm-next" data-testid="gmail-step1-next">It's on: Next</button>
+      <div class="lk-links"><button type="button" class="lk-link" id="lk-gm-back">Back</button></div>`);
+    $l('#lk-gm-next').onclick = () => gmailStep2(done, first);
+    $l('#lk-gm-back').onclick = () => gmailScreen(done, first);
+  }
+  function gmailStep2(done, first, change) {
+    screen(`<p class="lk-stepno">${change ? 'New app password' : 'Step 2 of 3'}</p><h1>Make an app password</h1>
+      <ol class="lk-steps"><li>Tap <b>Open Google app passwords</b> below (same Google account).</li>
+        <li>Under <b>App name</b>, type <b>EGX Tracker</b> and tap <b>Create</b>.</li>
+        <li>Google shows a password of 16 letters in a box, like <b>abcd efgh ijkl mnop</b>. Copy it: Google shows it only once.</li>
+        <li>Come back to this tab and tap <b>Next</b>.</li></ol>
+      <p class="lk-tip">Google says "The setting you are looking for is not available for your account"? Then 2-Step Verification is still off: go back one step. Some work or school accounts do not allow app passwords at all.</p>
+      <a class="lk-btn ghost" href="${GOOGLE_APPPW}" target="_blank" rel="noopener noreferrer" data-testid="gmail-apppw-link">Open Google app passwords</a>
+      <button class="lk-btn" id="lk-gm-next" data-testid="gmail-step2-next">I copied it: Next</button>
+      <div class="lk-links"><button type="button" class="lk-link" id="lk-gm-back">Back</button></div>`);
+    $l('#lk-gm-next').onclick = () => gmailStep3(done, first, change);
+    $l('#lk-gm-back').onclick = () => (change ? gmailStatusScreen(done) : gmailStep1(done, first));
+  }
+  async function gmailStep3(done, first, change) {
+    const [set, login] = await Promise.all([readCloudDoc('portfolio', 'settings').catch(() => ({})), readCloudDoc('sync', 'gmail').catch(() => ({}))]);
+    const S0 = (set.doc && set.doc.data) || {}, L0 = (login.doc && login.doc.data) || {};
+    const email = CUR.email || (CLOUD && CLOUD.email) || '';
+    const addr0 = L0.address || (/@(gmail|googlemail)\.com$/i.test(email) ? email : '');
+    screen(`<p class="lk-stepno">${change ? 'New app password' : 'Step 3 of 3'}</p><h1>Connect your Gmail</h1>
+      <form id="lk-gm" autocomplete="off">
+      <label class="lk-lbl" for="lk-gm-addr">Your Gmail address</label>
+      <input id="lk-gm-addr" type="email" data-testid="gmail-address" value="${esc(addr0)}" placeholder="you@gmail.com" autocapitalize="none" spellcheck="false">
+      <label class="lk-lbl" for="lk-gm-pw">The 16-letter app password</label>
+      <input id="lk-gm-pw" data-testid="gmail-app-password" placeholder="abcd efgh ijkl mnop" autocomplete="off" autocapitalize="none" spellcheck="false">
+      ${change ? '' : `<label class="lk-lbl" for="lk-gm-name">Your full name, exactly as in the Thndr app</label>
+      <input id="lk-gm-name" data-testid="gmail-holder" value="${esc(((S0.account || {}).holder) || '')}" placeholder="Full name" autocomplete="name">
+      <p class="lk-hint">Thndr prints it on every invoice and statement. Only emails in this name are used, so nobody else's trades can land in your portfolio.</p>
+      ${mailOn() ? '' : '<label class="lk-check"><input type="checkbox" id="lk-gm-mail" data-testid="gmail-also-mail" checked> Also email me alerts and a Thursday summary</label>'}`}
+      <button class="lk-btn" id="lk-gm-go" data-testid="gmail-connect">${change ? 'Save' : 'Connect Gmail'}</button><div class="lk-err" role="alert"></div></form>
+      <div class="lk-links"><button type="button" class="lk-link" id="lk-gm-back">Back</button></div>`);
+    $l('#lk-gm-back').onclick = () => gmailStep2(done, first, change);
+    ($l('#lk-gm-addr').value ? $l('#lk-gm-pw') : $l('#lk-gm-addr')).focus();
+    $l('#lk-gm').onsubmit = async (ev) => {
+      ev.preventDefault();
+      const address = $l('#lk-gm-addr').value.trim(), appPassword = $l('#lk-gm-pw').value.replace(/\s+/g, '').toLowerCase();
+      const holder = change ? null : $l('#lk-gm-name').value.replace(/\s+/g, ' ').trim(), also = !change && !!($l('#lk-gm-mail') || {}).checked;
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(address)) return err('Enter your Gmail address.');
+      if (!/^[a-z]{16}$/.test(appPassword)) return err('The app password is 16 letters (Google shows it in 4 groups of 4). Copy it again from Google.');
+      if (!change && holder.split(' ').length < 2) return err('Enter your full name as the Thndr app shows it (first and last name at least).');
+      const b = $l('#lk-gm-go'); b.disabled = true; err('Connecting…');
+      try {
+        await saveDoc('set', 'sync/gmail', { address, appPassword, connectedAt: new Date().toISOString() });
+        if (!change) {
+          const patch = {};
+          if (((S0.account || {}).holder || '') !== holder) patch.account = { holder };
+          if (!S0.trackFrom) patch.trackFrom = cairoDay(Date.now() / 1000);   // the ledger so far stands; emails count from the next day
+          if (Object.keys(patch).length) await saveDoc('update', 'portfolio/settings', patch);
+          const m = Object.assign({ email: email || address, alerts: false, weekly: false }, mailPrefs() || {});
+          if (also) Object.assign(m, { email: m.email || address, alerts: true, weekly: true });
+          await writeMail(Object.assign(m, { gmail: true }));
+          return gmailDoneScreen(done);
+        }
+        toast('App password saved. The next check uses it.'); gmailStatusScreen(done);
+      } catch (e) { console.error(e); b.disabled = false; err(e.message || String(e)); }
+    };
+  }
+  function gmailDoneScreen(done) {
+    screen(`<h1>Connected</h1><p>Here is what happens now:</p>
+      <ol class="lk-steps"><li>Twice a day (about 4 pm and 10:30 pm Cairo time) the site checks your Gmail for new Thndr emails. The first check is at the next of those times.</li>
+        <li>Trades from your Thndr invoices appear on the Activity tab by themselves.</li>
+        <li>When your monthly statement arrives (early each month), it corrects everything to Thndr's figures and closes the month.</li>
+        <li>If something does not match, nothing is changed and you get an email saying what to check.</li>
+        <li>Only emails from after today count: what you entered when you started covers everything before.</li></ol>
+      <p class="lk-tip">To see the last check, change the app password or turn this off: Account → Thndr emails.</p>
+      <button class="lk-btn" id="lk-gm-done" data-testid="gmail-done">Done</button>`);
+    $l('#lk-gm-done').onclick = () => done();
+  }
+  async function gmailStatusScreen(done) {
+    const [login, rec] = await Promise.all([readCloudDoc('sync', 'gmail').catch(() => ({})), readCloudDoc('sync', 'mail').catch(() => ({}))]);
+    const addr = ((login.doc && login.doc.data) || {}).address || '', g = (((rec.doc && rec.doc.data) || {}).gmail) || null;
+    const when = g && g.at ? new Date(g.at).toLocaleString('en-GB', { timeZone: 'Africa/Cairo', weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+    const status = !g ? 'Not checked yet. The first check is at about 4 pm or 10:30 pm Cairo time, whichever comes next.'
+      : g.ok ? `<span class="lk-ok">Working.</span> Last checked ${esc(when)}: ${g.new ? `${g.new} new Thndr email${g.new > 1 ? 's' : ''}` : 'no new Thndr emails'}${g.held ? `, ${g.held} need${g.held > 1 ? '' : 's'} a look (see the email you got)` : ''}.`
+      : `<b>The last check failed</b> (${esc(when)}): ${esc(g.error || 'unknown error')}. Usually the app password was deleted or changed: tap <b>Change app password</b>.`;
+    screen(`<h1>Thndr emails</h1><p>Connected to <b>${esc(addr)}</b>. New Thndr invoices and statements are added to your portfolio twice a day.</p>
+      <p class="lk-tip" data-testid="gmail-status">${status}</p>
+      <button class="lk-btn ghost" id="lk-gm-change" data-testid="gmail-change">Change app password</button>
+      <button class="lk-btn ghost" id="lk-gm-off" data-testid="gmail-off">Turn off</button>
+      <div class="lk-err" role="alert"></div>
+      <div class="lk-links"><button type="button" class="lk-link" id="lk-gm-back" data-testid="gmail-back">Back</button></div>`);
+    $l('#lk-gm-back').onclick = () => done();
+    $l('#lk-gm-change').onclick = () => gmailStep2(done, false, true);
+    $l('#lk-gm-off').onclick = async () => {
+      const b = $l('#lk-gm-off'); b.disabled = true; err('Turning off…');
+      try {
+        await setMail(Object.assign({}, mailPrefs(), { gmail: false }));
+        await saveDoc('delete', 'sync/gmail');
+        toast('Thndr emails are off. You can delete the "EGX Tracker" app password in your Google account too.'); done();
+      } catch (e) { console.error(e); b.disabled = false; err(e.message || String(e)); }
     };
   }
   window.pdAccountMenu = () => { if (CUR && CUR.cloud && PK8) accountScreen(); };
@@ -1414,7 +1552,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   })();
 })();
 </script>
-<meta name="pd-build" content="55352a29e249 2026-09-30 02:47">
+<meta name="pd-build" content="b1f5418fe606 2026-09-30 03:27">
 <style>
 :root{
   --bg:#F3F6F4; --surface:#FFFFFF; --surface-2:#EDF2EF; --ink:#0F1A17; --ink-2:#46534E; --ink-3:#5F6C67;
@@ -3081,9 +3219,11 @@ button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.pl
     });
     // transfers with no itemised fund trade are the savings wallet (thndrsavings, priced at 1)
     mfOut.concat(mfIn).filter((x) => !x.used).forEach((x) => { const a = Math.round(x.amt * 100) / 100; cand.push({ d: x.d, t: a < 0 ? 'Buy' : 'Sell', a: 'thndrsavings', q: Math.abs(a), p: 1, amt: a, acc: 'MF', src: 'statement' }); });
-    // match against existing ledger rows (the ledger may come from the app export, so allow small date/amount differences)
+    // match against existing ledger rows (the ledger may come from the app export, so allow small date/amount differences).
+    // Opening rows (t.opening: the holdings and cash typed at sign-up) stand for everything before tracking started; they
+    // are never matched, corrected or removed by a statement, only counted in the holdings and cash checks.
     const used = new Set();
-    const pool = tx.filter((t) => t.d >= addDays(from, -6) && t.d <= addDays(to, 6));
+    const pool = tx.filter((t) => !t.opening && t.d >= addDays(from, -6) && t.d <= addDays(to, 6));
     const same = (t, r) => {
       if (t.t !== r.t || used.has(t)) return false;
       const dd = days(t.d, r.d);
@@ -3209,7 +3349,16 @@ button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.pl
     return r;
   }
 
-  const api = { attachments, pdfLines, parseDoc, parseStatement, reconcile, classify, accountRows, accountOf, ownerCheck, authCheck, eom };
+  // Tracking start (settings.trackFrom, set for accounts made on the site): the opening rows typed at sign-up stand for
+  // everything up to and including that day, so a statement is used from the next day only (null when it ends before).
+  function fromTrackStart(st, tf) {
+    if (!tf || !st || !st.cash || st.from > tf) return st;
+    if (st.to <= tf) return null;
+    const d = new Date(Date.parse(tf + 'T00:00:00Z') + 864e5).toISOString().slice(0, 10), keep = (r) => r.date && r.date >= d;
+    return Object.assign({}, st, { from: d, cash: Object.assign({}, st.cash, { start: null, rows: st.cash.rows.filter(keep) }), mf: st.mf ? Object.assign({}, st.mf, { rows: st.mf.rows.filter(keep) }) : st.mf });
+  }
+
+  const api = { attachments, pdfLines, parseDoc, parseStatement, reconcile, classify, accountRows, accountOf, ownerCheck, authCheck, eom, fromTrackStart };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.TS = api;
 })(this);
 
@@ -4511,7 +4660,9 @@ async function reviewUpload(files){
       }
     }
     if(own.error) throw new Error(`refused — this statement ${own.error}. Only this portfolio's own Thndr documents are ever imported.`);
-    const st = TS.parseStatement(docs); if(!st.cash) throw new Error('could not find the account statement among the PDFs (upload every PDF from the Thndr statement email)');
+    const st0 = TS.parseStatement(docs); if(!st0.cash) throw new Error('could not find the account statement among the PDFs (upload every PDF from the Thndr statement email)');
+    const st = TS.fromTrackStart(st0, S.settings.trackFrom);   // days up to sign-up are in the starting holdings
+    if(!st) throw new Error(`this statement ends on ${st0.to}, before tracking started (${S.settings.trackFrom}); your starting holdings already include it`);
     const rc = TS.reconcile(st, allTx(), S.assets, S.marks);
     rc.item={id:'upload-'+Date.now(), subject:files.map(f=>f.name).join(', '), month:rc.month}; rc.files=files.map(f=>f.name); rc.accountCode=own.code;
     rc.pick = rc.fresh.map(()=>true); rc.use = rc.conflicts.map(()=>false);

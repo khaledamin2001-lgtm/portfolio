@@ -49,3 +49,8 @@ body.pd-locked>:not(#lock){display:none!important}
 #lock .lk-more summary{cursor:pointer;padding:6px 0;text-align:center;text-decoration:underline}
 #lock .lk-more .lk-list{margin-top:8px}
 #pd-bar #pd-account{color:var(--accent,#0B6E5F);border-color:var(--accent,#0B6E5F)}
+#lock a.lk-btn{text-decoration:none;box-sizing:border-box}
+#lock .lk-stepno{font-size:12px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--accent,#0B6E5F)}
+#lock .lk-lbl{font-size:13px;font-weight:600;text-align:left;color:var(--ink-2,#46534E);margin:4px 0 -4px}
+#lock .lk-hint{font-size:12px;text-align:left;color:var(--ink-3,#5F6C67);margin-top:-4px}
+#lock .lk-ok{color:var(--accent,#0B6E5F);font-weight:600}

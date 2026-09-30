@@ -526,7 +526,9 @@ async function reviewUpload(files){
       }
     }
     if(own.error) throw new Error(`refused — this statement ${own.error}. Only this portfolio's own Thndr documents are ever imported.`);
-    const st = TS.parseStatement(docs); if(!st.cash) throw new Error('could not find the account statement among the PDFs (upload every PDF from the Thndr statement email)');
+    const st0 = TS.parseStatement(docs); if(!st0.cash) throw new Error('could not find the account statement among the PDFs (upload every PDF from the Thndr statement email)');
+    const st = TS.fromTrackStart(st0, S.settings.trackFrom);   // days up to sign-up are in the starting holdings
+    if(!st) throw new Error(`this statement ends on ${st0.to}, before tracking started (${S.settings.trackFrom}); your starting holdings already include it`);
     const rc = TS.reconcile(st, allTx(), S.assets, S.marks);
     rc.item={id:'upload-'+Date.now(), subject:files.map(f=>f.name).join(', '), month:rc.month}; rc.files=files.map(f=>f.name); rc.accountCode=own.code;
     rc.pick = rc.fresh.map(()=>true); rc.use = rc.conflicts.map(()=>false);
