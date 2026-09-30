@@ -90,6 +90,7 @@
 
   /* ---------- keys ---------- */
   let KEYS = null, PK8 = null, DATA_AT = null, lastFetch = 0, fetchTry = 0;
+  let VIEW = null;   // {uid, name}: a friend's shared portfolio is on the page (read-only), see "friends" below
   let SAVED_AT = null;   // set when the last data answer was sw.js's saved copy (its x-pd-saved-at header), null when it came from the network
   async function unwrapWithSetupKey(code) { return unwrapKey(KEYS.wrap, code.toUpperCase().replace(/[^A-Z0-9]/g, '')); }
   // a keys.json-style wrap {salt, iv, ct, iter} opened with a secret: the setup key / recovery code (cleaned), or an account password
@@ -119,6 +120,7 @@
     return crypto.subtle.decrypt({ name: 'AES-GCM', iv: ub64(e.iv), additionalData: enc.encode(label) }, key, ub64(e.ct));
   }
   async function fetchData() {
+    if (VIEW) return fetchShareData();
     if (CUR && CUR.cloud) return fetchCloudData();
     const r = await fetch(base() + 'data.enc.json?t=' + Date.now(), { cache: 'no-store' });
     if (!r.ok) throw new Error('Could not download the portfolio data (' + r.status + ')');
@@ -191,14 +193,14 @@
   const RECENT = new Map();         // 'coll/doc' -> {sha, doc, at}: this device's last commit of a document (the API can lag)
   let QUEUE = Promise.resolve();    // saves run one at a time, in the order the page made them
   const engineRepo = () => (CUR && CUR.engine) || null;
-  const canEdit = () => !!(PK8 && ((CUR && CUR.cloud && CLOUD) || (EDIT && engineRepo())));
+  const canEdit = () => !!(PK8 && !VIEW && ((CUR && CUR.cloud && CLOUD) || (EDIT && engineRepo())));
   window.pdCanEdit = canEdit;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const b64big = (u) => { u = u instanceof Uint8Array ? u : new Uint8Array(u); let s = ''; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); };
   const toast = (m, k) => { if (window.pdToast) window.pdToast(m, k); };
   // encrypt for the portfolio's public key: the same scheme unseal() opens and src/jobs/store.py seal() writes
-  async function seal(bytes, label) {
-    const site = await crypto.subtle.importKey('raw', ub64(KEYS.pub), { name: 'ECDH', namedCurve: 'P-256' }, false, []);
+  async function seal(bytes, label, pubB64) {
+    const site = await crypto.subtle.importKey('raw', ub64(pubB64 || KEYS.pub), { name: 'ECDH', namedCurve: 'P-256' }, false, []);
     const eph = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
     const epk = new Uint8Array(await crypto.subtle.exportKey('raw', eph.publicKey));
     const shared = await crypto.subtle.deriveBits({ name: 'ECDH', public: site }, eph.privateKey, 256);
@@ -293,6 +295,7 @@
     OVERLAY.set(p, { data, at: Date.now() });
     if (data === undefined) delete DOCS[p]; else DOCS[p] = data;
     listeners.forEach(fire);
+    if (CUR && CUR.cloud) shareSoon();   // friends see the change too
   }
   function applyOverlay() {
     for (const [p, o] of OVERLAY) {
@@ -309,7 +312,7 @@
       const st = el('pd-edit-state');
       if (st) {
         const soon = on && exp && exp - Date.now() < 14 * 864e5;
-        st.textContent = CUR && CUR.cloud ? (on ? 'Your account · changes save as you make them' : 'Your account') : !engineRepo() ? 'View only' : !on ? 'View only on this device' : JOB_NOTE || (soon ? `Editing on · the editing key expires ${dayText(exp)}` : 'Editing on · saved changes reach the site in a few minutes');
+        st.textContent = VIEW ? `Viewing ${VIEW.name} · read-only` : CUR && CUR.cloud ? (on ? 'Your account · changes save as you make them' : 'Your account') : !engineRepo() ? 'View only' : !on ? 'View only on this device' : JOB_NOTE || (soon ? `Editing on · the editing key expires ${dayText(exp)}` : 'Editing on · saved changes reach the site in a few minutes');
         st.classList.toggle('stale', !!soon && !JOB_NOTE);
       }
       const cloud = !!(CUR && CUR.cloud);
@@ -481,14 +484,15 @@
   }
   function publish(bundle) {
     DOCS = bundle.docs || {}; DATA_AT = bundle.exportedAt; OPENED = CUR.id;
-    applyOverlay();   // saves made here that the published data does not show yet
+    if (!VIEW) applyOverlay();   // saves made here that the published data does not show yet
     const jm = DOCS['market/latest'] || {};   // the market job's own document in this bundle: its asOf is the job's heartbeat
     if (LIVE && Date.parse(LIVE.asOf) > Date.parse(jm.asOf || 0)) DOCS['market/latest'] = { ...jm, ...LIVE, jobAsOf: jm.asOf || LIVE.jobAsOf };
     listeners.forEach(fire);
-    document.title = CUR.name + ' · Stock Market Portfolio Tracker';
+    document.title = (VIEW ? VIEW.name : CUR.name) + ' · Stock Market Portfolio Tracker';
     whenReady(() => {   // the bottom bar is the last thing in the document; the data can be ready before it is parsed
       footerFresh();
-      const w = document.getElementById('pd-who'); if (w) w.textContent = CUR.name;
+      const w = document.getElementById('pd-who'); if (w) w.textContent = VIEW ? VIEW.name : CUR.name;
+      viewBanner();
     });
     offlineBanner();
   }
@@ -512,6 +516,7 @@
     const t = document.getElementById('toast'); if (t) { t.hidden = true; t.textContent = ''; }
   }
   function lock(auto) {
+    VIEW = null; FRIENDS = null; viewBanner();
     PK8 = null; DOCS = {}; DATA_AT = null; lastFetch = 0; EXPORTS = null; SAVED_AT = null; EDIT = null; CLOUD = null; MEMBERS = null; OVERLAY.clear(); RECENT.clear(); JOB_NOTE = ''; editBar();
     document.title = 'Stock Market Portfolio Tracker';
     listeners.forEach(fire); blank(); offlineBanner();
@@ -736,8 +741,10 @@
     $l('#lk-retry').onclick = async () => { const b = $l('#lk-retry'); b.disabled = true; b.textContent = 'Trying…'; if (!PK8) return lock(false); await unlocked(PK8); };
   }
   async function start() { await loadEdit(); publish(await fetchData()); dbResolve(db); editBar();
+    if (CUR.cloud && !VIEW) housekeeping().catch((e) => console.warn('account housekeeping', e));
     updateLive().catch((e) => { console.warn('live prices unavailable', e); notice('Live prices are unavailable right now: showing prices from the last daily update.'); }); }
-  async function refresh() { if (!PK8) return; fetchTry = Date.now(); try { const b = await fetchData(); if (b.exportedAt !== DATA_AT) publish(b); else offlineBanner(); } catch (e) { console.warn('refresh failed', e); } }
+  async function refresh() { if (!PK8) return; fetchTry = Date.now(); try { const b = await fetchData(); if (b.exportedAt !== DATA_AT) publish(b); else offlineBanner(); } catch (e) { console.warn('refresh failed', e); }
+    if (CUR && CUR.cloud && CLOUD) listFriends().catch(() => {}); }
   window.pdLock = () => { if (CUR) lock(false); };
   window.pdSwitch = () => chooseScreen();
   window.pdSelect = (id) => { const p = findPortfolio(id); if (p && !(CUR && CUR.id === p.id)) select(p); };
@@ -945,7 +952,7 @@
     return { keys: JSON.parse(fStr(j, 'keys')), name: fStr(j, 'name') };
   }
   function signUpScreen(note) {
-    screen(`<h1>Create your portfolio</h1><p>Your portfolio is private: it is locked with your password before it leaves this device. Nobody else can read it, including the owner of this site.</p>
+    screen(`<h1>Create your portfolio</h1><p>Your portfolio is private: it is locked with your password before it leaves this device. Nobody else can read it unless you add them as a friend. The site owner sees only your name, email and whether your automatic updates work, never your figures.</p>
       <form id="lk-su" autocomplete="on"><input id="lk-su-name" data-testid="signup-name" placeholder="Your name" aria-label="Your name" autocomplete="name">
       <input id="lk-su-email" type="email" data-testid="signup-email" placeholder="Email" aria-label="Email" autocomplete="email" autocapitalize="none" spellcheck="false">
       <input id="lk-new" type="password" data-testid="signup-password" placeholder="Password" aria-label="Password" autocomplete="new-password">
@@ -965,19 +972,26 @@
       const name = nm.value.trim(), email = em.value.trim(), pw = cleanPw(nw.value);
       try {
         const a = await fbAuth('signUp', { email, password: pw, returnSecureToken: true });
-        CLOUD = session(a);
-        const kp = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
-        const pk8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', kp.privateKey));
-        const pub = b64big(await crypto.subtle.exportKey('raw', kp.publicKey));
-        const code = recoveryCode();
-        err('Locking your key…');
-        const keys = { v: 3, pub, wrap: await wrapKey(pk8, cleanCode(code), 600000), pwrap: await wrapKey(pk8, pw, 310000) };
-        const pname = name + (/s$/i.test(name) ? "' Portfolio" : "'s Portfolio");
-        await fsReq('PATCH', `users/${a.localId}`, { fields: { keys: { stringValue: JSON.stringify(keys) }, name: { stringValue: pname }, createdAt: { stringValue: new Date().toISOString() } } }, 'currentDocument.exists=false');
-        await adoptAccount(a, pk8, keys, pname, pw, email);
+        const { code, pname } = await newProfile(a, name, email, pw);
         recoveryScreen(code, () => onboardScreen(name, pname));
       } catch (e) { console.error(e); go.disabled = false; err(e.message || String(e)); check(); }
     };
+  }
+  // a new account's key pair and profile (sign-up, or starting again after the site owner reset the account)
+  async function newProfile(a, name, email, pw) {
+    CLOUD = session(a);
+    const kp = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+    const pk8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', kp.privateKey));
+    const pub = b64big(await crypto.subtle.exportKey('raw', kp.publicKey));
+    const code = recoveryCode();
+    err('Locking your key…');
+    const keys = { v: 3, pub, wrap: await wrapKey(pk8, cleanCode(code), 600000), pwrap: await wrapKey(pk8, pw, 310000) };
+    const pname = name + (/s$/i.test(name) ? "' Portfolio" : "'s Portfolio");
+    await fsReq('PATCH', `users/${a.localId}`, { fields: { keys: { stringValue: JSON.stringify(keys) }, name: { stringValue: pname }, createdAt: { stringValue: new Date().toISOString() } } }, 'currentDocument.exists=false');
+    ['pd.mail.', 'pd.dir.', 'pd.status.'].forEach((k) => ls.del(k + 'u_' + a.localId));   // nothing from before a reset
+    await adoptAccount(a, pk8, keys, pname, pw, email);
+    await writeStatus({ createdAt: new Date().toISOString() }).catch((e) => console.warn('status', e));
+    return { code, pname };
   }
   function recoveryScreen(code, next) {
     screen(`<h1>Your recovery code</h1><p>Write this down or keep a photo of it somewhere safe. If you ever forget your password, this code is the only way back into your portfolio. It is shown only now.</p>
@@ -1058,7 +1072,9 @@
       try {
         const a = await fbAuth('signInWithPassword', { email: e, password: p, returnSecureToken: true });
         CLOUD = session(a);
-        const prof = await readProfile(a.localId);
+        let prof;
+        try { prof = await readProfile(a.localId); }
+        catch (x) { if (x && x.code === 'not_found') return restartScreen(a, p, e); throw x; }
         let pk8;
         try { pk8 = await unwrapKey(prof.keys.pwrap, p); }
         catch (x) { if (x && x.name === 'OperationError') return recoverScreen(a, prof, p, e); throw x; }   // the password was reset: the key needs the recovery code once
@@ -1088,11 +1104,18 @@
   function accountScreen() {
     screen(`<h1>${esc(CUR.name)}</h1><p>Signed in as <b>${esc(CUR.email || (CLOUD && CLOUD.email) || '')}</b>. Your portfolio is saved in your account, locked with your password.</p>
       <button class="lk-btn ghost" id="lk-ac-pw" data-testid="account-password">Change password</button>
+      <button class="lk-btn ghost" id="lk-ac-friends" data-testid="account-friends">Friends${incoming() ? ` · ${incoming()} new` : ''}</button>
       <button class="lk-btn ghost" id="lk-ac-gmail" data-testid="account-gmail">Thndr emails${gmailOn() ? ' · connected' : ''}</button>
       <button class="lk-btn ghost" id="lk-ac-mail" data-testid="account-email">Email updates${mailOn() ? ' · on' : ''}</button>
       <button class="lk-btn ghost" id="lk-ac-code" data-testid="account-new-code">Make a new recovery code</button>
       <button class="lk-btn ghost" id="lk-ac-out" data-testid="account-signout">Sign out on this device</button>
-      <div class="lk-links"><button type="button" class="lk-link" id="lk-ac-back" data-testid="account-back">Back</button></div>`);
+      <button class="lk-btn ghost" id="lk-ac-admin" data-testid="account-admin" ${isOwner() ? '' : 'hidden'}>Admin: your friends' accounts</button>
+      <div class="lk-links"><button type="button" class="lk-link" id="lk-ac-back" data-testid="account-back">Back</button><button type="button" class="lk-link" id="lk-ac-del" data-testid="account-delete">Delete my account</button></div>`);
+    $l('#lk-ac-friends').onclick = () => friendsScreen();
+    listFriends().then(() => { const b = $l('#lk-ac-friends'); if (b) b.textContent = 'Friends' + (incoming() ? ` · ${incoming()} new` : ''); }).catch(() => {});
+    $l('#lk-ac-del').onclick = () => deleteScreen();
+    $l('#lk-ac-admin').onclick = () => adminScreen();
+    checkOwner().then((y) => { const b = $l('#lk-ac-admin'); if (b) b.hidden = !y; }).catch(() => {});
     $l('#lk-ac-back').onclick = open;
     $l('#lk-ac-mail').onclick = () => mailScreen();
     $l('#lk-ac-gmail').onclick = () => gmailScreen(accountScreen);
@@ -1129,20 +1152,17 @@
   const mailOn = () => { const m = mailPrefs(); return !!(m && (m.alerts || m.weekly || m.reports)); };
   const gmailOn = () => !!(mailPrefs() || {}).gmail;
   const sha = async (s) => b64big(await crypto.subtle.digest('SHA-256', enc.encode(s)));
-  async function sealTo(pubB64, bytes, label) {
-    const saved = KEYS; KEYS = { pub: pubB64 };
-    try { return await seal(bytes, label); } finally { KEYS = saved; }
-  }
+  const sealTo = (pubB64, bytes, label) => seal(bytes, label, pubB64);
   async function writeMail(prefs) {
     const mk = await (await fetch('p/khaled/keys.json', { cache: 'no-store' })).json();
-    const pkg = { v: 1, uid: CLOUD.uid, email: prefs.email, refresh: CLOUD.refresh, pk8: b64big(PK8), prefs: { alerts: !!prefs.alerts, weekly: !!prefs.weekly, reports: !!prefs.reports, gmail: !!prefs.gmail }, at: new Date().toISOString() };
+    const pkg = { v: 1, uid: CLOUD.uid, email: prefs.email, refresh: CLOUD.refresh, pk8: b64big(PK8), prefs: { alerts: !!prefs.alerts, weekly: !!prefs.weekly, reports: !!prefs.reports, gmail: !!prefs.gmail, shareMain: !!prefs.shareMain }, at: new Date().toISOString() };
     const env = Object.assign({ v: 1 }, await sealTo(mk.pub, enc.encode(JSON.stringify(pkg)), MAIL_LABEL));
     await fsReq('PATCH', `mail/${CLOUD.uid}`, { fields: { pkg: { stringValue: JSON.stringify(env) }, at: { stringValue: pkg.at } } });
     ls.set(mailLS(), Object.assign({}, prefs, { ref: await sha(CLOUD.refresh) }));
   }
   // nothing left on: the package is deleted, so the job no longer opens the portfolio
   async function setMail(prefs) {
-    if (prefs.alerts || prefs.weekly || prefs.reports || prefs.gmail) return writeMail(prefs);
+    if (prefs.alerts || prefs.weekly || prefs.reports || prefs.gmail || prefs.shareMain) return writeMail(prefs);
     await fsReq('DELETE', `mail/${CLOUD.uid}`); ls.del(mailLS());
   }
   // the job signs in with the saved refresh token: after a password change (which ends old sessions) it is sealed again
@@ -1295,6 +1315,312 @@
         await saveDoc('delete', 'sync/gmail');
         toast('Thndr emails are off. You can delete the "EGX Tracker" app password in your Google account too.'); done();
       } catch (e) { console.error(e); b.disabled = false; err(e.message || String(e)); }
+    };
+  }
+  /* ---------- friends, status for the site owner, deleting or restarting an account ----------
+     Friends see each other's portfolios, read-only. links/{uid}/with/{other} holds each side of a friendship ('sent',
+     'received', then 'friends' once the one who received it accepts); a friend is found by their sign-in email through
+     directory/{email} = {uid, name, pub}. Each side keeps shares/{me}/to/{friend} = a copy of its own portfolio documents
+     (portfolio, ledger, imports; the Thndr account number and email settings left out) gzipped and sealed to the friend's
+     public key ('portfolio-share-v1'): refreshed when the account opens or saves (and by the email job for accounts that
+     have it), readable only by that friend. Viewing one swaps the page's documents for the copy plus the shared market
+     data, with editing off, until "Back to mine". Removing a friend deletes both sides and both copies.
+     status/{uid} = {name, email, createdAt, lastSeen, site: JSON {mail, reports, gmail, friends}, job: JSON (written by
+     the email job)} is what the site owner's admin screen lists: no figures. The owner (OWNER_EMAIL, verified) can reset
+     an account there: everything of it is deleted except the sign-in; signing in again starts afresh (restartScreen). */
+  // the site owner's sign-in email, as its SHA-256 (the address itself is not published); the database rules hold the
+  // address and decide, this only shows the Admin button and the "main portfolio" choice
+  const OWNER_HASH = '467022c320757248bf70115c83d305a7e4d139c35e1be5f8117fb30d7f769347', SHARE_LABEL = 'portfolio-share-v1', SHARE_COLLS = new Set(['portfolio', 'ledger', 'imports']);
+  const JOB_URL = 'https://github.com/khaledamin2001-lgtm/portfolio-engine/actions/workflows/account-mail.yml';
+  let FRIENDS = null;   // the open account's links: [{uid, status, name, pub, email, at}]
+  let OWNER = { email: null, yes: false };
+  const hex = async (t) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(t))), (b) => b.toString(16).padStart(2, '0')).join('');
+  async function checkOwner() { const e = String((CLOUD && CLOUD.email) || '').toLowerCase(); if (OWNER.email !== e) OWNER = { email: e, yes: !!e && (await hex(e)) === OWNER_HASH }; return OWNER.yes; }
+  const isOwner = () => !!(CLOUD && OWNER.yes && OWNER.email === String(CLOUD.email || '').toLowerCase());
+  const incoming = () => (FRIENDS || []).filter((f) => f.status === 'received').length;
+  const fsFields = (o) => ({ fields: Object.fromEntries(Object.entries(o).map(([k, v]) => [k, { stringValue: String(v) }])) });
+  const fsData = (doc) => Object.fromEntries(Object.entries((doc && doc.fields) || {}).map(([k, v]) => [k, v.stringValue != null ? v.stringValue : v.integerValue != null ? +v.integerValue : v.booleanValue]));
+  const maskOf = (keys) => keys.map((k) => 'updateMask.fieldPaths=' + k).join('&');
+  const jparse = (x) => { try { return JSON.parse(x); } catch (e) { return null; } };
+  const dayOf = (iso) => (iso ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Cairo', day: 'numeric', month: 'short' }).format(new Date(iso)) : '—');
+  const whenOf = (iso) => (iso ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Cairo', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(iso)) : '—');
+  async function listAll(path) {
+    const out = []; let t = '';
+    do { const j = await fsReq('GET', path, null, 'pageSize=300' + (t ? '&pageToken=' + encodeURIComponent(t) : '')); (j.documents || []).forEach((d) => out.push(d)); t = j.nextPageToken || ''; } while (t);
+    return out;
+  }
+  const fsDel = (p) => fsReq('DELETE', p).catch((e) => { if (e.code !== 'not_found') throw e; });
+  async function writeStatus(extra) {
+    const m = mailPrefs() || {};
+    const o = Object.assign({ name: CUR.name, email: CLOUD.email || CUR.email || '', lastSeen: new Date().toISOString(),
+      site: JSON.stringify({ mail: !!(m.alerts || m.weekly), reports: !!m.reports, gmail: !!m.gmail, friends: (FRIENDS || []).filter((f) => f.status === 'friends').length }) }, extra || {});
+    await fsReq('PATCH', `status/${CLOUD.uid}`, fsFields(o), maskOf(Object.keys(o)));
+  }
+  async function listFriends() {
+    FRIENDS = (await listAll(`links/${CLOUD.uid}/with`)).map((d) => Object.assign({ uid: d.name.split('/').pop() }, fsData(d)));
+    accountBadge();
+    return FRIENDS;
+  }
+  function accountBadge() { whenReady(() => { const b = document.getElementById('pd-account'); if (b) b.textContent = incoming() ? `Account (${incoming()})` : 'Account'; }); }
+  // after an account opens: its directory entry (how friends find it), friend requests, the status line for the site owner
+  // (once a day, or when a setting changed) and fresh copies of the portfolio for friends
+  async function housekeeping() {
+    await checkOwner();
+    const email = String(CLOUD.email || CUR.email || '').toLowerCase(), dk = 'pd.dir.' + CUR.id, dsig = KEYS.pub + '|' + CUR.name;
+    if (email && ls.get(dk) !== dsig) { await fsReq('PATCH', `directory/${encodeURIComponent(email)}`, fsFields({ uid: CLOUD.uid, name: CUR.name, pub: KEYS.pub })); ls.set(dk, dsig); }
+    await listFriends();
+    const sk = 'pd.status.' + CUR.id, ssig = cairoDay(Date.now() / 1000) + JSON.stringify(mailPrefs() || {}) + FRIENDS.map((f) => f.status).join();
+    if (ls.get(sk) !== ssig) { await writeStatus(); ls.set(sk, ssig); }
+    if (incoming()) toast(`${FRIENDS.filter((f) => f.status === 'received').map((f) => f.name).join(', ')} sent you a friend request: tap Account, then Friends.`);
+    if (/[?&]friends\b/.test(location.search)) { history.replaceState(null, '', location.pathname); if (PK8 && lockEl().hidden) friendsScreen(); }
+    await refreshShares();
+  }
+  // the copy friends see: the portfolio documents only, without the Thndr account number or email settings
+  function shareSnapshot() {
+    const docs = {};
+    for (const [k, v] of Object.entries(DOCS)) if (SHARE_COLLS.has(k.split('/')[0])) docs[k] = v;
+    if (docs['portfolio/settings']) { const c = Object.assign({}, docs['portfolio/settings']); delete c.account; delete c.factsheetEmail; delete c.recipient; docs['portfolio/settings'] = c; }
+    return { v: 1, at: new Date().toISOString(), name: CUR.name, full: false, docs };
+  }
+  const gzip = async (text) => new Uint8Array(await new Response(new Blob([enc.encode(text)]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer());
+  const gunzip = async (bytes) => new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+  async function refreshShares(force) {
+    if (VIEW || !FRIENDS || !CLOUD || !PK8) return;
+    if (isOwner() && (mailPrefs() || {}).shareMain) return;   // the email job shares the owner's main portfolio instead
+    const fr = FRIENDS.filter((f) => f.status === 'friends' && f.pub); if (!fr.length) return;
+    const snapObj = shareSnapshot(), h = await sha(JSON.stringify(snapObj.docs)), body = JSON.stringify(snapObj);
+    for (const f of fr) {
+      const k = 'pd.share.' + CUR.id + '.' + f.uid, o = ls.get(k);
+      if (!force && o && o.h === h && Date.now() - o.t < 20 * 3600e3) continue;
+      try {
+        const env = Object.assign({ v: 1 }, await sealTo(f.pub, await gzip(body), SHARE_LABEL));
+        await fsReq('PATCH', `shares/${CLOUD.uid}/to/${f.uid}`, fsFields({ pkg: JSON.stringify(env), name: CUR.name, at: snapObj.at }));
+        ls.set(k, { h, t: Date.now() });
+      } catch (e) { console.warn('friend copy not refreshed', e); }
+    }
+  }
+  let shareTimer = null;
+  function shareSoon() { clearTimeout(shareTimer); shareTimer = setTimeout(() => refreshShares().catch(() => {}), 8000); }
+  // a friend's copy on the page, read-only
+  async function fetchShareData() {
+    const j = await fsReq('GET', `shares/${VIEW.uid}/to/${CLOUD.uid}`);
+    const snapObj = JSON.parse(await gunzip(await unseal(JSON.parse(fStr(j, 'pkg')), SHARE_LABEL)));
+    const market = snapObj.full ? { docs: {} } : await fetchMarket().catch(() => ({ docs: {} }));
+    const docs = Object.assign({}, market.docs || {}, snapObj.docs || {});
+    macroMarks(docs);
+    VIEW.at = snapObj.at; lastFetch = Date.now(); SAVED_AT = null;
+    return { exportedAt: snapObj.at, docs };
+  }
+  async function viewFriend(f) {
+    const was = VIEW; VIEW = { uid: f.uid, name: f.name };
+    try { publish(await fetchData()); editBar(); open(); window.scrollTo(0, 0); }
+    catch (e) { VIEW = was; throw e; }
+  }
+  async function viewMine() { VIEW = null; publish(await fetchData()); editBar(); window.scrollTo(0, 0); }
+  function viewBanner() {
+    whenReady(() => {
+      let b = document.getElementById('pd-view');
+      if (!VIEW) { if (b) b.hidden = true; return; }
+      if (!b) { b = document.createElement('div'); b.id = 'pd-view'; b.setAttribute('role', 'status'); b.dataset.testid = 'view-banner'; document.body.insertBefore(b, document.body.firstChild); }
+      b.hidden = false;
+      b.innerHTML = `Viewing <b>${esc(VIEW.name)}</b>, shared with you${VIEW.at ? ` (as of ${esc(whenOf(VIEW.at))})` : ''}. You can look, not change. <button type="button" id="pd-view-back" data-testid="view-back">Back to mine</button>`;
+      b.querySelector('#pd-view-back').onclick = () => viewMine().catch((e) => toast('Could not reopen your portfolio: ' + (e.message || e), 'error'));
+    });
+  }
+  window.pdViewing = () => (VIEW ? { uid: VIEW.uid, name: VIEW.name } : null);
+
+  async function friendsScreen(note) {
+    screen('<h1>Friends</h1><p>Loading…</p>');
+    try { await listFriends(); refreshShares().catch(() => {}); }
+    catch (e) { console.error(e); screen(`<h1>Friends</h1><p class="lk-err">${esc(e.message || e)}</p><div class="lk-links"><button type="button" class="lk-link" id="lk-fr-back">Back</button></div>`); $l('#lk-fr-back').onclick = accountScreen; return; }
+    const by = (st) => FRIENDS.filter((f) => f.status === st);
+    const row = (f, btns) => `<div class="lk-friend" data-testid="friend-${esc(f.status)}"><div><b>${esc(f.name)}</b><small>${esc(f.email || '')}</small></div><div class="lk-friend-btns">${btns}</div></div>`;
+    const main = isOwner() && !!(mailPrefs() || {}).shareMain;
+    screen(`<h1>Friends</h1><p>Friends see each other's portfolios: holdings, returns and activity. They can look, never change anything.</p>
+      ${by('received').length ? `<p class="lk-lbl">Friend requests</p>${by('received').map((f) => row(f, `<button class="lk-btn" data-acc="${esc(f.uid)}" data-testid="friend-accept">Accept</button><button class="lk-btn ghost" data-del="${esc(f.uid)}" data-testid="friend-decline">Decline</button>`)).join('')}` : ''}
+      ${by('friends').length ? `<p class="lk-lbl">Your friends</p>${by('friends').map((f) => row(f, `<button class="lk-btn" data-view="${esc(f.uid)}" data-testid="friend-view">View</button><button class="lk-btn ghost" data-del="${esc(f.uid)}" data-testid="friend-remove">Remove</button>`)).join('')}` : ''}
+      ${by('sent').length ? `<p class="lk-lbl">Waiting for them to accept</p>${by('sent').map((f) => row(f, `<button class="lk-btn ghost" data-del="${esc(f.uid)}" data-testid="friend-cancel">Cancel</button>`)).join('')}` : ''}
+      <form id="lk-fr-add" autocomplete="off"><label class="lk-lbl" for="lk-fr-email">Add a friend</label>
+      <input id="lk-fr-email" type="email" data-testid="friend-email" placeholder="The email they sign in with" autocapitalize="none" spellcheck="false">
+      <button class="lk-btn" id="lk-fr-go" data-testid="friend-add">Send friend request</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>
+      <p class="lk-hint">They see your request next time they open the site (and by email if they have email updates on). Once they accept, you both see each other's portfolio. Either of you can remove it any time and it stops at once.</p>
+      ${isOwner() ? `<p class="lk-tip" data-testid="friend-owner">${main ? 'Friends see <b>your main portfolio</b>, refreshed by the daily job at about 4 pm and 6:30 pm.' : "Friends see this account's portfolio."} <button type="button" class="lk-link" id="lk-fr-main" data-testid="friend-owner-toggle">${main ? "Show this account's portfolio instead" : 'Show my main portfolio instead'}</button></p>` : ''}
+      <div class="lk-links"><button type="button" class="lk-link" id="lk-fr-back" data-testid="friends-back">Back</button></div>`);
+    $l('#lk-fr-back').onclick = accountScreen;
+    const find = (uid) => FRIENDS.find((f) => f.uid === uid);
+    const busy = (b, t) => { document.querySelectorAll('#lock button').forEach((x) => { x.disabled = true; }); if (b && t) b.textContent = t; };
+    document.querySelectorAll('#lock [data-acc]').forEach((b) => { b.onclick = async () => {
+      const f = find(b.dataset.acc); busy(b, 'Accepting…');
+      try { await acceptFriend(f); toast(`You and ${f.name} are friends now.`); friendsScreen(); } catch (e) { console.error(e); friendsScreen(e.message || String(e)); }
+    }; });
+    document.querySelectorAll('#lock [data-del]').forEach((b) => { b.onclick = async () => {
+      const f = find(b.dataset.del);
+      if (f.status === 'friends' && !confirm(`Remove ${f.name}? You stop seeing each other's portfolios.`)) return;
+      busy(b, '…');
+      try { await unfriend(f.uid); friendsScreen(); } catch (e) { console.error(e); friendsScreen(e.message || String(e)); }
+    }; });
+    document.querySelectorAll('#lock [data-view]').forEach((b) => { b.onclick = async () => {
+      const f = find(b.dataset.view); busy(b, 'Opening…');
+      try { await viewFriend(f); }
+      catch (e) { console.error(e); friendsScreen(e.code === 'not_found' ? `${f.name} has not shared a copy yet. It appears after they next open the site (or at the next daily update if their automatic updates are on).` : (e.message || String(e))); }
+    }; });
+    const om = $l('#lk-fr-main');
+    if (om) om.onclick = async () => {
+      busy(om);
+      try {
+        const m = Object.assign({ email: CLOUD.email, alerts: false, weekly: false, reports: false, gmail: false }, mailPrefs() || {}, { shareMain: !main });
+        await setMail(m);
+        if (main) await refreshShares(true);   // back to this account's portfolio: share it now
+        toast(main ? "Friends now see this account's portfolio." : 'Friends will see your main portfolio after the next daily update.'); friendsScreen();
+      } catch (e) { console.error(e); friendsScreen(e.message || String(e)); }
+    };
+    $l('#lk-fr-add').onsubmit = async (ev) => {
+      ev.preventDefault();
+      const email = $l('#lk-fr-email').value.trim().toLowerCase();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return err('Enter their email address.');
+      if (email === String(CLOUD.email || '').toLowerCase()) return err('That is your own email.');
+      busy($l('#lk-fr-go'), 'Sending…');
+      try { const name = await requestFriend(email); toast(`Friend request sent to ${name}.`); friendsScreen(); }
+      catch (e) { if (e.code !== 'user') console.error(e); friendsScreen(e.message || String(e)); }
+    };
+  }
+  async function requestFriend(email) {
+    let d;
+    try { d = fsData(await fsReq('GET', `directory/${encodeURIComponent(email)}`)); }
+    catch (e) { if (e.code === 'not_found') throw Object.assign(new Error(`Nobody has an account with ${email} yet. Send them the site link first: ${location.origin + location.pathname}`), { code: 'user' }); throw e; }
+    const have = (FRIENDS || []).find((f) => f.uid === d.uid);
+    if (have) throw Object.assign(new Error(have.status === 'friends' ? `You and ${have.name} are already friends.` : have.status === 'sent' ? `You already asked ${have.name}; waiting for them to accept.` : `${have.name} already sent you a request: accept it above.`), { code: 'user' });
+    const at = new Date().toISOString();
+    await fsReq('PATCH', `links/${CLOUD.uid}/with/${d.uid}`, fsFields({ status: 'sent', name: d.name, pub: d.pub, email, at }), 'currentDocument.exists=false');
+    try { await fsReq('PATCH', `links/${d.uid}/with/${CLOUD.uid}`, fsFields({ status: 'received', name: CUR.name, pub: KEYS.pub, email: String(CLOUD.email || '').toLowerCase(), at }), 'currentDocument.exists=false'); }
+    catch (e) { await fsDel(`links/${CLOUD.uid}/with/${d.uid}`); throw e; }
+    return d.name;
+  }
+  async function acceptFriend(f) {
+    const at = new Date().toISOString(), upd = fsFields({ status: 'friends', at });
+    await fsReq('PATCH', `links/${f.uid}/with/${CLOUD.uid}`, upd, maskOf(['status', 'at']));
+    await fsReq('PATCH', `links/${CLOUD.uid}/with/${f.uid}`, upd, maskOf(['status', 'at']));
+    await listFriends();
+    await refreshShares(true);
+  }
+  async function unfriend(uid) {
+    for (const p of [`shares/${CLOUD.uid}/to/${uid}`, `shares/${uid}/to/${CLOUD.uid}`, `links/${uid}/with/${CLOUD.uid}`, `links/${CLOUD.uid}/with/${uid}`]) await fsDel(p);
+    ls.del('pd.share.' + CUR.id + '.' + uid);
+    if (VIEW && VIEW.uid === uid) await viewMine();
+  }
+  // everything of an account except its sign-in: friends (both sides), copies, email package, directory entry, documents,
+  // profile, status. The account itself (deleting) or the site owner (reset) does it.
+  async function wipeAccount(uid, email) {
+    for (const d of await listAll(`links/${uid}/with`)) {
+      const o = d.name.split('/').pop();
+      for (const p of [`shares/${uid}/to/${o}`, `shares/${o}/to/${uid}`, `links/${o}/with/${uid}`, `links/${uid}/with/${o}`]) await fsDel(p);
+    }
+    await fsDel(`mail/${uid}`);
+    if (email) await fsDel(`directory/${encodeURIComponent(String(email).toLowerCase())}`);
+    for (const d of await listAll(`users/${uid}/docs`)) await fsDel(`users/${uid}/docs/${d.name.split('/').pop()}`);
+    await fsDel(`users/${uid}`);
+    await fsDel(`status/${uid}`);
+  }
+  function deleteScreen() {
+    screen(`<h1>Delete my account</h1><p>This deletes your portfolio, your sign-in, email updates, Thndr emails and your friends, for good. It cannot be undone.</p>
+      <p class="lk-tip">Only want to start over? Ask the site owner to reset your account instead: you keep your email and password and set up a fresh portfolio.</p>
+      <form id="lk-del" autocomplete="off"><input id="lk-del-word" data-testid="delete-confirm" placeholder="Type DELETE to confirm" autocapitalize="characters" spellcheck="false">
+      <button class="lk-btn danger" id="lk-del-go" data-testid="delete-go">Delete everything</button><div class="lk-err" role="alert"></div></form>
+      <div class="lk-links"><button type="button" class="lk-link" id="lk-del-back" data-testid="delete-back">Back</button></div>`);
+    $l('#lk-del-back').onclick = accountScreen;
+    $l('#lk-del').onsubmit = async (ev) => {
+      ev.preventDefault();
+      if ($l('#lk-del-word').value.trim().toUpperCase() !== 'DELETE') return err('Type DELETE to confirm.');
+      const b = $l('#lk-del-go'); b.disabled = true; err('Deleting…');
+      try {
+        const uid = CLOUD.uid, email = CLOUD.email || CUR.email;
+        await wipeAccount(uid, email);
+        await fbAuth('delete', { idToken: await idToken() });
+        const id = CUR.id;
+        await forget(); dropAccount(id); ['pd.mail.', 'pd.dir.', 'pd.status.'].forEach((k) => ls.del(k + id)); ls.del(CUR_LS);
+        PK8 = null; CLOUD = null; VIEW = null; FRIENDS = null; DOCS = {}; CUR = null; OPENED = null; listeners.forEach(fire); blank();
+        chooseScreen(); toast('Your account is deleted.');
+      } catch (e) { console.error(e); b.disabled = false; err(e.message || String(e)); }
+    };
+  }
+  // signed in, but the profile is gone: the site owner reset the account. Same email and password, a fresh portfolio.
+  function restartScreen(a, pw, email) {
+    screen(`<h1>Start again</h1><p>Your account was reset, so it has no portfolio yet. You keep the same email and password: set up a fresh portfolio now.</p>
+      <form id="lk-rs" autocomplete="off"><input id="lk-rs-name" data-testid="restart-name" placeholder="Your name" aria-label="Your name" autocomplete="name">
+      <button class="lk-btn" id="lk-rs-go" data-testid="restart-go">Set up my portfolio</button><div class="lk-err" role="alert"></div></form>
+      <div class="lk-links"><button type="button" class="lk-link" id="lk-rs-back">Back</button></div>`);
+    $l('#lk-rs-back').onclick = () => chooseScreen();
+    $l('#lk-rs').onsubmit = async (ev) => {
+      ev.preventDefault(); const name = $l('#lk-rs-name').value.trim(); if (!name) return err('Enter your name.');
+      const b = $l('#lk-rs-go'); b.disabled = true;
+      try { const { code, pname } = await newProfile(a, name, email, pw); recoveryScreen(code, () => onboardScreen(name, pname)); }
+      catch (e) { console.error(e); b.disabled = false; err(e.message || String(e)); }
+    };
+  }
+
+  /* ---------- admin (the site owner only: OWNER_EMAIL, verified) ---------- */
+  const claims = (t) => { try { return JSON.parse(atob(String(t).split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))); } catch (e) { return {}; } };
+  async function adminScreen() {
+    screen('<h1>Admin</h1><p>Loading…</p>');
+    try {
+      if (!claims(await idToken()).email_verified) return verifyScreen();
+      const [docs, mk] = await Promise.all([listAll('status'), fetch('m/market.enc.json?t=' + Date.now(), { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null)]);
+      const rows = docs.map((d) => { const x = fsData(d); return Object.assign(x, { uid: d.name.split('/').pop(), site: jparse(x.site) || {}, job: jparse(x.job) || null }); })
+        .sort((a, b) => String(b.lastSeen || '').localeCompare(String(a.lastSeen || '')));
+      const now = Date.now(), old = (iso, days) => !iso || now - Date.parse(iso) > days * 864e5;
+      const card = (r) => {
+        const s = r.site, j = r.job || {}, g = j.gmail || null, bad = [], ok = [];
+        if (j.error) bad.push(`The daily job could not open this account: ${j.error}`);
+        if (s.gmail) {
+          if (g && g.ok === false) bad.push(`Thndr emails failing since ${whenOf(g.at)}: ${g.error || 'unknown error'}`);
+          else if (g && g.ok) (old(g.at, 2) ? bad : ok).push(`Thndr emails: last check ${whenOf(g.at)}${g.new ? `, ${g.new} new` : ''}${g.held ? `, ${g.held} need a look` : ''}`);
+          else ok.push('Thndr emails connected, not checked yet');
+        }
+        if ((s.mail || s.reports || s.gmail) && r.job && old(j.at, 2)) bad.push(`The daily job has not reached this account since ${whenOf(j.at)}`);
+        if (j.report) ok.push(`Last month-end report: ${j.report}`);
+        const facts = [`Joined ${dayOf(r.createdAt)} · last opened ${dayOf(r.lastSeen)}`, `Email updates ${s.mail ? 'on' : 'off'} · month-end report ${s.reports ? 'on' : 'off'} · Thndr emails ${s.gmail ? 'on' : 'off'} · friends ${s.friends || 0}`];
+        return `<div class="lk-card${bad.length ? ' bad' : ''}" data-testid="admin-row"><div class="lk-card-head"><b>${esc(r.name || '(no name)')}</b><small>${esc(r.email || '')}</small></div>
+          <ul class="lk-facts">${facts.map((t) => `<li>${esc(t)}</li>`).join('')}${ok.map((t) => `<li class="ok">${esc(t)}</li>`).join('')}${bad.map((t) => `<li class="bad">${esc(t)}</li>`).join('')}</ul>
+          ${r.uid === CLOUD.uid ? '' : `<button class="lk-btn ghost" data-reset="${esc(r.uid)}" data-testid="admin-reset">Reset account</button>`}</div>`;
+      };
+      const problems = rows.filter((r) => /class="lk-card bad/.test(card(r))).length;
+      screen(`<h1>Admin</h1><p>${rows.length} account${rows.length === 1 ? '' : 's'}${problems ? `, <b>${problems} with a problem</b>` : ', no problems'}. Shared prices updated ${esc(mk && mk.at ? whenOf(mk.at) : '—')}.</p>
+        <p class="lk-hint">You see names, emails and whether things work, never anyone's figures. Accounts appear here once they open the site.</p>
+        ${rows.map(card).join('') || '<p>No accounts yet.</p>'}
+        <a class="lk-btn ghost" href="${JOB_URL}" target="_blank" rel="noopener noreferrer" data-testid="admin-job-link">Run the daily friends' job now (GitHub)</a>
+        <div class="lk-err" role="alert"></div>
+        <div class="lk-links"><button type="button" class="lk-link" id="lk-ad-back" data-testid="admin-back">Back</button></div>`);
+      $l('#lk-ad-back').onclick = accountScreen;
+      document.querySelectorAll('#lock [data-reset]').forEach((b) => { b.onclick = () => resetScreen(rows.find((r) => r.uid === b.dataset.reset)); });
+    } catch (e) {
+      console.error(e);
+      if (e.code === 'forbidden') return verifyScreen('The database did not accept this sign-in as the admin yet. If you just verified your email, tap "I clicked the link".');
+      screen(`<h1>Admin</h1><p class="lk-err">${esc(e.message || e)}</p><div class="lk-links"><button type="button" class="lk-link" id="lk-ad-back">Back</button></div>`); $l('#lk-ad-back').onclick = accountScreen;
+    }
+  }
+  function verifyScreen(note) {
+    screen(`<h1>Verify your email</h1><p>The admin screen opens only once Google has confirmed that <b>${esc(CLOUD.email || '')}</b> is your email.</p>
+      <ol class="lk-steps"><li>Tap <b>Send the link</b>.</li><li>Open the email from Firebase (check spam too) and click the link.</li><li>Come back and tap <b>I clicked the link</b>.</li></ol>
+      <button class="lk-btn" id="lk-vf-send" data-testid="admin-verify-send">Send the link</button>
+      <button class="lk-btn ghost" id="lk-vf-done" data-testid="admin-verify-done">I clicked the link</button><div class="lk-err" role="alert">${esc(note || '')}</div>
+      <div class="lk-links"><button type="button" class="lk-link" id="lk-vf-back">Back</button></div>`);
+    $l('#lk-vf-back').onclick = accountScreen;
+    $l('#lk-vf-send').onclick = async () => { try { await fbAuth('sendOobCode', { requestType: 'VERIFY_EMAIL', idToken: await idToken() }); err('Sent. Check your inbox.'); } catch (e) { err(e.message || String(e)); } };
+    $l('#lk-vf-done').onclick = () => { CLOUD.exp = 0; adminScreen(); };   // a fresh token carries email_verified
+  }
+  function resetScreen(r) {
+    screen(`<h1>Reset ${esc(r.name || 'this account')}?</h1><p>This deletes their portfolio, email updates, Thndr emails connection and friends. Their sign-in stays: when they sign in again, they set up a fresh portfolio with the same email and password.</p>
+      <p class="lk-tip">Only do this when they asked for it. It cannot be undone.</p>
+      <form id="lk-rst" autocomplete="off"><input id="lk-rst-word" data-testid="admin-reset-confirm" placeholder="Type RESET to confirm" autocapitalize="characters" spellcheck="false">
+      <button class="lk-btn danger" id="lk-rst-go" data-testid="admin-reset-go">Reset the account</button><div class="lk-err" role="alert"></div></form>
+      <div class="lk-links"><button type="button" class="lk-link" id="lk-rst-back">Back</button></div>`);
+    $l('#lk-rst-back').onclick = adminScreen;
+    $l('#lk-rst').onsubmit = async (ev) => {
+      ev.preventDefault();
+      if ($l('#lk-rst-word').value.trim().toUpperCase() !== 'RESET') return err('Type RESET to confirm.');
+      const b = $l('#lk-rst-go'); b.disabled = true; err('Resetting…');
+      try { await wipeAccount(r.uid, r.email); toast(`${r.name || 'The account'} is reset. They can sign in and start again.`); adminScreen(); }
+      catch (e) { console.error(e); b.disabled = false; err(e.message || String(e)); }
     };
   }
   window.pdAccountMenu = () => { if (CUR && CUR.cloud && PK8) accountScreen(); };

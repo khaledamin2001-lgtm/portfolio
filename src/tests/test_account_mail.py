@@ -9,8 +9,12 @@ at sign-up are kept, the earlier statement rows are not added twice), everything
 encrypted to that account's key, the summary email goes to its own address, the month-end report (Excel workbook, and
 the PDF factsheet when Playwright is there; REQUIRE_PDF=1 insists on it) is emailed to it as attachments and stamped, a
 second run does nothing new, and a wrong app password is emailed once and recorded without touching the portfolio.
+Friends: a friend request is emailed once; each account's copy for its friends (shares/{owner}/to/{friend}) opens only
+with the friend's key and carries the portfolio documents without the Thndr account or the Gmail login; the site owner's
+verified account shares the MAIN portfolio (the engine's documents) while another account asking for that gets its own;
+status/{uid}.job is written for the admin screen.
     python3 src/tests/test_account_mail.py <synthetic export dir> <tools dir with node_modules/pdfjs-dist>   (exit 0 = all pass)"""
-import os, sys, json, base64, shutil, tempfile, subprocess
+import os, sys, json, gzip, base64, hashlib, shutil, tempfile, subprocess
 from email.message import EmailMessage
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "jobs"))
@@ -116,6 +120,36 @@ try:
     def gdoc(k):
         rec = DB.get(f"users/{GUID}/docs/{k.replace('/', '__')}")
         return json.loads(store.unseal(gacct, rec["blob"]).decode())["data"] if rec else None
+    # the site owner's own account: shares the MAIN portfolio (the engine's documents, from the synthetic export)
+    oacct = ec.generate_private_key(ec.SECP256R1())
+    opk8 = base64.b64encode(oacct.private_bytes(serialization.Encoding.DER, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())).decode()
+    OUID = "Uowner"
+    store.migrate(SYN, eng, os.path.join(code, "p", "khaled", "keys.json"))
+    DB[f"users/{OUID}/docs/portfolio__settings"] = {"blob": store.encode_doc({"pub": base64.b64encode(oacct.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)).decode()}, "settings", 1, {"name": "Owner account"}, "2026-09-20T00:00:00Z").decode().strip(), "updateTime": stamp()}
+    ram.OWNER_HASH = hashlib.sha256(b"owner@example.com").hexdigest()     # a stand-in owner
+    DB[f"mail/{OUID}"] = {"pkg": seal_mail({"uid": OUID, "email": "owner@example.com", "refresh": "RT3", "pk8": opk8, "prefs": {"alerts": False, "weekly": False, "reports": False, "shareMain": True}})}
+    # account 1 asks for the main portfolio too: it is not the owner, so it must share its own
+    DB[f"mail/{UID}"] = {"pkg": seal_mail({"uid": UID, "email": "friend@example.com", "refresh": "RT1", "pk8": pk8, "prefs": {"alerts": True, "weekly": True, "shareMain": True}})}
+    CLAIMS = {UID: {"email": "friend@example.com", "email_verified": True}, GUID: {"email": "friend.gmail@example.com", "email_verified": True},
+              OUID: {"email": "owner@example.com", "email_verified": True}}
+    def jwt(u):
+        return "h." + base64.urlsafe_b64encode(json.dumps({"user_id": u, **CLAIMS.get(u, {})}).encode()).decode().rstrip("=") + ".s"
+    def uid_of(tok):
+        try:
+            part = tok.split(".")[1]
+            return json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))["user_id"]
+        except Exception:
+            return None
+    gpub_ = gpub
+    LINKS = {(UID, "Uzeyad"): {"status": "received", "name": "Zeyad's Portfolio", "pub": gpub_, "email": "zeyad@example.com"},
+             (UID, GUID): {"status": "friends", "name": "Friend Portfolio", "pub": gpub_}, (GUID, UID): {"status": "friends", "name": "Demo", "pub": apub},
+             (OUID, GUID): {"status": "friends", "name": "Friend Portfolio", "pub": gpub_},
+             (GUID, OUID): {"status": "friends", "name": "Owner", "pub": base64.b64encode(oacct.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)).decode()}}
+    SHARES, STATUS, share_writes = {}, {}, []
+    def open_share(priv, key):
+        e = json.loads(SHARES[key]["pkg"]); b = base64.b64decode; epk = b(e["epk"])
+        k = HKDF(hashes.SHA256(), 32, epk, b"portfolio-share-v1").derive(priv.exchange(ec.ECDH(), ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), epk)))
+        return json.loads(gzip.decompress(AESGCM(k).decrypt(b(e["iv"]), b(e["ct"]), b"portfolio-share-v1")))
     FS = ram.FS
     calls = []
     class FakeHttp:
@@ -123,13 +157,13 @@ try:
             calls.append((method, url.split("?")[0].replace(FS, "")))
             tok = (headers or {}).get("Authorization", "").replace("Bearer ", "")
             if url.startswith("https://securetoken"):
-                u = {"RT1": UID, "RT2": GUID}.get(body.get("refresh_token"))
-                return (200, {"id_token": "ID-" + u, "user_id": u}) if u else (400, {"error": {"message": "INVALID_REFRESH_TOKEN"}})
+                u = {"RT1": UID, "RT2": GUID, "RT3": OUID}.get(body.get("refresh_token"))
+                return (200, {"id_token": jwt(u), "user_id": u}) if u else (400, {"error": {"message": "INVALID_REFRESH_TOKEN"}})
             if url.startswith(FS + ":commit"):
                 commits.append(len(body["writes"]))
                 for w in body["writes"]:
                     k = w["update"]["name"].split("/documents/", 1)[1]
-                    if tok != "ID-" + k.split("/")[1]: return 403, {"error": {"status": "PERMISSION_DENIED"}}
+                    if uid_of(tok) != k.split("/")[1]: return 403, {"error": {"status": "PERMISSION_DENIED"}}
                     cur, pre = DB.get(k), w["currentDocument"]
                     if ("exists" in pre and bool(cur) != pre["exists"]) or ("updateTime" in pre and (not cur or cur["updateTime"] != pre["updateTime"])):
                         return 400, {"error": {"status": "FAILED_PRECONDITION"}}
@@ -141,7 +175,7 @@ try:
                 return 200, {"documents": [{"name": f"projects/p/databases/(default)/documents/mail/{k.split('/')[1]}", "fields": {"pkg": {"stringValue": v["pkg"]}}} for k, v in DB.items() if k.startswith("mail/")]}
             if path.startswith("users/"):
                 uid = path.split("/")[1]
-                if tok != "ID-" + uid: return 403, {"error": {"status": "PERMISSION_DENIED"}}
+                if uid_of(tok) != uid: return 403, {"error": {"status": "PERMISSION_DENIED"}}
                 if method == "GET":
                     return 200, {"documents": [{"name": "x/" + k, "fields": {"blob": {"stringValue": v["blob"]}}, "updateTime": v["updateTime"]} for k, v in sorted(DB.items()) if k.startswith(path + "/")]}
                 if method == "PATCH":
@@ -151,6 +185,22 @@ try:
                         return 400, {"error": {"status": "FAILED_PRECONDITION"}}
                     DB[path] = {"blob": body["fields"]["blob"]["stringValue"], "updateTime": stamp()}
                     return 200, {"updateTime": DB[path]["updateTime"]}
+            deny = (403, {"error": {"status": "PERMISSION_DENIED"}})
+            if path.startswith("status/"):
+                u = path.split("/")[1]
+                if uid_of(tok) != u or method != "PATCH": return deny
+                STATUS.setdefault(u, {}).update({k: v["stringValue"] for k, v in body["fields"].items()})
+                return 200, {}
+            if path.startswith("links/"):
+                u = path.split("/")[1]
+                if uid_of(tok) != u: return deny
+                return 200, {"documents": [{"name": f"x/links/{a}/with/{b}", "fields": {k: {"stringValue": v} for k, v in f.items()}} for (a, b), f in sorted(LINKS.items()) if a == u]}
+            if path.startswith("shares/"):
+                _, owner, _, viewer = path.split("/")
+                if uid_of(tok) != owner or (LINKS.get((owner, viewer)) or {}).get("status") != "friends": return deny
+                SHARES[(owner, viewer)] = {k: v["stringValue"] for k, v in body["fields"].items()}
+                share_writes.append((owner, viewer))
+                return 200, {}
             return 404, {}
     sent = []
     send = lambda to, subj, text, html, att=None: sent.append({"to": to, "subject": subj, "text": text, "html": bool(html), "att": att or []})
@@ -158,9 +208,27 @@ try:
     rc = ram.main(argv, http=FakeHttp(), send=send)
     check("the job succeeds", rc == 0)
     gsent = [m for m in sent if m["to"] == "friend2@example.com"]
-    sent[:] = [m for m in sent if m["to"] != "friend2@example.com"]
-    check("two emails to the opted-in account's address only: new heads-up items, then the weekly summary",
-          [m["to"] for m in sent] == ["friend@example.com", "friend@example.com"] and "heads-up" in sent[0]["subject"] and sent[1]["html"], json.dumps([m["subject"] for m in sent]))
+    check("nothing is emailed to the owner account (it only shares)", not [m for m in sent if m["to"] == "owner@example.com"])
+    sent[:] = [m for m in sent if m["to"] == "friend@example.com"]
+    check("account 1: new heads-up items, the weekly summary, then the friend request, to its own address",
+          len(sent) == 3 and "heads-up" in sent[0]["subject"] and sent[1]["html"] and sent[2]["subject"] == "Zeyad's Portfolio wants to be friends on the portfolio site"
+          and "?friends" in sent[2]["text"], json.dumps([m["subject"] for m in sent]))
+    sent[:] = sent[:2]
+    # friends
+    check("friends: a copy is written for every friend and nobody else", sorted(share_writes) == sorted([(UID, GUID), (GUID, UID), (GUID, OUID), (OUID, GUID)]), json.dumps(share_writes))
+    s1 = open_share(acct, (GUID, UID))
+    check("friends: the Gmail account's copy opens with its friend's key and holds its portfolio (import included)",
+          not s1["full"] and s1["name"] == "Friend Portfolio" and sorted(r["id"] for r in s1["docs"]["ledger/y2026"]["rows"]) == ["o1", "o2"] and "imports/2026-08" in s1["docs"], json.dumps(sorted(s1["docs"]))[:300])
+    check("friends: the copy leaves out the Thndr account, the Gmail login and the job's records",
+          "account" not in s1["docs"]["portfolio/settings"] and not any(k.startswith("sync/") for k in s1["docs"]) and "abcdefghijklmnop" not in json.dumps(s1))
+    s2 = open_share(gacct, (UID, GUID))
+    check("friends: an account that is not the owner asking for the main portfolio shares its own", not s2["full"] and "market/latest" not in s2["docs"] and "portfolio/settings" in s2["docs"])
+    s3 = open_share(gacct, (OUID, GUID))
+    check("friends: the owner's verified account shares the MAIN portfolio (engine documents with their market data, no sync)",
+          s3["full"] and "market/latest" in s3["docs"] and "ledger/y2026" in s3["docs"] and not any(k.startswith("sync/") for k in s3["docs"]) and "account" not in s3["docs"]["portfolio/settings"], json.dumps(sorted(s3["docs"]))[:300])
+    jg, j1 = json.loads(STATUS.get(GUID, {}).get("job", "{}")), json.loads(STATUS.get(UID, {}).get("job", "{}"))
+    check("admin status: the job writes each account's line (Gmail result, month-end report, friends), no figures",
+          jg.get("gmail", {}).get("ok") and jg.get("friends") == 2 and jg.get("report") == "Aug-26 sent 2026-09-24" and j1.get("friends") == 1 and not j1.get("gmail"), json.dumps([jg, j1]))
     # the Gmail account
     check("gmail: its own Gmail login is used, searching from the day tracking started", fetches and fetches[0] == {"after": "2026/08/15", "addr": "friend.gmail@example.com", "pw": "abcdefghijklmnop"}, json.dumps(fetches))
     rows = (gdoc("ledger/y2026") or {}).get("rows") or []
@@ -198,8 +266,9 @@ try:
     st = json.loads(store.unseal(acct, rec["blob"]).decode())["data"] if rec else {}
     check("what was sent is saved back to the account, encrypted to its key", len(st.get("alertsSent", {})) == 2 and st.get("weeklySent") == "2026-09-24")
     check("the account that did not opt in is never read", not any(u.startswith(f"/users/{OTHER}") for _, u in calls))
-    sent.clear(); commits.clear()
+    sent.clear(); commits.clear(); share_writes.clear()
     rc2 = ram.main(argv, http=FakeHttp(), send=send)
+    check("friends: a second run rewrites no unchanged copy and emails no request again", share_writes == [], json.dumps(share_writes))
     check("a second run sends nothing (each alert once, one summary a week)", rc2 == 0 and sent == [], json.dumps([m["subject"] for m in sent]))
     check("gmail: a second run finds nothing new and changes no portfolio document", commits == [1] and sorted(r["id"] for r in (gdoc("ledger/y2026") or {}).get("rows") or []) == ["o1", "o2"], json.dumps(commits))
     # a wrong app password: emailed once, recorded, the portfolio untouched

@@ -54,3 +54,18 @@ body.pd-locked>:not(#lock){display:none!important}
 #lock .lk-lbl{font-size:13px;font-weight:600;text-align:left;color:var(--ink-2,#46534E);margin:4px 0 -4px}
 #lock .lk-hint{font-size:12px;text-align:left;color:var(--ink-3,#5F6C67);margin-top:-4px}
 #lock .lk-ok{color:var(--accent,#0B6E5F);font-weight:600}
+#lock .lk-btn.danger{background:var(--neg,#B42318);color:#fff}
+#lock .lk-friend{display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left;padding:10px 12px;border:1px solid var(--rule,#DAE2DE);border-radius:10px;background:var(--surface,#fff)}
+#lock .lk-friend small{display:block;font-size:12px;color:var(--ink-3,#5F6C67);word-break:break-all}
+#lock .lk-friend-btns{display:flex;gap:6px;flex-shrink:0}
+#lock .lk-friend-btns .lk-btn{padding:9px 12px;font-size:14px}
+#lock .lk-card{text-align:left;padding:12px;border:1px solid var(--rule,#DAE2DE);border-radius:10px;background:var(--surface,#fff);display:flex;flex-direction:column;gap:8px}
+#lock .lk-card.bad{border-color:var(--neg,#B42318)}
+#lock .lk-card-head small{display:block;font-size:12px;color:var(--ink-3,#5F6C67);word-break:break-all}
+#lock .lk-facts{margin:0;padding:0;list-style:none;font-size:12.5px;line-height:1.5;color:var(--ink-2,#46534E)}
+#lock .lk-facts li.ok{color:var(--accent,#0B6E5F)}
+#lock .lk-facts li.bad{color:var(--neg,#B42318);font-weight:600}
+#lock .lk-card .lk-btn{padding:9px 12px;font-size:14px}
+#pd-view{position:sticky;top:0;z-index:50;margin:0;padding:8px 16px;background:var(--accent,#0B6E5F);color:#fff;font:500 13px/1.4 var(--f-ui,system-ui,sans-serif);text-align:center}
+#pd-view button{margin-left:8px;font:600 12.5px/1 var(--f-ui,system-ui,sans-serif);padding:6px 10px;border-radius:7px;border:1px solid #fff;background:transparent;color:#fff;cursor:pointer}
+#lock [hidden]{display:none!important}

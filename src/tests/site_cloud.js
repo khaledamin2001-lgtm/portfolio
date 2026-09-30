@@ -16,7 +16,12 @@
      6. a second device signs in with email + password and sees the same portfolio; a wrong password is refused;
      7. after a password reset the recovery code unlocks it once and re-locks the key with the new password (the next sign-in
         needs no code); "Change password" in the Account menu works the same way;
-     8. no console errors, page errors or CSP violations; nothing leaves for anywhere but the local server and the fakes.
+     8. friends: a request by email (an unknown email is refused), the other side accepts, each sees the other's portfolio
+        read-only (a copy sealed to their key, also one made by the email job's Python code) and "Back to mine"; the rules
+        refuse a forged acceptance and a copy to a non-friend; removing deletes both sides;
+     9. admin: the owner's email must be verified first; the admin list shows every account (names, no figures); a reset
+        deletes everything but the sign-in, the next sign-in starts again; "Delete my account" removes the sign-in too;
+    10. no console errors, page errors or CSP violations; nothing leaves for anywhere but the local server and the fakes.
      node src/tests/site_cloud.js [--out <dir for screenshots>]      exit 0 = all checks passed */
 'use strict';
 const path = require('path'), fs = require('fs'), os = require('os'), cp = require('child_process'), crypto = require('crypto'), net = require('net'), http = require('http');
@@ -41,6 +46,9 @@ sh('python3', ['build.py'], { cwd: BLD });
 fs.mkdirSync(SITE, { recursive: true });
 sh('python3', ['build_site.py', SITE], { cwd: path.join(BLD, 'site') });
 sh('python3', [path.join(ROOT, 'src/site/make_keys.py'), path.join(SITE, 'p/khaled/keys.json'), path.join(TMP, 'mailsec')]);   // a throwaway mail key
+{ const ix = path.join(SITE, 'index.html'), h = fs.readFileSync(ix, 'utf8'), m = h.match(/const OWNER_HASH = '([0-9a-f]{64})'/);
+  if (!m) throw new Error('site_cloud: OWNER_HASH not found in the built page');
+  fs.writeFileSync(ix, h.replace(m[0], `const OWNER_HASH = '${crypto.createHash('sha256').update('owner@example.com').digest('hex')}'`)); }
 const rd = (f) => { const x = JSON.parse(fs.readFileSync(path.join(SYN, f), 'utf8')); return x && x.data && typeof x.data === 'object' ? x.data : x; };
 const MARKET = { 'market/latest': rd('market/latest.json'), 'bench/egx30': rd('bench/egx30.json'), 'market/macro': { benchClose: {}, cpiMoM: {} } };
 for (const f of fs.readdirSync(path.join(SYN, 'history'))) MARKET['history/' + f.replace('.json', '')] = rd('history/' + f);
@@ -54,37 +62,72 @@ print(r.seal_bundle(json.load(open(${JSON.stringify(docs)})), ${JSON.stringify(p
 }
 
 // ---- fake Firebase ----
-const FB = { users: {}, byEmail: {}, tokens: {}, refresh: {}, docs: {}, t: 0, conflicts: 0, denied: 0, calls: [] };
+const FB = { users: {}, byEmail: {}, tokens: {}, claims: {}, refresh: {}, docs: {}, t: 0, conflicts: 0, denied: 0, calls: [] };
+const OWNER_EMAIL = 'owner@example.com';   // stands in for the real owner: the test site is built with its hash
 const PID = 'portfolio-desk-4d14a', FSB = `/v1/projects/${PID}/databases/(default)/documents/`;
 const stamp = () => new Date(Date.UTC(2026, 8, 30, 0, 0, 0) + ++FB.t * 1000).toISOString().replace('Z', '123456Z');
-const tokenFor = (uid) => { const t = 'id-' + crypto.randomBytes(8).toString('hex'); FB.tokens[t] = uid; return t; };
+// ID tokens are JWT-shaped like Google's (the site reads email_verified from them for the admin screen)
+const tokenFor = (uid) => { const u = FB.users[uid] || {}, c = { email: u.email, verified: !!u.verified };
+  const t = 'h.' + Buffer.from(JSON.stringify({ user_id: uid, email: c.email, email_verified: c.verified })).toString('base64url') + '.' + crypto.randomBytes(8).toString('hex');
+  FB.tokens[t] = uid; FB.claims[t] = c; return t; };
 const refreshFor = (uid) => { const t = 'rf-' + crypto.randomBytes(8).toString('hex'); FB.refresh[t] = uid; return t; };
 const authOut = (u) => ({ localId: u.uid, email: u.email, idToken: tokenFor(u.uid), refreshToken: refreshFor(u.uid), expiresIn: '3600' });
 const err = (status, message) => [status, { error: { code: status, message, status: message } }];
 function identity(ep, b) {
   if (ep === 'signUp') { if (FB.byEmail[b.email]) return err(400, 'EMAIL_EXISTS'); const u = { uid: 'U' + crypto.randomBytes(6).toString('hex'), email: b.email, pw: b.password }; FB.users[u.uid] = u; FB.byEmail[b.email] = u; return [200, authOut(u)]; }
   if (ep === 'signInWithPassword') { const u = FB.byEmail[b.email]; if (!u || u.pw !== b.password) return err(400, 'INVALID_LOGIN_CREDENTIALS'); return [200, authOut(u)]; }
+  if (ep === 'sendOobCode' && b.requestType === 'VERIFY_EMAIL') { const uid = FB.tokens[b.idToken]; if (!uid) return err(400, 'INVALID_ID_TOKEN'); FB.users[uid].verified = true; return [200, { email: FB.users[uid].email }]; }   // the link is clicked at once
   if (ep === 'sendOobCode') { FB.resetAsked = b.email; return [200, { email: b.email }]; }
+  if (ep === 'delete') { const uid = FB.tokens[b.idToken]; if (!uid || !FB.users[uid]) return err(400, 'INVALID_ID_TOKEN'); delete FB.byEmail[FB.users[uid].email]; delete FB.users[uid]; return [200, {}]; }
   if (ep === 'update') { const uid = FB.tokens[b.idToken]; if (!uid) return err(400, 'INVALID_ID_TOKEN'); if (b.password) FB.users[uid].pw = b.password; return [200, authOut(FB.users[uid])]; }
   return err(400, 'UNKNOWN');
 }
-// the rules of src/cloud/firestore.rules
-function allowed(uid, method, p) {
-  const m = p.match(/^users\/([^/]+)(?:\/docs(?:\/[^/]+)?)?$/);
-  if (m) return !!uid && uid === m[1];
-  if (p === 'shared/membersPub') return method === 'GET' || (!!uid && method === 'PATCH' && !FB.docs[p]);
-  if (p === 'shared/members') return !!uid && (method === 'GET' || (method === 'PATCH' && !FB.docs[p]));
-  if (/^mail\/[^/]+$/.test(p)) return method === 'GET' || (!!uid && uid === p.split('/')[1]);
+// the rules of src/cloud/firestore.rules (a: {uid, email, verified} of the token, or null; cur/next: the document's fields
+// before and after a write)
+const sv = (f, k) => (f && f[k] && f[k].stringValue) || null;
+function allowed(a, method, p, cur, next) {
+  const uid = a && a.uid, admin = !!(a && a.email === OWNER_EMAIL && a.verified), me = (x) => !!uid && uid === x;
+  let m;
+  if ((m = p.match(/^users\/([^/]+)$/))) return me(m[1]) || (admin && method === 'DELETE');
+  if ((m = p.match(/^users\/([^/]+)\/docs(?:\/[^/]+)?$/))) return me(m[1]) || (admin && (method === 'GET' || method === 'DELETE'));
+  if (p === 'shared/membersPub') return method === 'GET' || (!!uid && method === 'PATCH' && !cur);
+  if (p === 'shared/members') return !!uid && (method === 'GET' || (method === 'PATCH' && !cur));
+  if ((m = p.match(/^mail\/([^/]+)$/))) return method === 'GET' || me(m[1]) || (admin && method === 'DELETE');
+  if (p === 'status') return admin && method === 'GET';
+  if ((m = p.match(/^status\/([^/]+)$/))) return me(m[1]) || (admin && (method === 'GET' || method === 'DELETE'));
+  if (p === 'directory') return false;
+  if ((m = p.match(/^directory\/([^/]+)$/))) {
+    if (method === 'GET') return !!uid;
+    if (method === 'DELETE') return (!!a && a.email === m[1]) || admin;
+    return !!a && a.email === m[1] && sv(next, 'uid') === uid;
+  }
+  if ((m = p.match(/^links\/([^/]+)\/with$/))) return method === 'GET' && (me(m[1]) || admin);
+  if ((m = p.match(/^links\/([^/]+)\/with\/([^/]+)$/))) {
+    const [, u, o] = m;
+    if (method === 'GET') return me(u) || admin;
+    if (method === 'DELETE') return me(u) || me(o) || admin;
+    if (!cur) return (me(u) && sv(next, 'status') === 'sent') || (me(o) && sv(next, 'status') === 'received');
+    const changed = Object.keys(Object.assign({}, cur, next)).filter((k) => JSON.stringify(cur[k]) !== JSON.stringify(next[k]));
+    return changed.every((k) => k === 'status' || k === 'at') && sv(next, 'status') === 'friends' && ((me(o) && sv(cur, 'status') === 'sent') || (me(u) && sv(cur, 'status') === 'received'));
+  }
+  if ((m = p.match(/^shares\/([^/]+)\/to\/([^/]+)$/))) {
+    const [, o, v] = m;
+    if (method === 'GET') return me(o) || me(v) || admin;
+    if (method === 'DELETE') return me(o) || me(v) || admin;
+    return me(o) && sv((FB.docs[`links/${o}/with/${v}`] || {}).fields, 'status') === 'friends';
+  }
   return false;
 }
 function firestore(method, url, headers, body) {
   const u = new URL(url), p = decodeURIComponent(u.pathname.slice(u.pathname.indexOf(FSB) + FSB.length)), q = u.searchParams;
-  const uid = FB.tokens[(headers.authorization || '').replace(/^Bearer /, '')] || null;
+  const tok = (headers.authorization || '').replace(/^Bearer /, ''), uid = FB.tokens[tok] || null;
   if (headers.authorization && !uid) return err(401, 'UNAUTHENTICATED');
-  if (!allowed(uid, method, p)) { FB.denied++; return err(403, 'PERMISSION_DENIED'); }
+  const cur0 = FB.docs[p], b0 = method === 'PATCH' ? JSON.parse(body || '{}') : null, mask0 = q.getAll('updateMask.fieldPaths');
+  const next0 = b0 ? (mask0.length && cur0 ? Object.assign({}, cur0.fields, Object.fromEntries(mask0.map((k) => [k, b0.fields[k]]))) : b0.fields) : null;
+  if (!allowed(uid ? Object.assign({ uid }, FB.claims[tok]) : null, method, p, cur0 && cur0.fields, next0)) { FB.denied++; return err(403, 'PERMISSION_DENIED'); }
   const full = (k) => `projects/${PID}/databases/(default)/documents/${k}`;
   const out = (k) => Object.assign({ name: full(k) }, FB.docs[k]);
-  if (method === 'GET' && /\/docs$/.test(p)) return [200, { documents: Object.keys(FB.docs).filter((k) => k.startsWith(p + '/')).sort().map(out) }];
+  if (method === 'GET' && p.split('/').length % 2 === 1) return [200, { documents: Object.keys(FB.docs).filter((k) => k.startsWith(p + '/') && k.split('/').length === p.split('/').length + 1).sort().map(out) }];
   const cur = FB.docs[p];
   if (method === 'GET') return cur ? [200, out(p)] : err(404, 'NOT_FOUND');
   if (q.get('currentDocument.exists') === 'false' && cur) { FB.conflicts++; return err(409, 'ALREADY_EXISTS'); }
@@ -331,6 +374,106 @@ print(json.dumps({"uid": p["uid"], "email": p["email"], "prefs": p["prefs"], "re
     await E.lockHidden(60000).catch(() => {});
     if (await E.$t('live-bio-skip').count()) await E.$t('live-bio-skip').click();
     check('"Change password" in the Account menu: the new password opens it on another device', await E.page.evaluate(() => document.getElementById('lock').hidden) && FB.users[uid].pw === PW3);
+
+    // ---- 8. friends ----
+    const EMAIL_B = 'sara@example.com', PWB = 'yellow kite 58';
+    const signUp = async (X, name, email, pw) => {
+      await X.page.goto(ORIGIN + '/index.html'); await X.$t('live-signup').click();
+      await X.$t('signup-name').fill(name); await X.$t('signup-email').fill(email); await X.$t('signup-password').fill(pw); await X.$t('signup-password-repeat').fill(pw);
+      await X.$t('signup-submit').click(); await X.$t('recovery-code').waitFor({ timeout: 60000 });
+      await X.$t('recovery-saved').check(); await X.$t('recovery-continue').click();
+      await X.$t('onboard-skip').click(); await X.$t('gmail-skip').waitFor({ timeout: 60000 }); await X.$t('gmail-skip').click();
+      await X.lockHidden(60000).catch(() => {}); if (await X.$t('live-bio-skip').count()) await X.$t('live-bio-skip').click(); await X.lockHidden();
+    };
+    const until = async (f, ms = 15000) => { for (let i = 0; i < ms / 100 && !f(); i++) await new Promise((r) => setTimeout(r, 100)); return f(); };
+    const F = await device('F');
+    await signUp(F, 'Sara', EMAIL_B, PWB);
+    const uidB = FB.byEmail[EMAIL_B].uid;
+    check('each account is findable by its sign-in email (directory, with its public key)', await until(() => FB.docs['directory/' + EMAIL] && FB.docs['directory/' + EMAIL_B]) && sv(FB.docs['directory/' + EMAIL_B].fields, 'uid') === uidB);
+    check('the admin status line is written at sign-up (no figures)', !!FB.docs['status/' + uidB] && sv(FB.docs['status/' + uidB].fields, 'createdAt') && !/10,000|holding/i.test(JSON.stringify(FB.docs['status/' + uidB])));
+    await F.$t('account-menu').click(); await F.$t('account-friends').click();
+    await F.$t('friend-email').fill('nobody@example.com'); await F.$t('friend-add').click();
+    await F.page.waitForFunction(() => /Nobody has an account/.test((document.querySelector('#lock .lk-err') || {}).textContent || ''), null, { timeout: 15000 }).catch(() => {});
+    check('asking an email with no account is refused with the site link to send', /Nobody has an account with nobody@example.com/.test(await F.lockErr()));
+    await F.$t('friend-email').fill(EMAIL.toUpperCase()); await F.$t('friend-add').click();
+    await F.$t('friend-sent').waitFor({ timeout: 15000 }).catch(() => {});
+    check('a friend request writes both sides (mine sent, theirs received)', sv((FB.docs[`links/${uidB}/with/${uid}`] || {}).fields, 'status') === 'sent' && sv((FB.docs[`links/${uid}/with/${uidB}`] || {}).fields, 'status') === 'received');
+    await F.shot('friends-sent');
+    const tokB = identity('signInWithPassword', { email: EMAIL_B, password: PWB })[1].idToken, FSU = `https://firestore.googleapis.com${FSB}`;
+    const forged = firestore('PATCH', FSU + `links/${uid}/with/${uidB}?updateMask.fieldPaths=status&updateMask.fieldPaths=at`, { authorization: 'Bearer ' + tokB }, JSON.stringify({ fields: { status: { stringValue: 'friends' }, at: { stringValue: 'x' } } }));
+    const early = firestore('PATCH', FSU + `shares/${uidB}/to/${uid}`, { authorization: 'Bearer ' + tokB }, JSON.stringify({ fields: { pkg: { stringValue: '{}' } } }));
+    check('the rules refuse accepting on the other side and a copy for someone who is not a friend yet', forged[0] === 403 && early[0] === 403);
+    await E.$t('account-menu').click();
+    await E.page.waitForFunction(() => /1 new/.test(document.querySelector('[data-testid=account-friends]').textContent), null, { timeout: 15000 }).catch(() => {});
+    check('the Account menu shows the new request', /Friends · 1 new/.test(await E.$t('account-friends').textContent()));
+    await E.page.waitForTimeout(300);
+    check('an ordinary account never sees the Admin button', !(await E.$t('account-admin').isVisible()));
+    await E.$t('account-friends').click(); await E.$t('friend-accept').waitFor();
+    await E.shot('friends-request');
+    await E.$t('friend-accept').click(); await E.$t('friend-friends').waitFor({ timeout: 20000 }).catch(() => {});
+    check('accepting makes both sides friends and shares a copy at once', sv(FB.docs[`links/${uid}/with/${uidB}`].fields, 'status') === 'friends' && sv(FB.docs[`links/${uidB}/with/${uid}`].fields, 'status') === 'friends' && await until(() => FB.docs[`shares/${uid}/to/${uidB}`]));
+    check('the copy is sealed (nothing in the clear)', !/Omar|holding|COMI/.test(sv(FB.docs[`shares/${uid}/to/${uidB}`].fields, 'pkg')));
+    await E.$t('friends-back').click(); await E.$t('account-back').click();
+    await F.$t('friends-back').click(); await F.$t('account-friends').click(); await F.$t('friend-view').waitFor();
+    check("opening Friends shares the viewer's own copy back", await until(() => FB.docs[`shares/${uidB}/to/${uid}`]));
+    await F.$t('friend-view').click(); await F.lockHidden(30000).catch(() => {});
+    await F.page.waitForTimeout(800);
+    check("viewing a friend shows their portfolio, read-only, under a banner", /Omar/.test(await F.page.locator('#pf-name-text').textContent()) && /Viewing/.test(await F.$t('view-banner').textContent()) && /read-only/.test(await F.$t('edit-state').textContent()));
+    await F.shot('friend-view');
+    await F.$t('view-back').click(); await F.page.waitForTimeout(800);
+    check('"Back to mine" returns to your own portfolio', /Sara/.test(await F.page.locator('#pf-name-text').textContent()) && !(await F.page.locator('#pd-view').isVisible()));
+    // a copy made by the email job (Python) opens in the browser too: the owner's main portfolio shape (full, own market data)
+    const snapDocs = Object.assign({}, MARKET, { 'portfolio/settings': Object.assign({}, rd('portfolio/settings.json'), { name: 'Main Portfolio' }), 'portfolio/assets': rd('portfolio/assets.json'), 'portfolio/marks': rd('portfolio/marks.json') });
+    for (const f of fs.readdirSync(path.join(SYN, 'ledger'))) snapDocs['ledger/' + f.replace('.json', '')] = rd('ledger/' + f);
+    fs.writeFileSync(path.join(TMP, 'snap.json'), JSON.stringify({ v: 1, at: '2026-09-30T15:30:00Z', name: 'Main Portfolio', full: true, docs: snapDocs }));
+    const pyEnv = sh('python3', ['-c', `import sys, json; sys.path.insert(0, ${JSON.stringify(path.join(ROOT, 'src/jobs'))}); import run_account_mail as r
+print(r.seal_json(json.load(open(${JSON.stringify(path.join(TMP, 'snap.json'))})), ${JSON.stringify(sv(FB.docs['directory/' + EMAIL_B].fields, 'pub'))}, r.SHARE_LABEL))`]).trim();
+    FB.docs[`shares/${uid}/to/${uidB}`].fields.pkg = { stringValue: pyEnv };
+    await F.$t('account-menu').click(); await F.$t('account-friends').click(); await F.$t('friend-view').click(); await F.lockHidden(30000).catch(() => {});
+    await F.page.waitForTimeout(800);
+    check("a copy made by the email job's code opens on the page (the main-portfolio shape)", /Main Portfolio/.test(await F.page.locator('#pf-name-text').textContent()));
+    await F.$t('view-back').click(); await F.page.waitForTimeout(500);
+    await E.$t('account-menu').click(); await E.$t('account-friends').click(); await E.$t('friend-remove').waitFor();
+    E.page.once('dialog', (d) => d.accept());
+    await E.$t('friend-remove').click();
+    check('removing a friend deletes both sides and both copies', await until(() => !FB.docs[`links/${uid}/with/${uidB}`] && !FB.docs[`links/${uidB}/with/${uid}`] && !FB.docs[`shares/${uid}/to/${uidB}`] && !FB.docs[`shares/${uidB}/to/${uid}`]));
+    await E.$t('friends-back').click(); await E.$t('account-back').click();
+    // Sara asks again, so the reset below has a friend link to clean up
+    await F.$t('account-menu').click(); await F.$t('account-friends').click(); await F.$t('friend-email').fill(EMAIL); await F.$t('friend-add').click();
+    await until(() => FB.docs[`links/${uid}/with/${uidB}`]);
+
+    // ---- 9. admin ----
+    const G = await device('G');
+    await signUp(G, 'Khaled', OWNER_EMAIL, 'owner pass 777');
+    const tokG0 = identity('signInWithPassword', { email: OWNER_EMAIL, password: 'owner pass 777' })[1].idToken;
+    check('before verifying the email, the owner cannot list accounts', firestore('GET', FSU + 'status', { authorization: 'Bearer ' + tokG0 })[0] === 403);
+    check('an ordinary account can never list accounts', firestore('GET', FSU + 'status', { authorization: 'Bearer ' + tokB })[0] === 403);
+    await G.$t('account-menu').click(); await G.$t('account-admin').click();
+    await G.$t('admin-verify-send').waitFor();
+    check('the admin screen asks the owner to verify the email first', await G.$t('admin-verify-done').isVisible());
+    await G.$t('admin-verify-send').click(); await G.page.waitForTimeout(300); await G.$t('admin-verify-done').click();
+    await G.$t('admin-row').first().waitFor({ timeout: 20000 }).catch(() => {});
+    const adminText = await G.page.locator('#lock').textContent();
+    check('the admin list shows every account with its name and email, and no figures', (await G.$t('admin-row').count()) === 3 && /Sara/.test(adminText) && /Omar/.test(adminText) && /sara@example\.com/.test(adminText) && !/10,000/.test(adminText), `${await G.$t('admin-row').count()} rows`);
+    await G.shot('admin');
+    await G.page.locator('[data-testid=admin-row]', { hasText: 'Sara' }).locator('[data-testid=admin-reset]').click();
+    await G.$t('admin-reset-confirm').fill('reset'); await G.$t('admin-reset-go').click();
+    const gone = await until(() => !FB.docs[`users/${uidB}`] && !Object.keys(FB.docs).some((k) => k.includes(uidB) || k === 'directory/' + EMAIL_B), 20000);
+    check('a reset deletes everything of the account (documents, friends, copies, directory, status) but not its sign-in', gone && !!FB.users[uidB], Object.keys(FB.docs).filter((k) => k.includes(uidB)).join(','));
+    const H = await device('H');
+    await H.page.goto(ORIGIN + '/index.html'); await H.$t('live-signin').click();
+    await H.$t('signin-email').fill(EMAIL_B); await H.$t('signin-password').fill(PWB); await H.$t('signin-submit').click();
+    await H.$t('restart-name').waitFor({ timeout: 60000 }).catch(() => {});
+    check('after a reset, signing in offers to start again', await H.$t('restart-name').isVisible());
+    await H.$t('restart-name').fill('Sara'); await H.$t('restart-go').click(); await H.$t('recovery-code').waitFor({ timeout: 60000 });
+    await H.$t('recovery-saved').check(); await H.$t('recovery-continue').click(); await H.$t('onboard-skip').click();
+    await H.$t('gmail-skip').waitFor({ timeout: 60000 }); await H.$t('gmail-skip').click();
+    await H.lockHidden(60000).catch(() => {}); if (await H.$t('live-bio-skip').count()) await H.$t('live-bio-skip').click();
+    check('starting again makes a fresh portfolio with the same sign-in', !!FB.docs[`users/${uidB}`] && /Sara/.test(await H.page.locator('#pf-name-text').textContent()));
+    await H.$t('account-menu').click(); await H.$t('account-delete').click();
+    await H.$t('delete-confirm').fill('DELETE'); await H.$t('delete-go').click();
+    await H.$t('live-signup').waitFor({ timeout: 30000 }).catch(() => {});
+    check('"Delete my account" removes the sign-in and everything else', !FB.users[uidB] && !Object.keys(FB.docs).some((k) => k.includes(uidB)) && await H.$t('live-signup').isVisible());
   } catch (e) {
     check('run', false, e.stack || String(e));
   }

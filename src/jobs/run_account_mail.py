@@ -25,11 +25,17 @@ its portfolio (the site says so when it is switched on). For each package this j
      has no reports.emailedAt gets excel.js + excel.py (workbook) and factsheet.js (HTML + PDF, on the page built from
      src/; Playwright is installed by JOBS_PLAYWRIGHT_SETUP the first time one is due), emailed to the account's address
      with both files attached, then stamped reports.emailedAt (reportsPending removed) in the account;
-  6. saves {alertsSent, weeklySent, gmail} back to the account as users/{uid}/docs/sync__mail, encrypted to the account key.
+  6. friends: a new friend request (links/{uid}/with/*, 'received') is emailed once; for every friend ('friends') a
+     fresh copy of the portfolio (portfolio, ledger, imports; the Thndr account number and email settings left out) is
+     sealed to the friend's key as shares/{uid}/to/{friend} when it changed or is a day old. The site owner's own account
+     (its sign-in email hashes to OWNER_HASH, verified, prefs.shareMain) shares the MAIN portfolio instead: the engine's own documents (all but sync),
+     opened with the same key as the mail packages;
+  7. writes status/{uid}.job {at, gmail, report, friends, error} for the site owner's admin screen (no figures);
+  8. saves {alertsSent, weeklySent, gmail, friendMailed, shares, lastReport} back to the account as users/{uid}/docs/sync__mail, encrypted to the account key.
 Emails go from GMAIL_ADDRESS to the address in the package only. One account failing never stops the others; the job
 exits 1 (and emails the owner) only when nothing could be done at all. Logs carry counts, never figures or addresses.
 """
-import os, sys, json, base64, argparse, datetime, subprocess, tempfile, shutil, urllib.request, urllib.error, urllib.parse
+import os, sys, json, base64, hashlib, argparse, datetime, subprocess, tempfile, shutil, urllib.request, urllib.error, urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
@@ -42,6 +48,10 @@ API_KEY = "AIzaSyAYvh69A5VWAgmhKXt07RTgLpB_1hYBjA8"
 PROJECT = "portfolio-desk-4d14a"
 FS = f"https://firestore.googleapis.com/v1/projects/{PROJECT}/databases/(default)/documents"
 MAIL_LABEL = b"portfolio-mail-v1"
+SHARE_LABEL = b"portfolio-share-v1"
+SHARE_COLLS = ("portfolio", "ledger", "imports")
+OWNER_HASH = "467022c320757248bf70115c83d305a7e4d139c35e1be5f8117fb30d7f769347"     # SHA-256 of the site owner's sign-in email (the address is not published here)
+SITE = "https://khaledamin2001-lgtm.github.io/portfolio/"
 ALERT_KINDS = {"exdiv": "Ex-dividend", "target": "Target reached", "stop": "Stop reached", "drawdown": "Drawdown"}
 
 
@@ -110,6 +120,15 @@ def id_token(http, refresh):
     if st != 200 or not j.get("id_token"):
         raise jc.JobError("sign-in", ((j.get("error") or {}).get("message")) or f"answered {st}")
     return j["id_token"], j.get("user_id")
+
+
+def token_claims(tok):
+    """The ID token's claims (it came straight from Google's token endpoint over TLS, so it is not re-verified here)."""
+    try:
+        part = tok.split(".")[1]
+        return json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+    except Exception:
+        return {}
 
 
 def read_account(http, tok, uid, priv):
@@ -331,6 +350,88 @@ def month_end(code, data, M, name, work):
     return f"{name} · month-end report {S}", text, html, att
 
 
+# ---------------------------------------------------------------- friends and the admin status line
+def list_links(http, tok, uid):
+    st, j = http.json("GET", f"{FS}/links/{uid}/with?pageSize=300", headers={"Authorization": "Bearer " + tok})
+    if st in (403, 404):     # rules without friends yet, or none
+        return []
+    if st != 200:
+        raise jc.JobError("friends", f"Firestore answered {st} listing friends")
+    out = []
+    for d in j.get("documents") or []:
+        f = {k: v.get("stringValue") for k, v in (d.get("fields") or {}).items()}
+        f["uid"] = d["name"].rsplit("/", 1)[-1]
+        out.append(f)
+    return out
+
+
+def share_snapshot(docs, name, full, at):
+    """The copy a friend sees: {v, at, name, full, docs: {"coll/doc": data}} (full = every collection but sync, for the
+    owner's main portfolio, which brings its own market data)."""
+    out = {}
+    for k, v in docs.items():
+        c = k.split("/", 1)[0]
+        if (full and c != "sync") or (not full and c in SHARE_COLLS):
+            out[k] = v.get("data") if isinstance(v, dict) and "data" in v and "version" in v else v
+    if isinstance(out.get("portfolio/settings"), dict):
+        out["portfolio/settings"] = {k: v for k, v in out["portfolio/settings"].items() if k not in ("account", "factsheetEmail", "recipient")}
+    return {"v": 1, "at": at, "name": name, "full": bool(full), "docs": out}
+
+
+def seal_json(obj, pub_b64, label):
+    """gzip(JSON) sealed to a public key: the envelope the site opens with unseal(e, label) (as store.seal, other label)."""
+    import gzip, hashlib  # noqa: F401
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives import serialization, hashes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    plain = gzip.compress(json.dumps(obj, separators=(",", ":")).encode(), 9)
+    peer = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), base64.b64decode(pub_b64))
+    eph = ec.generate_private_key(ec.SECP256R1())
+    epk = eph.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
+    key = HKDF(hashes.SHA256(), 32, epk, label).derive(eph.exchange(ec.ECDH(), peer))
+    iv = os.urandom(12)
+    b = lambda x: base64.b64encode(x).decode()
+    return json.dumps({"v": 1, "epk": b(epk), "iv": b(iv), "ct": b(AESGCM(key).encrypt(iv, plain, label))}, separators=(",", ":"))
+
+
+def share_to_friends(http, tok, uid, friends, snap, state, now):
+    """Writes shares/{uid}/to/{friend} where the copy changed or is 20 hours old. Returns how many were written."""
+    import hashlib
+    h = hashlib.sha256(json.dumps(snap["docs"], sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:32]
+    done, n = dict(state.get("shares") or {}), 0
+    for f in friends:
+        o = done.get(f["uid"]) or {}
+        if o.get("h") == h and o.get("at") and now - datetime.datetime.fromisoformat(o["at"]) < datetime.timedelta(hours=20):
+            continue
+        env = seal_json(snap, f["pub"], SHARE_LABEL)
+        st, _ = http.json("PATCH", f"{FS}/shares/{uid}/to/{f['uid']}", {"fields": {"pkg": {"stringValue": env}, "name": {"stringValue": snap["name"]}, "at": {"stringValue": snap["at"]}}},
+                          headers={"Authorization": "Bearer " + tok})
+        if st != 200:
+            raise jc.JobError("friends", f"Firestore answered {st} saving a friend's copy")
+        done[f["uid"]] = {"h": h, "at": now.isoformat()}
+        n += 1
+    state["shares"] = {k: v for k, v in done.items() if k in {f["uid"] for f in friends}}
+    return n
+
+
+def friend_email(name, who, site):
+    text = (f"{who} sent you a friend request on the portfolio site.\n\nIf you accept, you both see each other's portfolio "
+            f"(read-only: holdings, returns and activity). Either of you can remove it any time.\n\n"
+            f"To answer: open {site}?friends and sign in; the request is under Account, then Friends.\n\n"
+            f"You get this because email updates are on for {name}.\n")
+    return f"{who} wants to be friends on the portfolio site", text
+
+
+def write_status_job(http, tok, uid, job):
+    """status/{uid}.job for the admin screen; the rest of the status document is the site's."""
+    try:
+        http.json("PATCH", f"{FS}/status/{uid}?updateMask.fieldPaths=job", {"fields": {"job": {"stringValue": json.dumps(job, separators=(",", ":"))}}},
+                  headers={"Authorization": "Bearer " + tok})
+    except Exception as e:     # the admin line is a courtesy: never fail an account on it
+        jc.log(f"status not written ({type(e).__name__})")
+
+
 def gmail_error_email(name, err, site):
     text = (f"The site could not read the Thndr emails in your Gmail for {name}:\n\n  {err}\n\n"
             "Usually the app password was deleted or changed. To fix it: open the site, tap Account, then Thndr emails, "
@@ -339,11 +440,21 @@ def gmail_error_email(name, err, site):
     return f"{name}: Thndr emails could not be read", text
 
 
-def run_one(http, pkg, shared, code, now, weekly_due, dry, send):
-    """Returns a short status string for the log (no figures, no address)."""
+def run_one(http, pkg, shared, code, now, weekly_due, dry, send, main_docs=None):
+    """Returns a short status string for the log (no figures, no address). main_docs: a callable giving the owner's main
+    portfolio documents (only used for the verified owner account with prefs.shareMain)."""
     tok, uid = id_token(http, pkg["refresh"])
     if uid and uid != pkg["uid"]:
         raise jc.JobError("sign-in", "the package belongs to another account")
+    try:
+        return _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs)
+    except Exception as e:
+        if not dry:
+            write_status_job(http, tok, pkg["uid"], {"at": jc.now_iso(), "error": f"{getattr(e, 'step', type(e).__name__)}: {jc.mask(str(getattr(e, 'detail', e)))[:160]}"})
+        raise
+
+
+def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs):
     priv, keys = account_key(pkg["pk8"])
     docs = read_account(http, tok, pkg["uid"], priv)
     settings = (docs.get("portfolio/settings") or {}).get("data") or {}
@@ -353,7 +464,7 @@ def run_one(http, pkg, shared, code, now, weekly_due, dry, send):
     sent = dict(state.get("alertsSent") or {})
     prefs = pkg.get("prefs") or {}
     today = now.strftime("%Y-%m-%d")
-    site = "https://khaledamin2001-lgtm.github.io/portfolio/"
+    site = SITE
     work = tempfile.mkdtemp(prefix="acct-", dir=os.environ.get("RUNNER_TEMP") or None)
     notes = []
     try:
@@ -418,8 +529,9 @@ def run_one(http, pkg, shared, code, now, weekly_due, dry, send):
                 state["weeklySent"] = today
                 changed = True
                 notes.append("weekly sent")
+        cur_docs = read_account(http, tok, pkg["uid"], priv) if (overlay and not dry) else docs    # after an import: what was saved
         if prefs.get("reports", True) and not dry:
-            fresh = read_account(http, tok, pkg["uid"], priv) if overlay else docs    # after an import: what was saved
+            fresh = cur_docs
             months = pending_reports(fresh)
             if months:
                 rdata = os.path.join(work, "rdata")
@@ -437,11 +549,50 @@ def run_one(http, pkg, shared, code, now, weekly_due, dry, send):
                     else:
                         raise jc.JobError("month-end", f"{M} was emailed but could not be marked as sent (the portfolio kept changing)")
                     notes.append(f"month-end {M} sent ({len(att)} files)")
+                    state["lastReport"] = f"{jc.short(M)} sent {today}"
+                    changed = True
+                cur_docs = read_account(http, tok, pkg["uid"], priv)     # with the months marked as sent
+        friends_n = None
+        if not dry:
+            try:
+                links = list_links(http, tok, pkg["uid"])
+                fm = {k: v for k, v in (state.get("friendMailed") or {}).items() if any(f["uid"] == k and f.get("status") == "received" for f in links)}
+                for f in links:
+                    if f.get("status") == "received" and f["uid"] not in fm:
+                        subj, body = friend_email(name, f.get("name") or "Someone", site)
+                        send(pkg["email"], subj, body, None)
+                        fm[f["uid"]] = today
+                        notes.append("friend request emailed")
+                if fm != (state.get("friendMailed") or {}):
+                    state["friendMailed"] = fm
+                    changed = True
+                friends = [f for f in links if f.get("status") == "friends" and f.get("pub")]
+                friends_n = len(friends)
+                if friends:
+                    cl = token_claims(tok)
+                    owner = hashlib.sha256(str(cl.get("email") or "").lower().encode()).hexdigest() == OWNER_HASH
+                    if prefs.get("shareMain") and main_docs and owner and cl.get("email_verified"):
+                        md = main_docs()
+                        snap = share_snapshot(md, ((md.get("portfolio/settings") or {}).get("data") or {}).get("name") or "Main portfolio", True, jc.now_iso())
+                    else:
+                        snap = share_snapshot(cur_docs, name, False, jc.now_iso())
+                    before = json.dumps(state.get("shares") or {}, sort_keys=True)
+                    n = share_to_friends(http, tok, pkg["uid"], friends, snap, state, now)
+                    if n or json.dumps(state.get("shares") or {}, sort_keys=True) != before:
+                        changed = True
+                    if n:
+                        notes.append(f"{n} friend cop{'y' if n == 1 else 'ies'} refreshed{' (main portfolio)' if snap['full'] else ''}")
+            except Exception as e:      # friends never stop the rest
+                notes.append(f"friends not done ({getattr(e, 'step', type(e).__name__)})")
         if changed and not dry:
             cutoff = (now - datetime.timedelta(days=400)).strftime("%Y-%m-%d")
             state["alertsSent"] = {k: v for k, v in sent.items() if not (isinstance(v, str) and v < cutoff)}
             state["at"] = jc.now_iso()
             write_state(http, tok, pkg["uid"], keys, state_doc, state, jc.now_iso())
+        if not dry:
+            g = state.get("gmail") if prefs.get("gmail") else None
+            write_status_job(http, tok, pkg["uid"], {"at": jc.now_iso(), "gmail": {k: v for k, v in (g or {}).items() if k != "errorSent"} or None,
+                                                     "report": state.get("lastReport"), "friends": friends_n})
         return ", ".join(notes) or "nothing due"
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -484,12 +635,17 @@ def main(argv=None, http=None, send=None):
         pkgs = list_packages(http)
         send = send or (None if a.dry_run else smtp_sender())
         ok = bad = 0
+        main_cache = {}
+        def main_docs():
+            if "d" not in main_cache:
+                main_cache["d"] = store.read_all(os.path.abspath(a.engine), os.path.join(a.code, "p", "khaled", "keys.json"), priv)
+            return main_cache["d"]
         for i, p in enumerate(pkgs, 1):
             try:
                 pkg = open_mail_pkg(priv, p["pkg"])
                 if pkg.get("uid") != p["uid"]:
                     raise jc.JobError("package", "the package names another account")
-                jc.log(f"account {i}: " + run_one(http, pkg, shared, a.code, now, weekly_due, a.dry_run, send))
+                jc.log(f"account {i}: " + run_one(http, pkg, shared, a.code, now, weekly_due, a.dry_run, send, main_docs))
                 ok += 1
             except Exception as e:      # one account never stops the others
                 bad += 1

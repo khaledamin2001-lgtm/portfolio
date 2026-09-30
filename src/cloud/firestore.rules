@@ -1,16 +1,27 @@
 rules_version = '2';
 // Firestore security rules for the portfolio site's accounts (project portfolio-desk-4d14a).
-// Paste into Firebase console -> Firestore Database -> Rules -> Publish. The site stores only ENCRYPTED blobs here:
+// Paste into Firebase console -> Firestore Database -> Rules -> Publish, with OWNER@EXAMPLE.COM below replaced by the
+// site owner's sign-in email in lower case (kept out of this public file). The site stores only ENCRYPTED blobs here:
 // every portfolio document is sealed in the browser to the account's own key, so these rules decide who can touch
 // the ciphertext, not who can read the figures.
 service cloud.firestore {
   match /databases/{database}/documents {
+    // The site owner (admin screen): signed in with this email, verified. Sees the status list, can reset an account.
+    function isAdmin() {
+      return request.auth != null && request.auth.token.email == 'owner@example.com' && request.auth.token.email_verified == true;
+    }
+    function me(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
     // An account's profile (public key + its private key wrapped by the password and by the recovery code) and its
-    // encrypted documents: only that account, signed in.
+    // encrypted documents: only that account. The admin may list and delete them (to reset an account); it cannot
+    // open them (they are encrypted to the account's key).
     match /users/{uid} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
+      allow read, write: if me(uid);
+      allow delete: if isAdmin();
       match /docs/{docId} {
-        allow read, write: if request.auth != null && request.auth.uid == uid;
+        allow read, write: if me(uid);
+        allow read, delete: if isAdmin();
       }
     }
     // The members key for the shared market data: its public half is readable by anyone (the daily price job encrypts
@@ -29,7 +40,41 @@ service cloud.firestore {
     // so anyone may fetch it (the job reads it without signing in) but nobody else can open it; only the account writes it.
     match /mail/{uid} {
       allow read: if true;
-      allow write: if request.auth != null && request.auth.uid == uid;
+      allow write: if me(uid);
+      allow delete: if isAdmin();
+    }
+    // Status for the admin screen: no figures, only name, email, dates and whether the automatic updates work. Written by
+    // the account (the site, and the email job signed in as the account); read by the account and the admin.
+    match /status/{uid} {
+      allow read: if me(uid) || isAdmin();
+      allow write: if me(uid);
+      allow delete: if isAdmin();
+    }
+    // Find a friend by email: directory/{email} = {uid, name, pub}. Only the owner of that sign-in email writes it; any
+    // signed-in account can fetch one by its exact email, nobody can list them.
+    match /directory/{email} {
+      allow get: if request.auth != null;
+      allow list: if false;
+      allow write: if request.auth != null && request.auth.token.email == email && request.resource.data.uid == request.auth.uid;
+      allow delete: if (request.auth != null && request.auth.token.email == email) || isAdmin();
+    }
+    // Friends. links/{uid}/with/{other} is uid's side: {status: sent | received | friends, name, pub, email, at}.
+    // Asking writes both sides (mine 'sent', theirs 'received'); only the one who received it can make both 'friends';
+    // either can delete both (decline, cancel, remove). Nothing else about a link can change.
+    match /links/{uid}/with/{other} {
+      allow read: if me(uid) || isAdmin();
+      allow create: if (me(uid) && request.resource.data.status == 'sent') || (me(other) && request.resource.data.status == 'received');
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'at'])
+                    && request.resource.data.status == 'friends'
+                    && ((me(other) && resource.data.status == 'sent') || (me(uid) && resource.data.status == 'received'));
+      allow delete: if me(uid) || me(other) || isAdmin();
+    }
+    // What a friend sees: shares/{owner}/to/{viewer} = {pkg: a copy of the owner's portfolio sealed to the viewer's key,
+    // name, at}. Only the owner writes it, and only while the two are friends; either can delete it.
+    match /shares/{owner}/to/{viewer} {
+      allow read: if me(owner) || me(viewer) || isAdmin();
+      allow write: if me(owner) && get(/databases/$(database)/documents/links/$(owner)/with/$(viewer)).data.status == 'friends';
+      allow delete: if me(owner) || me(viewer) || isAdmin();
     }
     // Everything else: nobody.
     match /{document=**} {
