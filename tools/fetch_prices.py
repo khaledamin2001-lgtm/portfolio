@@ -2,11 +2,13 @@
 """Daily market update for the portfolio pages, from TradingView's public scanner (15-min delayed) plus a short daily-bar
 backfill from TradingView's chart websocket so a missed run never leaves a hole in the price history.
 
-Usage: python3 fetch_prices.py <assets.json> [--fill N] [--no-fill]
+Usage: python3 fetch_prices.py <assets.json> [--fill N] [--no-fill] [--all]
     <assets.json>  a portfolio/assets document as saved by ArtifactData ({items:{name:{symbol,...}}}, optionally wrapped
                    in {id, version, data}); the routine merges both pages' documents into one file first.
     --fill N       fill the last N EGX sessions (default 10; N+5 daily bars are fetched per symbol, at least 15)
     --no-fill      scanner snapshot only (history for the latest session, nothing older)
+    --all          daily history for EVERY EGX-listed stock, not just the assets file's symbols (the shared market job
+                   for all members; the assets argument may then be "-" for none)
 
 Prints ONE JSON object:
     latest        market/latest — a quote for EVERY EGX-listed stock, the four indices, USD/EGP and gold
@@ -208,8 +210,9 @@ def main():
     ap.add_argument("assets", help="portfolio/assets document (JSON) - decides which symbols get daily history")
     ap.add_argument("--fill", type=int, default=10, metavar="N", help="backfill the last N EGX sessions (default 10)")
     ap.add_argument("--no-fill", action="store_true", help="skip the backfill: history for the scanner's latest session only")
+    ap.add_argument("--all", action="store_true", help="daily history for every EGX-listed stock (assets may be '-')")
     args = ap.parse_args()
-    doc = json.load(open(args.assets))
+    doc = {} if args.assets == "-" else json.load(open(args.assets))
     doc = doc.get("data", doc)
     items = doc.get("items", {})
     by_sym = {a["symbol"].upper(): a for a in items.values() if a.get("symbol")}
@@ -223,6 +226,8 @@ def main():
     for t, d in every.items():
         if d and d[0] is not None: quotes[t.split(":", 1)[1]] = quote(d, today)
     missing = [s for s in syms if s not in quotes]
+    if args.all:
+        syms = sorted(set(syms) | set(quotes))
     for s in IDX:
         d = eg.get(f"EGX:{s}")
         if d and d[0] is not None:

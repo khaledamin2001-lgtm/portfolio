@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /* Live-site smoke test (headless Chromium, Playwright). Serves the repository root with `python3 -m http.server`, opens
    index.html on a fresh device (empty storage) at a desktop and a phone size, and checks, without unlocking anything:
-     1. the lock layer renders the portfolio picker: one live-pick-<id> button per entry of portfolios.json, the app behind
+     1. the lock layer offers "Create your portfolio" / "Sign in" and, behind "Open a portfolio with a setup key", one
+        live-pick-<id> button per entry of portfolios.json, the app behind
         it stays hidden (body.pd-locked);
      2. picking the first portfolio loads its keys.json and shows the setup-key screen (live-setup-key);
      3. a deliberately wrong setup key is refused with "not right" (PBKDF2 + AES-GCM ran on keys.json and failed as they
@@ -51,8 +52,12 @@ const up = (url) => new Promise((res) => { http.get(url, (r) => { r.resume(); re
       await page.goto(base + 'index.html', { waitUntil: 'load' });
       const V = `[${vp.name}]`;
       // 1. picker
+      // a fresh device sees "Create your portfolio" / "Sign in" first; the site's own portfolios sit behind "Open a portfolio with a setup key"
+      await page.locator('[data-testid="live-signup"]').waitFor({ state: 'visible', timeout: 20000 }).catch(() => {});
+      check(`${V} a fresh device is offered to create a portfolio or sign in`, (await page.locator('[data-testid="live-signup"]').isVisible()) && (await page.locator('[data-testid="live-signin"]').isVisible()));
+      await page.locator('[data-testid="live-setup-key-list"]').click().catch(() => {});
       const firstPick = page.locator(`[data-testid="live-pick-${portfolios[0].id}"]`);
-      await firstPick.waitFor({ state: 'visible', timeout: 20000 }).catch(() => {});
+      await firstPick.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
       const picks = await Promise.all(portfolios.map((p) => page.locator(`[data-testid="live-pick-${p.id}"]`).isVisible()));
       check(`${V} lock screen shows the portfolio picker (${portfolios.map((p) => p.id).join(', ')})`, picks.every(Boolean), `visible: ${picks.join(',')} after ${Date.now() - t0} ms`);
       const locked = await page.evaluate(() => document.body.classList.contains('pd-locked') && !document.getElementById('lock').hidden);

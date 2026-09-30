@@ -1,7 +1,7 @@
 # The repository's own checks on every push to main and every pull request. A failing run marks the commit with a red X
 # and GitHub e-mails whoever pushed it. Nothing here uses secrets or private data: the tests run in public mode and the
 # tools run on synthetic data generated in the run (src/tests/fixtures/make_synthetic.js). Same checks locally:
-#   bash src/tests/run_all.sh && node src/tests/site_smoke.js && node src/tests/site_edit.js
+#   bash src/tests/run_all.sh && node src/tests/site_smoke.js && node src/tests/site_edit.js && node src/tests/site_cloud.js
 name: Checks
 
 on:
@@ -88,3 +88,8 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: ${{ runner.temp }}/pw
         run: node "$GITHUB_WORKSPACE/src/tests/site_edit.js" --engine-dir yassin
+
+      - name: 5e. Accounts test (sign-up, encrypted storage, recovery; fake Firebase)
+        if: ${{ !cancelled() }}
+        working-directory: ${{ runner.temp }}/pw
+        run: node "$GITHUB_WORKSPACE/src/tests/site_cloud.js"

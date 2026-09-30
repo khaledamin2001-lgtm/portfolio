@@ -164,6 +164,32 @@ try:
 finally:
     shutil.rmtree(tmp)
 
+# ---- shared market: history days merge, macro accumulates, month-end index closes from history
+import run_shared_market as rsm   # noqa: E402
+tmp = tempfile.mkdtemp()
+try:
+    o1 = {"latest": {"asOf": "x", "quotes": {"AAA": {"price": 1}}}, "currentMonth": "2026-09",
+          "histories": [{"month": "2026-08", "days": {"2026-08-30": {"AAA": 1, "EGX30CAPPED": 100.5}, "2026-08-31": {"AAA": 2, "EGX30CAPPED": 101.5}}}],
+          "bench": {"members": [{"s": "AAA"}], "asOf": "2026-09-01", "divYield": None}, "macro": {"cpiMoM": {"2026-07": 0.01}, "cpiSource": "s"},
+          "prevMonth": {"month": "2026-08", "benchClose": None}}
+    os.makedirs(f"{tmp}/history")
+    json.dump({"capWeight": 0.15, "actions": []}, open(f"{tmp}/bench.json", "w"))
+    rsm.merge(tmp, o1)
+    o2 = dict(o1, histories=[{"month": "2026-09", "days": {"2026-09-01": {"AAA": 3}}}, {"month": "2026-08", "days": {"2026-08-31": {"BBB": 9}}}],
+              macro={"cpiMoM": {"2026-08": 0.02}})
+    info = rsm.merge(tmp, o2)
+    h8 = json.load(open(f"{tmp}/history/2026-08.json"))
+    check("shared market: history days merge (a new symbol joins, the old ones stay)", h8["days"]["2026-08-31"] == {"AAA": 2, "EGX30CAPPED": 101.5, "BBB": 9} and info["months"] == ["2026-09", "2026-08"])
+    m = json.load(open(f"{tmp}/macro.json"))
+    check("shared market: macro accumulates run after run", m["cpiMoM"] == {"2026-07": 0.01, "2026-08": 0.02} and m["cpiSource"] == "s")
+    check("shared market: a closed month's index close comes from its last session", m["benchClose"] == {"2026-08": 101.5})
+    b = json.load(open(f"{tmp}/bench.json"))
+    check("shared market: bench keeps capWeight/actions, takes members", b["capWeight"] == 0.15 and b["members"] == [{"s": "AAA"}] and "divYield" not in b)
+    docs = rsm.bundle(tmp)
+    check("shared market: the bundle holds latest, bench, macro and every history month", sorted(docs) == ["bench/egx30", "history/2026-08", "history/2026-09", "market/latest", "market/macro"])
+finally:
+    shutil.rmtree(tmp)
+
 # ---- log masking
 m = jc.mask("value 1,234,567.89 and 98765.43 at line 12")   # private-scan: synthetic
 check("mask: figures hidden in logs, small numbers kept", "1,234" not in m and "98765" not in m and "12" in m)

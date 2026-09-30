@@ -44,6 +44,9 @@ ALLOW_EMAIL_TLDS = ('.example', '.test', '.invalid', '.localhost')
 ALLOW_NUMBERS = {'86400000': 'milliseconds per day', '8905.12': 'made-up CSV import example (app.html)'}
 ALLOW_HOLDERS = {'', 'demo holder'}
 SKIP_LINE = 'private-scan: synthetic'
+# public by design, not secrets: the Firebase web config's API key only names the project (src/site/lock.js FB.apiKey);
+# the Firestore rules (src/cloud/firestore.rules) are what protect the data
+ALLOW_TOKENS = {'AIzaSyAYvh69A5VWAgmhKXt07RTgLpB_1hYBjA8': 'Firebase web API key (public)'}
 
 BINARY_EXT = {'.png', '.jpg', '.jpeg', '.gif', '.ico', '.webp', '.woff', '.woff2', '.ttf', '.otf', '.xlsx', '.xls', '.pdf', '.zip', '.gz'}
 ENC_KEYS = {'v', 'at', 'name', 'bytes', 'epk', 'iv', 'ct'}
@@ -156,7 +159,7 @@ def main():
             for m in HOLDER.finditer(line):
                 if m.group(2).strip().lower() not in ALLOW_HOLDERS: hit(f, i, 'marker', 'account holder literal ' + mask(m.group(2)))
             for rx, why in TOKENS:
-                if rx.search(line): hit(f, i, 'marker', why)
+                if any(m.group(0) not in ALLOW_TOKENS for m in rx.finditer(line)): hit(f, i, 'marker', why)
             if markers:
                 low = line.lower()
                 for k, mk in enumerate(markers, 1):

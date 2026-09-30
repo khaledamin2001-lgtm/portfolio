@@ -1,0 +1,33 @@
+rules_version = '2';
+// Firestore security rules for the portfolio site's accounts (project portfolio-desk-4d14a).
+// Paste into Firebase console -> Firestore Database -> Rules -> Publish. The site stores only ENCRYPTED blobs here:
+// every portfolio document is sealed in the browser to the account's own key, so these rules decide who can touch
+// the ciphertext, not who can read the figures.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // An account's profile (public key + its private key wrapped by the password and by the recovery code) and its
+    // encrypted documents: only that account, signed in.
+    match /users/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+      match /docs/{docId} {
+        allow read, write: if request.auth != null && request.auth.uid == uid;
+      }
+    }
+    // The members key for the shared market data: its public half is readable by anyone (the daily price job encrypts
+    // with it), its private half only by signed-in members. Each is created once and can never be changed or deleted.
+    match /shared/membersPub {
+      allow read: if true;
+      allow create: if request.auth != null;
+      allow update, delete: if false;
+    }
+    match /shared/members {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update, delete: if false;
+    }
+    // Everything else: nobody.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

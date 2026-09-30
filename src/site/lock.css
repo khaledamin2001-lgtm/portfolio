@@ -40,3 +40,12 @@ body.pd-locked>:not(#lock){display:none!important}
 #pd-bar .pd-actions{flex-wrap:wrap}
 #pd-bar button:disabled{opacity:.6;cursor:default}
 #pd-edit-state.stale{color:var(--warn,#8f5a00);font-weight:600}
+#lock textarea{font:500 16px/1.4 var(--f-ui,system-ui,sans-serif);padding:12px 14px;border-radius:10px;border:1px solid var(--input-rule,#C9D4CF);background:var(--input,#fff);color:var(--ink,#0F1A17);width:100%;box-sizing:border-box;resize:vertical}
+#lock textarea:focus{outline:2px solid var(--accent,#0B6E5F);outline-offset:1px}
+#lock .lk-code{font:600 18px/1.3 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.02em;white-space:nowrap;color:var(--ink,#0F1A17);background:var(--surface,#fff);border:1px dashed var(--accent,#0B6E5F);border-radius:10px;padding:14px;user-select:all;word-break:break-all}
+#lock .lk-check{display:flex;gap:10px;align-items:center;justify-content:center;font-size:14px;color:var(--ink-2,#46534E)}
+#lock .lk-check input{width:auto}
+#lock .lk-more{text-align:left;font-size:13px;color:var(--ink-3,#5F6C67)}
+#lock .lk-more summary{cursor:pointer;padding:6px 0;text-align:center;text-decoration:underline}
+#lock .lk-more .lk-list{margin-top:8px}
+#pd-bar #pd-account{color:var(--accent,#0B6E5F);border-color:var(--accent,#0B6E5F)}

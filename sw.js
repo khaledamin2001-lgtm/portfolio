@@ -1,6 +1,7 @@
 /* Portfolio Desk service worker. build_site.py fills in the stamps and the static file list; the built copy sits at the site
    root next to index.html so its scope is the whole site (…/portfolio/ on GitHub Pages).
-   - The page, portfolios.json and each portfolio's keys.json, data.enc.json and exports/*: network first. If the network has
+   - The page, portfolios.json, the members' shared market data (m/market.enc.json) and each portfolio's keys.json,
+     data.enc.json and exports/*: network first. If the network has
      not answered within 4 s, or fails outright, or answers 5xx, the copy saved on this device is served instead (a 404 or
      any other answer is passed through as is, so a missing file still reads as missing). Every 200 answer replaces the
      saved copy; a .json file is saved only if it parses. The saved copy carries an x-pd-saved-at header: lock.js shows its
@@ -12,15 +13,15 @@
    A new build is a new cache name: the new worker installs, skips waiting, takes over open pages, carries the saved data
    files over from the old cache (only those missing from the new one) and deletes the old caches. */
 'use strict';
-const BUILD = '6331cac6758c 2026-09-30 01:43';     // the page's pd-build stamp
-const SITE = '150c2430e8';       // hash over this site build (index.html, sw.js template, icons, manifest, fonts)
+const BUILD = '6331cac6758c 2026-09-30 02:10';     // the page's pd-build stamp
+const SITE = 'f183b501e1';       // hash over this site build (index.html, sw.js template, icons, manifest, fonts)
 const PREFIX = 'portfolio-desk-';  // the github.io origin is shared by every Pages site of the account: touch only our caches
 const CACHE = PREFIX + BUILD.split(' ')[0] + '-' + SITE;
 const STATIC = ["manifest.webmanifest", "icon-180.png", "icon-192.png", "icon-512.png", "icon-maskable-192.png", "icon-maskable-512.png", "fonts/ibm-plex-mono-latin-500.woff2", "fonts/ibm-plex-mono-latin-ext-500.woff2", "fonts/public-sans-latin-400.woff2", "fonts/public-sans-latin-ext-400.woff2", "fonts/spectral-latin-500.woff2", "fonts/spectral-latin-600.woff2", "fonts/spectral-latin-ext-500.woff2", "fonts/spectral-latin-ext-600.woff2"];      // cache-first files, relative to the scope
 const TIMEOUT_MS = 4000;
 const SCOPE = new URL(self.registration.scope);
 const STATIC_SET = new Set(STATIC);
-const DATA = /^(?:portfolios\.json|p\/[^/]+\/(?:keys\.json|data\.enc\.json|exports\/[^/]+))$/;
+const DATA = /^(?:portfolios\.json|m\/market\.enc\.json|p\/[^/]+\/(?:keys\.json|data\.enc\.json|exports\/[^/]+))$/;
 const rel = (url) => (url.origin === self.location.origin && url.pathname.startsWith(SCOPE.pathname) ? decodeURIComponent(url.pathname.slice(SCOPE.pathname.length)) : null);
 const keyFor = (u) => { const url = new URL(u, SCOPE); url.search = ''; url.hash = ''; return url.href; };   // ?t=<now> cache busters share one entry
 const SHELL = keyFor('./');

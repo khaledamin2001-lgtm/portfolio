@@ -1,5 +1,5 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self' https://scanner.tradingview.com https://api.github.com; img-src 'self' data: blob:; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self' https://scanner.tradingview.com https://api.github.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firestore.googleapis.com; img-src 'self' data: blob:; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#F3F6F4" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#0D1311" media="(prefers-color-scheme: dark)">
@@ -64,6 +64,15 @@ body.pd-locked>:not(#lock){display:none!important}
 #pd-bar .pd-actions{flex-wrap:wrap}
 #pd-bar button:disabled{opacity:.6;cursor:default}
 #pd-edit-state.stale{color:var(--warn,#8f5a00);font-weight:600}
+#lock textarea{font:500 16px/1.4 var(--f-ui,system-ui,sans-serif);padding:12px 14px;border-radius:10px;border:1px solid var(--input-rule,#C9D4CF);background:var(--input,#fff);color:var(--ink,#0F1A17);width:100%;box-sizing:border-box;resize:vertical}
+#lock textarea:focus{outline:2px solid var(--accent,#0B6E5F);outline-offset:1px}
+#lock .lk-code{font:600 18px/1.3 ui-monospace,Menlo,Consolas,monospace;letter-spacing:.02em;white-space:nowrap;color:var(--ink,#0F1A17);background:var(--surface,#fff);border:1px dashed var(--accent,#0B6E5F);border-radius:10px;padding:14px;user-select:all;word-break:break-all}
+#lock .lk-check{display:flex;gap:10px;align-items:center;justify-content:center;font-size:14px;color:var(--ink-2,#46534E)}
+#lock .lk-check input{width:auto}
+#lock .lk-more{text-align:left;font-size:13px;color:var(--ink-3,#5F6C67)}
+#lock .lk-more summary{cursor:pointer;padding:6px 0;text-align:center;text-decoration:underline}
+#lock .lk-more .lk-list{margin-top:8px}
+#pd-bar #pd-account{color:var(--accent,#0B6E5F);border-color:var(--accent,#0B6E5F)}
 
 [data-testid=scan-gmail],[data-testid=factsheet-email],[data-testid=post-statement]{display:none!important}
 body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[data-testid=save-marks],[data-testid=save-assets],[data-testid=save-settings]){display:none!important}
@@ -250,7 +259,8 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   const isOld = (d) => !!d && d.v !== 3 && !!d.ct;   // v2: {iv, ct, tries, at} in localStorage + a CryptoKey in IndexedDB
   const notSetUp = () => Object.assign(new Error('This device is not set up'), { code: 'not_set_up' });
   // the ONLY callers: MAX_TRIES wrong passwords, and the explicit "Forget this portfolio" flow
-  async function forget() { ls.del(devLS()); await idbDel('dev:' + CUR.id); await idbDel('bio:' + CUR.id); await idbDel('tok:' + CUR.id); }
+  async function forget() { ls.del(devLS()); await idbDel('dev:' + CUR.id); await idbDel('bio:' + CUR.id); await idbDel('tok:' + CUR.id);
+    if (CUR.cloud) { await idbDel('acct:' + CUR.id); await idbDel('cache:' + CUR.id); dropAccount(CUR.id); CLOUD = null; } }
   async function migrateLegacy() {   // devices set up before the site held more than one portfolio (single-portfolio v1 layout)
     const d = ls.get(LEGACY_LS); if (!d) return;
     try { const dk = await idbGet('device'); if (dk) { await idbPut('dev:khaled', dk); await idbDel('device'); } } catch (e) {}
@@ -282,8 +292,9 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   /* ---------- keys ---------- */
   let KEYS = null, PK8 = null, DATA_AT = null, lastFetch = 0, fetchTry = 0;
   let SAVED_AT = null;   // set when the last data answer was sw.js's saved copy (its x-pd-saved-at header), null when it came from the network
-  async function unwrapWithSetupKey(code) {
-    const w = KEYS.wrap, clean = code.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  async function unwrapWithSetupKey(code) { return unwrapKey(KEYS.wrap, code.toUpperCase().replace(/[^A-Z0-9]/g, '')); }
+  // a keys.json-style wrap {salt, iv, ct, iter} opened with a secret: the setup key / recovery code (cleaned), or an account password
+  async function unwrapKey(w, clean) {
     const k0 = await crypto.subtle.importKey('raw', enc.encode(clean), 'PBKDF2', false, ['deriveKey']);
     const k = await crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt: ub64(w.salt), iterations: w.iter }, k0, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
     return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ub64(w.iv), additionalData: enc.encode('portfolio-key-v1') }, k, ub64(w.ct)));
@@ -299,8 +310,8 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   }
 
   /* ---------- data ---------- */
-  async function unseal(e, label) {
-    const priv = await crypto.subtle.importKey('pkcs8', PK8, { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']);
+  async function unseal(e, label, pk8) {
+    const priv = await crypto.subtle.importKey('pkcs8', pk8 || PK8, { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']);
     const epk = ub64(e.epk);
     const pub = await crypto.subtle.importKey('raw', epk, { name: 'ECDH', namedCurve: 'P-256' }, false, []);
     const shared = await crypto.subtle.deriveBits({ name: 'ECDH', public: pub }, priv, 256);
@@ -309,6 +320,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
     return crypto.subtle.decrypt({ name: 'AES-GCM', iv: ub64(e.iv), additionalData: enc.encode(label) }, key, ub64(e.ct));
   }
   async function fetchData() {
+    if (CUR && CUR.cloud) return fetchCloudData();
     const r = await fetch(base() + 'data.enc.json?t=' + Date.now(), { cache: 'no-store' });
     if (!r.ok) throw new Error('Could not download the portfolio data (' + r.status + ')');
     const gz = await unseal(await r.json(), 'portfolio-data-v1');
@@ -375,7 +387,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   const RECENT = new Map();         // 'coll/doc' -> {sha, doc, at}: this device's last commit of a document (the API can lag)
   let QUEUE = Promise.resolve();    // saves run one at a time, in the order the page made them
   const engineRepo = () => (CUR && CUR.engine) || null;
-  const canEdit = () => !!(PK8 && EDIT && engineRepo());
+  const canEdit = () => !!(PK8 && ((CUR && CUR.cloud && CLOUD) || (EDIT && engineRepo())));
   window.pdCanEdit = canEdit;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const b64big = (u) => { u = u instanceof Uint8Array ? u : new Uint8Array(u); let s = ''; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); };
@@ -448,20 +460,21 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
     if (!canEdit()) throw Object.assign(new Error('The portfolio was locked before the change was saved'), { code: 'read_only' });
     const parts = String(p).split('/'), c = parts[0], d = parts[1];
     if (parts.length !== 2 || !pdStore.NAME_RE.test(c) || !pdStore.NAME_RE.test(d)) throw Object.assign(new Error('invalid document ' + p), { code: 'invalid' });
-    const repo = EDIT.repo, path = `${edir()}db/${c}/${d}.enc.json`, msg = `Site edit: ${CUR.id} ${p}`;
+    const cloud = !!CUR.cloud, repo = cloud ? null : EDIT.repo, path = `${edir()}db/${c}/${d}.enc.json`, msg = `Site edit: ${CUR.id} ${p}`;
     for (let attempt = 0; ; attempt++) {
       const rc = RECENT.get(p);
-      const cur = attempt === 0 && rc && Date.now() - rc.at < 120e3 ? rc : await readEngineDoc(c, d);
+      const cur = attempt === 0 && rc && Date.now() - rc.at < 120e3 ? rc : cloud ? await readCloudDoc(c, d) : await readEngineDoc(c, d);
       const w = op === 'set' && seen !== undefined && cur.doc ? { op, data: pdStore.rebase(seen, data, cur.doc.data) } : { op, data };
       const step = (await pdStore.applyWrites([Object.assign(w, { collection: c, doc_id: d })], async () => cur.doc)).plan[0];
       try {
         if (!step) return settle(p, cur.doc ? cur.doc.data : undefined);   // unchanged
         if (step.action === 'rm') {
-          await gh('DELETE', `/repos/${repo}/contents/${path}`, { message: msg, sha: cur.sha, branch: 'main' });
+          if (cloud) await deleteCloudDoc(c, d, cur.sha); else await gh('DELETE', `/repos/${repo}/contents/${path}`, { message: msg, sha: cur.sha, branch: 'main' });
           RECENT.delete(p); return settle(p, undefined);
         }
         const plain = enc.encode(JSON.stringify(step.doc));
         const env = Object.assign({ v: 1, name: d + '.json', bytes: plain.length }, await seal(plain, FILE_LABEL));
+        if (cloud) { RECENT.set(p, { sha: await writeCloudDoc(c, d, env, step.doc, cur.sha), doc: step.doc, at: Date.now() }); return settle(p, step.doc.data); }
         const r = await gh('PUT', `/repos/${repo}/contents/${path}`, Object.assign({ message: msg, content: b64big(enc.encode(JSON.stringify(env) + '\n')), branch: 'main' }, cur.sha ? { sha: cur.sha } : {}));
         RECENT.set(p, { sha: r && r.content ? r.content.sha : null, doc: step.doc, at: Date.now() });
         return settle(p, step.doc.data);
@@ -492,11 +505,13 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
       const st = el('pd-edit-state');
       if (st) {
         const soon = on && exp && exp - Date.now() < 14 * 864e5;
-        st.textContent = !engineRepo() ? 'View only' : !on ? 'View only on this device' : JOB_NOTE || (soon ? `Editing on · the editing key expires ${dayText(exp)}` : 'Editing on · saved changes reach the site in a few minutes');
+        st.textContent = CUR && CUR.cloud ? (on ? 'Your account · changes save as you make them' : 'Your account') : !engineRepo() ? 'View only' : !on ? 'View only on this device' : JOB_NOTE || (soon ? `Editing on · the editing key expires ${dayText(exp)}` : 'Editing on · saved changes reach the site in a few minutes');
         st.classList.toggle('stale', !!soon && !JOB_NOTE);
       }
-      for (const [id, kind] of [['pd-run-market', 'market'], ['pd-run-sync', 'sync'], ['pd-edit-menu', null]]) { const b = el(id); if (b) b.hidden = !on || (kind && !jobFile(kind)); }
-      const b = el('pd-edit-on'); if (b) b.hidden = on || !engineRepo() || !PK8;
+      const cloud = !!(CUR && CUR.cloud);
+      for (const [id, kind] of [['pd-run-market', 'market'], ['pd-run-sync', 'sync'], ['pd-edit-menu', null]]) { const b = el(id); if (b) b.hidden = !on || cloud || (kind && !jobFile(kind)); }
+      const b = el('pd-edit-on'); if (b) b.hidden = on || cloud || !engineRepo() || !PK8;
+      const ac = el('pd-account'); if (ac) ac.hidden = !(cloud && PK8);
       document.body.classList.toggle('pd-edit', on);
     });
   }
@@ -693,7 +708,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
     const t = document.getElementById('toast'); if (t) { t.hidden = true; t.textContent = ''; }
   }
   function lock(auto) {
-    PK8 = null; DOCS = {}; DATA_AT = null; lastFetch = 0; EXPORTS = null; SAVED_AT = null; EDIT = null; OVERLAY.clear(); RECENT.clear(); JOB_NOTE = ''; editBar();
+    PK8 = null; DOCS = {}; DATA_AT = null; lastFetch = 0; EXPORTS = null; SAVED_AT = null; EDIT = null; CLOUD = null; MEMBERS = null; OVERLAY.clear(); RECENT.clear(); JOB_NOTE = ''; editBar();
     document.title = 'Stock Market Portfolio Tracker';
     listeners.forEach(fire); blank(); offlineBanner();
     if (!CUR) return chooseScreen();
@@ -756,18 +771,29 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   function screen(html) { const l = lockEl(); l.hidden = false; document.body.classList.add('pd-locked'); l.innerHTML = '<div class="lk">' + MARK + html + '</div>'; }
   function open() { const l = lockEl(); l.hidden = true; l.innerHTML = ''; document.body.classList.remove('pd-locked'); }
   const err = (m) => { const e = $l('.lk-err'); if (e) e.textContent = m || ''; };
-  const switchLink = () => (PORTFOLIOS.length > 1 ? '<button type="button" class="lk-link" id="lk-switch" data-testid="live-switch">Switch portfolio</button>' : '');
+  const switchLink = () => (allPortfolios().length > 1 || CUR.cloud ? '<button type="button" class="lk-link" id="lk-switch" data-testid="live-switch">Switch portfolio</button>' : '');
   const wireSwitch = () => { const b = $l('#lk-switch'); if (b) b.onclick = () => chooseScreen(); };
 
+  // The first screen: portfolios this device can open, then sign in / create an account; portfolios opened with a setup key
+  // (the site's own, from portfolios.json) sit behind a link unless this device is already set up for them.
   function chooseScreen() {
-    screen(`<h1>Stock Market Portfolio Tracker</h1><p>Choose whose portfolio to open.</p><div class="lk-list">${PORTFOLIOS.map((p) => { const set = !!ls.get('pd.dev.' + p.id);
-      return `<button class="lk-btn ${set ? '' : 'ghost'}" data-pick="${esc(p.id)}" data-testid="live-pick-${esc(p.id)}">${esc(p.name)}<small>${set ? 'ready on this device' : 'needs its setup key'}</small></button>`; }).join('')}</div>
-      <p class="lk-foot">Each portfolio has its own setup key; each device gets its own password. Ask the owner for their setup key to add a portfolio here.</p>`);
-    document.querySelectorAll('#lock [data-pick]').forEach((b) => { b.onclick = () => select(PORTFOLIOS.find((p) => p.id === b.dataset.pick)); });
+    const mine = allPortfolios().filter((p) => p.cloud || !!ls.get('pd.dev.' + p.id)), others = PORTFOLIOS.filter((p) => !ls.get('pd.dev.' + p.id));
+    screen(`<h1>Stock Market Portfolio Tracker</h1><p>${mine.length ? 'Choose a portfolio to open.' : 'Track your EGX portfolio: returns, dividends, risk and the index, private to you.'}</p>
+      ${mine.length ? `<div class="lk-list">${mine.map((p) => `<button class="lk-btn" data-pick="${esc(p.id)}" data-testid="live-pick-${esc(p.id)}">${esc(p.name)}<small>${p.cloud ? 'your account' : 'ready on this device'}</small></button>`).join('')}</div>` : ''}
+      <div class="lk-list"><button class="lk-btn ${mine.length ? 'ghost' : ''}" id="lk-new-acct" data-testid="live-signup">Create your portfolio</button><button class="lk-btn ghost" id="lk-signin" data-testid="live-signin">Sign in</button></div>
+      ${others.length ? `<details class="lk-more"${mine.length || !accounts().length ? '' : ''}><summary data-testid="live-setup-key-list">Open a portfolio with a setup key</summary><div class="lk-list">${others.map((p) => `<button class="lk-btn ghost" data-pick="${esc(p.id)}" data-testid="live-pick-${esc(p.id)}">${esc(p.name)}<small>needs its setup key</small></button>`).join('')}</div></details>` : ''}`);
+    document.querySelectorAll('#lock [data-pick]').forEach((b) => { b.onclick = () => select(findPortfolio(b.dataset.pick)); });
+    $l('#lk-new-acct').onclick = () => signUpScreen();
+    $l('#lk-signin').onclick = () => signInScreen();
   }
   async function select(p) {
     if (OPENED && OPENED !== p.id) { ls.set(CUR_LS, p.id); location.reload(); return; }   // the page already shows another portfolio: start clean
-    CUR = p; ls.set(CUR_LS, p.id); KEYS = null; PK8 = null; EXPORTS = null; EDIT = null;
+    CUR = p; ls.set(CUR_LS, p.id); KEYS = null; PK8 = null; EXPORTS = null; EDIT = null; CLOUD = null;
+    if (p.cloud) {   // an account: its public keys are kept on this device; without the device store, sign in
+      const a = accounts().find((x) => x.id === p.id); KEYS = a ? a.keys : null;
+      if (!KEYS || !isV3(getDev())) return signInScreen(p.email);
+      return unlockScreen(true);
+    }
     try { KEYS = await (await fetch(base() + 'keys.json', { cache: 'no-store' })).json(); } catch (e) { return screen('<h1>Offline</h1><p>The portfolio could not load. Check your connection and reload.</p>'); }
     const d = getDev();
     if (isV3(d)) unlockScreen(true); else if (isOld(d)) migrateScreen(); else setupScreen();
@@ -847,7 +873,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
       ${hasBio ? `<button class="lk-btn" id="lk-bio" data-testid="live-bio-unlock">Unlock with ${esc(bio)}</button><div class="lk-sep">or</div>` : ''}
       <form id="lk-pass" autocomplete="off"><input id="lk-pw" type="password" data-testid="live-password" placeholder="Password" aria-label="Password" autocomplete="current-password">
       <button class="lk-btn ${hasBio ? 'ghost' : ''}" data-testid="live-password-submit">Unlock</button><div class="lk-err" role="alert"></div></form>
-      <div class="lk-links">${switchLink()}<button type="button" class="lk-link" id="lk-change" data-testid="live-change-password">Change password</button><button type="button" class="lk-link" id="lk-forget" data-testid="live-forget-device">Forget this portfolio on this device</button></div>`);
+      <div class="lk-links">${switchLink()}${CUR.cloud ? '' : '<button type="button" class="lk-link" id="lk-change" data-testid="live-change-password">Change password</button>'}<button type="button" class="lk-link" id="lk-forget" data-testid="live-forget-device">Forget this portfolio on this device</button></div>`);
     wireSwitch();
     if (hasBio) { $l('#lk-bio').onclick = () => bioUnlock(); if (auto) bioUnlock(true); } else $l('#lk-pw').focus();
     $l('#lk-pass').onsubmit = async (ev) => { ev.preventDefault(); const pw = $l('#lk-pw').value; if (!pw.trim()) return; const b = $l('[data-testid=live-password-submit]'); b.disabled = true; err('Checking…');
@@ -856,7 +882,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
         if (e && e.name === 'OperationError') await wrongPassword();
         else if (e && e.code === 'not_set_up') { console.error(e); ls.del(devLS()); setupScreen('This portfolio needs to be set up again on this device.'); }   // the store is gone (storage cleared); nothing to forget
         else { console.error(e); err('Could not unlock: ' + (e.message || e)); } } };
-    $l('#lk-change').onclick = () => changePasswordScreen();
+    if ($l('#lk-change')) $l('#lk-change').onclick = () => changePasswordScreen();
     $l('#lk-forget').onclick = () => forgetScreen(() => unlockScreen(false));
   }
   // the explicit "Forget this portfolio" flow: the one place, besides MAX_TRIES, that removes a portfolio from the device
@@ -896,7 +922,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   async function unlocked(pk8) {
     if (!(await keyMatches(pk8))) return rotatedScreen();
     PK8 = pk8;
-    try { await start(); } catch (e) { console.error(e); return dataErrorScreen(e); }
+    try { await start(); } catch (e) { console.error(e); if (CUR.cloud && e && (e.code === 'signin' || e.code === 'auth')) return signInScreen(CUR.email, e.message); return dataErrorScreen(e); }
     open();
   }
   function dataErrorScreen(e) {
@@ -910,7 +936,377 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   async function refresh() { if (!PK8) return; fetchTry = Date.now(); try { const b = await fetchData(); if (b.exportedAt !== DATA_AT) publish(b); else offlineBanner(); } catch (e) { console.warn('refresh failed', e); } }
   window.pdLock = () => { if (CUR) lock(false); };
   window.pdSwitch = () => chooseScreen();
-  window.pdSelect = (id) => { const p = PORTFOLIOS.find((x) => x.id === id); if (p && !(CUR && CUR.id === p.id)) select(p); };
+  window.pdSelect = (id) => { const p = findPortfolio(id); if (p && !(CUR && CUR.id === p.id)) select(p); };
+
+
+  /* ---------- accounts: anyone can make their own portfolio here (Firebase sign-in + encrypted documents) ----------
+     Firebase (project portfolio-desk-4d14a) is used through its REST APIs only: Identity Toolkit for the email/password
+     account and Firestore for storage. Nothing readable is stored there. At sign-up the browser makes the account's own
+     key pair; the private key is kept in users/{uid}.keys wrapped twice, like a site keys.json: "pwrap" by the account
+     password (PBKDF2 310,000) and "wrap" by a recovery code shown once (PBKDF2 600,000, the setup-key format). Every
+     portfolio document is sealed to the account's public key exactly like an engine document ('portfolio-file-v1') and
+     stored as users/{uid}/docs/<collection>__<doc> {blob, v, at}; saves are pinned to the document's updateTime (a clash
+     is redone on the newer copy, like the GitHub saves). The rules (src/cloud/firestore.rules) let each account touch only
+     its own documents. Market data is shared: the daily job (run_shared_market.py) publishes m/market.enc.json sealed to
+     the MEMBERS key, whose private half signed-in accounts read from shared/members (made by the first account). On this
+     device an account works like any other portfolio (device store 'dev:<id>' under the account password, Face ID), and
+     its Firebase session (refresh token) is kept sealed to the account's key in IndexedDB 'acct:<id>'. */
+  const FB = { apiKey: 'AIzaSyAYvh69A5VWAgmhKXt07RTgLpB_1hYBjA8', projectId: 'portfolio-desk-4d14a' };
+  const FS_BASE = `https://firestore.googleapis.com/v1/projects/${FB.projectId}/databases/(default)/documents`;
+  const ACCTS_LS = 'pd.accounts', SESSION_LABEL = 'portfolio-session-v1', CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTVWXYZ23456789';
+  const MARKET_COLLS = new Set(['market', 'history', 'bench']);
+  let CLOUD = null;     // {uid, email, idToken, refresh, exp} while an account is open
+  let MEMBERS = null;   // the members private key (PKCS8) for the shared market data
+  const accounts = () => (ls.get(ACCTS_LS) || []).filter((a) => a && a.id && a.uid && a.keys);
+  const saveAccount = (a) => ls.set(ACCTS_LS, accounts().filter((x) => x.id !== a.id).concat([a]));
+  const dropAccount = (id) => ls.set(ACCTS_LS, accounts().filter((x) => x.id !== id));
+  const acctPortfolio = (a) => ({ id: a.id, name: a.name, cloud: true, uid: a.uid, email: a.email });
+  const allPortfolios = () => PORTFOLIOS.concat(accounts().map(acctPortfolio));
+  const findPortfolio = (id) => allPortfolios().find((p) => p.id === id);
+  const netErr = () => Object.assign(new Error('The connection failed. Check the internet and try again.'), { code: 'network' });
+  const AUTH_TEXT = { EMAIL_EXISTS: 'An account with that email already exists. Sign in instead.', INVALID_LOGIN_CREDENTIALS: 'Wrong email or password.',
+    EMAIL_NOT_FOUND: 'Wrong email or password.', INVALID_PASSWORD: 'Wrong email or password.', USER_DISABLED: 'This account has been switched off.',
+    TOO_MANY_ATTEMPTS_TRY_LATER: 'Too many tries. Wait a few minutes and try again.', WEAK_PASSWORD: 'Choose a longer password (at least 8 characters).',
+    INVALID_EMAIL: 'That email address does not look right.', MISSING_PASSWORD: 'Enter the password.', OPERATION_NOT_ALLOWED: 'New accounts are switched off right now.',
+    TOKEN_EXPIRED: 'You were signed out. Sign in again.', USER_NOT_FOUND: 'This account no longer exists.', INVALID_REFRESH_TOKEN: 'You were signed out. Sign in again.',
+    CREDENTIAL_TOO_OLD_LOGIN_AGAIN: 'For safety, sign in again first.' };
+  const authErr = (code) => Object.assign(new Error(AUTH_TEXT[String(code).split(/[ :]/)[0]] || 'Sign-in failed (' + code + ')'), { code: 'auth', fb: String(code) });
+  async function fbAuth(endpoint, body) {
+    let r;
+    try { r = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:${endpoint}?key=${FB.apiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), referrerPolicy: 'no-referrer' }); }
+    catch (e) { throw netErr(); }
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw authErr((j.error && j.error.message) || r.status);
+    return j;
+  }
+  async function refreshToken(refresh) {
+    let r;
+    try { r = await fetch(`https://securetoken.googleapis.com/v1/token?key=${FB.apiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'grant_type=refresh_token&refresh_token=' + encodeURIComponent(refresh), referrerPolicy: 'no-referrer' }); }
+    catch (e) { throw netErr(); }
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw authErr((j.error && j.error.message) || 'TOKEN_EXPIRED');
+    return { idToken: j.id_token, refresh: j.refresh_token, uid: j.user_id, exp: Date.now() + (+j.expires_in || 3600) * 1000 };
+  }
+  const session = (a) => ({ uid: a.localId, email: a.email, idToken: a.idToken, refresh: a.refreshToken, exp: Date.now() + (+a.expiresIn || 3600) * 1000 });
+  async function idToken() {
+    if (!CLOUD) throw Object.assign(new Error('Not signed in'), { code: 'auth' });
+    if (!CLOUD.idToken || Date.now() > CLOUD.exp - 300e3) {
+      const t = await refreshToken(CLOUD.refresh);
+      const changed = t.refresh !== CLOUD.refresh;
+      Object.assign(CLOUD, t);
+      if (changed) await storeSession().catch(() => {});
+    }
+    return CLOUD.idToken;
+  }
+  // Firestore REST. Errors carry code: not_found | conflict (a precondition failed: someone saved first) | forbidden | cloud
+  async function fsReq(method, path, body, query, anon) {
+    const url = FS_BASE + '/' + path + (query ? '?' + query : '');
+    for (let attempt = 0; ; attempt++) {
+      const tok = anon ? null : await idToken();
+      let r;
+      try { r = await fetch(url, { method, cache: 'no-store', referrerPolicy: 'no-referrer', body: body ? JSON.stringify(body) : undefined, headers: Object.assign({ 'Content-Type': 'application/json' }, tok ? { Authorization: 'Bearer ' + tok } : {}) }); }
+      catch (e) { throw netErr(); }
+      if (r.ok) return r.json().catch(() => ({}));
+      const j = await r.json().catch(() => ({})), st = (j.error && j.error.status) || '';
+      if (r.status === 401 && attempt === 0 && !anon && CLOUD) { CLOUD.exp = 0; continue; }
+      const code = r.status === 404 ? 'not_found' : (r.status === 409 || st === 'FAILED_PRECONDITION' || st === 'ALREADY_EXISTS' || st === 'ABORTED') ? 'conflict' : r.status === 403 ? 'forbidden' : 'cloud';
+      throw Object.assign(new Error(code === 'forbidden' ? 'Your account is not allowed to do that.' : 'Saving to your account failed (' + (st || r.status) + ')'), { status: r.status, code });
+    }
+  }
+  const fStr = (doc, k) => (doc && doc.fields && doc.fields[k] && doc.fields[k].stringValue) || null;
+  const docId = (c, d) => `${c}__${d}`;
+  async function openBlob(blob, c, d) {
+    let p;
+    try { p = JSON.parse(dec.decode(await unseal(JSON.parse(blob), FILE_LABEL))); }
+    catch (e) { throw Object.assign(new Error(`${c}/${d} in your account cannot be opened with this key`), { code: 'wrong_key' }); }
+    if (!p || !Number.isInteger(p.version) || !p.data || typeof p.data !== 'object' || Array.isArray(p.data)) throw new Error(`${c}/${d} in your account has the wrong shape`);
+    return { version: p.version, updatedAt: p.updatedAt, data: p.data };
+  }
+  async function readCloudDoc(c, d) {
+    let j;
+    try { j = await fsReq('GET', `users/${CLOUD.uid}/docs/${docId(c, d)}`); }
+    catch (e) { if (e.code === 'not_found') return { sha: null, doc: null }; throw e; }
+    return { sha: j.updateTime, doc: await openBlob(fStr(j, 'blob'), c, d) };
+  }
+  async function writeCloudDoc(c, d, env, doc, sha) {
+    const q = sha ? 'currentDocument.updateTime=' + encodeURIComponent(sha) : 'currentDocument.exists=false';
+    const j = await fsReq('PATCH', `users/${CLOUD.uid}/docs/${docId(c, d)}`, { fields: { blob: { stringValue: JSON.stringify(env) }, v: { integerValue: String(doc.version) }, at: { stringValue: doc.updatedAt } } }, q);
+    return j.updateTime || null;
+  }
+  async function deleteCloudDoc(c, d, sha) { await fsReq('DELETE', `users/${CLOUD.uid}/docs/${docId(c, d)}`, null, 'currentDocument.updateTime=' + encodeURIComponent(sha)); }
+  // the members key for the shared market data; the first account to sign in makes it (each half can be created once)
+  async function membersKey() {
+    if (MEMBERS) return MEMBERS;
+    try { MEMBERS = ub64(fStr(await fsReq('GET', 'shared/members'), 'pk8')); return MEMBERS; }
+    catch (e) { if (e.code !== 'not_found') throw e; }
+    const kp = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+    const pk8 = b64big(await crypto.subtle.exportKey('pkcs8', kp.privateKey)), pub = b64big(await crypto.subtle.exportKey('raw', kp.publicKey));
+    try {
+      await fsReq('PATCH', 'shared/members', { fields: { pk8: { stringValue: pk8 }, pub: { stringValue: pub } } }, 'currentDocument.exists=false');
+      await fsReq('PATCH', 'shared/membersPub', { fields: { pub: { stringValue: pub } } }, 'currentDocument.exists=false');
+    } catch (e) { if (e.code !== 'conflict') throw e; }   // another account made it at the same moment: use theirs
+    MEMBERS = ub64(fStr(await fsReq('GET', 'shared/members'), 'pk8'));
+    return MEMBERS;
+  }
+  async function fetchMarket() {
+    let r;
+    try { r = await fetch('m/market.enc.json?t=' + Date.now(), { cache: 'no-store' }); } catch (e) { r = null; }
+    if (!r || !r.ok) return { exportedAt: null, docs: {} };   // not published yet: live prices still come from TradingView
+    const e = await r.json();
+    const gz = await unseal(e, 'portfolio-data-v1', await membersKey());
+    return JSON.parse(await new Response(new Blob([gz]).stream().pipeThrough(new DecompressionStream('gzip'))).text());
+  }
+  // month-end market fields the market job used to write into each portfolio's marks, filled in on the page instead
+  function macroMarks(docs) {
+    const mk = docs['portfolio/marks'], mac = docs['market/macro'];
+    if (!mk || !mk.months || !mac) return;
+    const cur = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date()).slice(0, 7), num = (x) => typeof x === 'number' && isFinite(x);
+    for (const [M, v] of Object.entries(mk.months)) {
+      if (!v || M >= cur) continue;
+      if (!num(v.benchClose) && num((mac.benchClose || {})[M])) v.benchClose = mac.benchClose[M];
+      if (!num(v.cpi) && num((mac.cpiMoM || {})[M])) { v.cpi = mac.cpiMoM[M]; v.cpiSource = mac.cpiSource || null; }
+      if (!num(v.usdegp) && num((mac.fxEom || {})[M])) { v.usdegp = mac.fxEom[M]; v.usdegpSource = mac.fxSource || null; }
+      if (!num(v.cashRate) && num((mac.cashRate || {})[M])) { v.cashRate = mac.cashRate[M]; v.cashRateSource = mac.cashRateSource || null; }
+    }
+  }
+  async function listCloudDocs() {
+    const out = [];
+    let tok = '';
+    do {
+      const j = await fsReq('GET', `users/${CLOUD.uid}/docs`, null, 'pageSize=300' + (tok ? '&pageToken=' + encodeURIComponent(tok) : ''));
+      (j.documents || []).forEach((x) => out.push(x));
+      tok = j.nextPageToken || '';
+    } while (tok);
+    return out;
+  }
+  async function fetchCloudData() {
+    await loadSession();
+    let list, market, saved = null;
+    try { [market, list] = await Promise.all([fetchMarket(), listCloudDocs()]); await idbPut('cache:' + CUR.id, { at: new Date().toISOString(), list: list.map((x) => ({ name: x.name, blob: fStr(x, 'blob') })) }).catch(() => {}); }
+    catch (e) {
+      if (e.code !== 'network') throw e;
+      const c = await idbGet('cache:' + CUR.id).catch(() => null);   // offline: the encrypted copy saved on this device
+      if (!c || !c.list) throw e;
+      list = c.list.map((x) => ({ name: x.name, fields: { blob: { stringValue: x.blob } } })); saved = c.at; market = { exportedAt: null, docs: {} };
+      try { const r = await fetch('m/market.enc.json', { cache: 'force-cache' }); if (r.ok) market = JSON.parse(await new Response(new Blob([await unseal(await r.json(), 'portfolio-data-v1', MEMBERS || undefined)]).stream().pipeThrough(new DecompressionStream('gzip'))).text()); } catch (e2) { /* no saved prices either */ }
+    }
+    const docs = Object.assign({}, market.docs || {});
+    for (const x of list) {
+      const id = String(x.name).split('/').pop(), i = id.indexOf('__'); if (i < 1) continue;
+      const c = id.slice(0, i), d = id.slice(i + 2); if (MARKET_COLLS.has(c)) continue;
+      docs[c + '/' + d] = (await openBlob(fStr(x, 'blob'), c, d)).data;
+    }
+    macroMarks(docs);
+    lastFetch = Date.now(); SAVED_AT = saved;
+    return { exportedAt: market.exportedAt || new Date().toISOString(), docs };
+  }
+  // the Firebase session on this device, sealed to the account's key (readable only while it is unlocked)
+  async function storeSession() { if (CLOUD && CUR && CUR.cloud) await idbPut('acct:' + CUR.id, Object.assign({ v: 1 }, await seal(enc.encode(JSON.stringify({ uid: CLOUD.uid, email: CLOUD.email, refresh: CLOUD.refresh })), SESSION_LABEL))); }
+  async function loadSession() {
+    if (CLOUD && CLOUD.uid === CUR.uid) return;
+    const r = await idbGet('acct:' + CUR.id).catch(() => null);
+    if (!r || !r.ct) throw Object.assign(new Error('Sign in to open your account on this device.'), { code: 'signin' });
+    const s = JSON.parse(dec.decode(await unseal(r, SESSION_LABEL)));
+    CLOUD = { uid: s.uid, email: s.email, refresh: s.refresh, idToken: null, exp: 0 };
+  }
+  // a keys.json-style wrap of the private key under a secret (the recovery code cleaned, or the password as typed, trimmed)
+  async function wrapKey(pk8, secret, iter) {
+    const salt = rnd(16), iv = rnd(12);
+    const k0 = await crypto.subtle.importKey('raw', enc.encode(secret), 'PBKDF2', false, ['deriveKey']);
+    const k = await crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: iter }, k0, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc.encode('portfolio-key-v1') }, k, pk8);
+    return { kdf: 'PBKDF2-SHA256', iter, salt: b64big(salt), iv: b64big(iv), ct: b64big(ct) };
+  }
+  const recoveryCode = () => { const r = rnd(20); return Array.from({ length: 5 }, (_, g) => Array.from(r.slice(g * 4, g * 4 + 4), (x) => CODE_ALPHABET[x % CODE_ALPHABET.length]).join('')).join('-'); };
+  const cleanCode = (c) => String(c).toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const cleanPw = (p) => String(p).trim();
+  // the account is open on this device: remember it, keep the key under the account password (and the session), load the data
+  async function adoptAccount(a, pk8, keys, name, pw, email) {
+    const p = { id: 'u_' + a.localId, name: name || 'My portfolio', cloud: true, uid: a.localId, email };
+    saveAccount({ id: p.id, uid: p.uid, email, name: p.name, keys: { v: 3, pub: keys.pub, wrap: keys.wrap } });
+    CUR = p; ls.set(CUR_LS, p.id); KEYS = { v: 3, pub: keys.pub, wrap: keys.wrap }; PK8 = pk8;
+    CLOUD = session(a);
+    await storeV3(pk8, pw);
+    await storeSession();
+    await membersKey().catch((e) => console.warn('members key unavailable', e));
+  }
+  async function readProfile(uid) {
+    const j = await fsReq('GET', `users/${uid}`);
+    return { keys: JSON.parse(fStr(j, 'keys')), name: fStr(j, 'name') };
+  }
+  function signUpScreen(note) {
+    screen(`<h1>Create your portfolio</h1><p>Your portfolio is private: it is locked with your password before it leaves this device. Nobody else can read it, including the owner of this site.</p>
+      <form id="lk-su" autocomplete="on"><input id="lk-su-name" data-testid="signup-name" placeholder="Your name" aria-label="Your name" autocomplete="name">
+      <input id="lk-su-email" type="email" data-testid="signup-email" placeholder="Email" aria-label="Email" autocomplete="email" autocapitalize="none" spellcheck="false">
+      <input id="lk-new" type="password" data-testid="signup-password" placeholder="Password" aria-label="Password" autocomplete="new-password">
+      <input id="lk-rep" type="password" data-testid="signup-password-repeat" placeholder="Repeat the password" aria-label="Repeat the password" autocomplete="new-password">
+      <ul class="lk-rules" id="lk-rules"></ul>
+      <button class="lk-btn" id="lk-su-go" data-testid="signup-submit" disabled>Create account</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>
+      <div class="lk-links"><button type="button" class="lk-link" id="lk-su-in" data-testid="signup-to-signin">I already have an account</button><button type="button" class="lk-link" id="lk-su-back">Back</button></div>`);
+    const nm = $l('#lk-su-name'), em = $l('#lk-su-email'), nw = $l('#lk-new'), rp = $l('#lk-rep'), go = $l('#lk-su-go'), ul = $l('#lk-rules');
+    const check = () => { const p = nw.value.trim(), rs = [{ ok: nm.value.trim().length > 0, text: 'Your name' }, { ok: /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em.value.trim()), text: 'An email address' },
+      { ok: p.length >= 8, text: 'A password of at least 8 characters' }, { ok: p.length > 0 && rp.value.trim() === p, text: 'Both passwords match' }];
+      ul.innerHTML = rs.map((r) => `<li class="${r.ok ? 'ok' : ''}">${esc(r.text)}</li>`).join(''); go.disabled = !rs.every((r) => r.ok); return !go.disabled; };
+    nm.oninput = em.oninput = nw.oninput = rp.oninput = check; check(); nm.focus();
+    $l('#lk-su-in').onclick = () => signInScreen(em.value.trim());
+    $l('#lk-su-back').onclick = () => chooseScreen();
+    $l('#lk-su').onsubmit = async (ev) => {
+      ev.preventDefault(); if (!check()) return; go.disabled = true; err('Creating your account…');
+      const name = nm.value.trim(), email = em.value.trim(), pw = cleanPw(nw.value);
+      try {
+        const a = await fbAuth('signUp', { email, password: pw, returnSecureToken: true });
+        CLOUD = session(a);
+        const kp = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+        const pk8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', kp.privateKey));
+        const pub = b64big(await crypto.subtle.exportKey('raw', kp.publicKey));
+        const code = recoveryCode();
+        err('Locking your key…');
+        const keys = { v: 3, pub, wrap: await wrapKey(pk8, cleanCode(code), 600000), pwrap: await wrapKey(pk8, pw, 310000) };
+        const pname = name + (/s$/i.test(name) ? "' Portfolio" : "'s Portfolio");
+        await fsReq('PATCH', `users/${a.localId}`, { fields: { keys: { stringValue: JSON.stringify(keys) }, name: { stringValue: pname }, createdAt: { stringValue: new Date().toISOString() } } }, 'currentDocument.exists=false');
+        await adoptAccount(a, pk8, keys, pname, pw, email);
+        recoveryScreen(code, () => onboardScreen(name, pname));
+      } catch (e) { console.error(e); go.disabled = false; err(e.message || String(e)); check(); }
+    };
+  }
+  function recoveryScreen(code, next) {
+    screen(`<h1>Your recovery code</h1><p>Write this down or keep a photo of it somewhere safe. If you ever forget your password, this code is the only way back into your portfolio. It is shown only now.</p>
+      <p class="lk-code" data-testid="recovery-code">${esc(code)}</p>
+      <label class="lk-check"><input type="checkbox" id="lk-rc-ok" data-testid="recovery-saved"> I have saved my recovery code</label>
+      <button class="lk-btn" id="lk-rc-go" data-testid="recovery-continue" disabled>Continue</button>`);
+    const ok = $l('#lk-rc-ok'), go = $l('#lk-rc-go');
+    ok.onchange = () => { go.disabled = !ok.checked; };
+    go.onclick = () => next();
+  }
+  // first-run: the starting point. Tracking starts today: cash plus the shares held now, valued at today's prices
+  function onboardScreen(first, pname, note) {
+    screen(`<h1>Set up your portfolio</h1><p>Tracking starts today. Enter your cash and the shares you hold now; each holding is valued at today's price. You can add past trades later on the Activity tab.</p>
+      <form id="lk-ob" autocomplete="off"><input id="lk-ob-name" data-testid="onboard-name" value="${esc(pname)}" aria-label="Portfolio name" placeholder="Portfolio name">
+      <input id="lk-ob-cash" type="number" step="any" min="0" inputmode="decimal" data-testid="onboard-cash" placeholder="Cash in your broker account (EGP)" aria-label="Cash in your broker account (EGP)">
+      <textarea id="lk-ob-hold" rows="5" data-testid="onboard-holdings" placeholder="Shares you hold, one per line, e.g.\nCOMI 100\nETEL 250" aria-label="Shares you hold"></textarea>
+      <button class="lk-btn" id="lk-ob-go" data-testid="onboard-submit">Start tracking</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>
+      <div class="lk-links"><button type="button" class="lk-link" id="lk-ob-skip" data-testid="onboard-skip">Skip: start with an empty portfolio</button></div>`);
+    const run = async (holdText, cashText) => {
+      const go = $l('#lk-ob-go'); go.disabled = true; err('Setting up…');
+      try { await createPortfolio($l('#lk-ob-name').value.trim() || pname, first, cashText, holdText); await start(); open(); await offerBio(PK8); }
+      catch (e) { console.error(e); go.disabled = false; err(e.message || String(e)); }
+    };
+    $l('#lk-ob').onsubmit = (ev) => { ev.preventDefault(); run($l('#lk-ob-hold').value, $l('#lk-ob-cash').value); };
+    $l('#lk-ob-skip').onclick = () => run('', '0');
+  }
+  async function createPortfolio(pname, holder, cashText, holdText) {
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date());
+    const cash = cashText === '' || cashText == null ? 0 : parseFloat(String(cashText).replace(/[, ]/g, ''));
+    if (!isFinite(cash) || cash < 0) throw new Error('Enter the cash as a number (0 if none).');
+    const mk = await fetchMarket().catch(() => ({ docs: {} }));
+    let quotes = ((mk.docs || {})['market/latest'] || {}).quotes || {};
+    const lines = String(holdText || '').split(/\n/).map((l) => l.trim()).filter(Boolean);
+    if (lines.length && !Object.keys(quotes).length) { try { const L = await livePrices(); quotes = (L && L.quotes) || {}; } catch (e) { /* checked below */ } }
+    const rows = [], items = {}, members = (((mk.docs || {})['bench/egx30'] || {}).members) || [];
+    const rid = () => Math.random().toString(36).slice(2, 10);
+    let invested = 0;
+    for (const l of lines) {
+      const m = l.match(/^([A-Za-z0-9.]+)[\s,:]+([\d,.]+)$/);
+      if (!m) throw new Error(`"${l}": write the symbol and the number of shares, like COMI 100`);
+      const sym = m[1].toUpperCase(), q = parseFloat(m[2].replace(/,/g, '')), qt = quotes[sym];
+      if (!(q > 0)) throw new Error(`"${l}": the number of shares must be above 0`);
+      if (!qt || !(qt.price > 0)) throw new Error(`${sym}: no price for this symbol today. Check the symbol (the EGX ticker, like COMI).`);
+      const name = qt.name || sym, mem = members.find((x) => x.s === sym);
+      items[name] = { name, symbol: sym, sector: (mem && mem.sector) || 'Unclassified' };
+      const amt = Math.round(q * qt.price * 100) / 100; invested += amt;
+      rows.push({ id: rid(), d: today, t: 'Buy', a: name, q, p: qt.price, amt: -amt, acc: 'Main', src: 'manual', note: 'Holding at sign-up, valued at that day\'s price' });
+    }
+    if (invested + cash > 0) rows.unshift({ id: rid(), d: today, t: 'Deposit', amt: Math.round((invested + cash) * 100) / 100, acc: 'Main', src: 'manual', note: 'Starting value at sign-up (cash + holdings at that day\'s prices)' });
+    const L = (mk.docs || {})['market/latest'] || {}, ix = (L.index || {}).EGX30CAPPED || {}, pol = ((L.rates || {}).policy || {}).rate, fx = ((L.fx || {}).USDEGP || {}).price;
+    const settings = { name: pname, portfolioId: CUR.id, inception: today.slice(0, 7), openingValue: 0, cash, cashDate: today, cashSource: 'entered at sign-up',
+      account: { holder, unifiedCode: '' }, riskFree: typeof pol === 'number' ? pol : 0.22, fxStart: typeof fx === 'number' ? fx : 50, benchCloseStart: typeof ix.prevMonthClose === 'number' ? ix.prevMonthClose : null,
+      openThreshold: 0.5, staleDays: 7, volLow: 0.03, volHigh: 0.08, priceDate: today, factsheetEmail: '', returnMethod: 'dietz' };
+    await saveDoc('set', 'portfolio/settings', settings);
+    await saveDoc('set', 'portfolio/assets', { items });
+    await saveDoc('set', 'portfolio/marks', { months: {} });
+    await saveDoc('set', 'ledger/y' + today.slice(0, 4), { rows });
+  }
+  function signInScreen(email, note) {
+    screen(`<h1>Sign in</h1><p>Open your portfolio on this device.</p>
+      <form id="lk-si" autocomplete="on"><input id="lk-si-email" type="email" data-testid="signin-email" placeholder="Email" aria-label="Email" autocomplete="email" autocapitalize="none" spellcheck="false" value="${esc(email || '')}">
+      <input id="lk-si-pw" type="password" data-testid="signin-password" placeholder="Password" aria-label="Password" autocomplete="current-password">
+      <button class="lk-btn" id="lk-si-go" data-testid="signin-submit">Sign in</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>
+      <div class="lk-links"><button type="button" class="lk-link" id="lk-si-forgot" data-testid="signin-forgot">Forgot password</button><button type="button" class="lk-link" id="lk-si-new" data-testid="signin-to-signup">Create an account</button><button type="button" class="lk-link" id="lk-si-back">Back</button></div>`);
+    const em = $l('#lk-si-email'), pw = $l('#lk-si-pw'), go = $l('#lk-si-go');
+    (email ? pw : em).focus();
+    $l('#lk-si-new').onclick = () => signUpScreen();
+    $l('#lk-si-back').onclick = () => chooseScreen();
+    $l('#lk-si-forgot').onclick = async () => {
+      const e = em.value.trim(); if (!e) return err('Enter your email first, then tap Forgot password.');
+      try { await fbAuth('sendOobCode', { requestType: 'PASSWORD_RESET', email: e }); err(''); signInScreen(e, 'If that email has an account, a link to choose a new password is on its way. After that, sign in with the new password; you will need your recovery code once.'); }
+      catch (x) { err(x.message || String(x)); }
+    };
+    $l('#lk-si').onsubmit = async (ev) => {
+      ev.preventDefault(); const e = em.value.trim(), p = cleanPw(pw.value); if (!e || !p) return;
+      go.disabled = true; err('Signing in…');
+      try {
+        const a = await fbAuth('signInWithPassword', { email: e, password: p, returnSecureToken: true });
+        CLOUD = session(a);
+        const prof = await readProfile(a.localId);
+        let pk8;
+        try { pk8 = await unwrapKey(prof.keys.pwrap, p); }
+        catch (x) { if (x && x.name === 'OperationError') return recoverScreen(a, prof, p, e); throw x; }   // the password was reset: the key needs the recovery code once
+        await adoptAccount(a, pk8, prof.keys, prof.name, p, e);
+        await start(); open(); await offerBio(PK8);
+      } catch (x) { console.error(x); go.disabled = false; err(x.message || String(x)); }
+    };
+  }
+  // after a password reset the key is still locked by the old password: the recovery code opens it, and it is re-locked with the new one
+  function recoverScreen(a, prof, pw, email) {
+    screen(`<h1>Enter your recovery code</h1><p>Your password was changed, so this one time your portfolio needs the recovery code you saved when you made the account.</p>
+      <form id="lk-rc" autocomplete="off"><input id="lk-rc-code" data-testid="recover-code" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX" autocapitalize="characters" spellcheck="false" aria-label="Recovery code">
+      <button class="lk-btn" id="lk-rc-go2" data-testid="recover-submit">Unlock</button><div class="lk-err" role="alert"></div></form>
+      <div class="lk-links"><button type="button" class="lk-link" id="lk-rc-back">Back</button></div>`);
+    $l('#lk-rc-back').onclick = () => signInScreen(email);
+    $l('#lk-rc').onsubmit = async (ev) => {
+      ev.preventDefault(); const b = $l('#lk-rc-go2'); b.disabled = true; err('Checking…');
+      try {
+        const pk8 = await unwrapKey(prof.keys.wrap, cleanCode($l('#lk-rc-code').value));
+        const keys = Object.assign({}, prof.keys, { pwrap: await wrapKey(pk8, pw, 310000) });
+        await fsReq('PATCH', `users/${a.localId}`, { fields: { keys: { stringValue: JSON.stringify(keys) } } }, 'updateMask.fieldPaths=keys');
+        await adoptAccount(a, pk8, keys, prof.name, pw, email);
+        await start(); open(); await offerBio(PK8);
+      } catch (x) { console.error(x); b.disabled = false; err(x && x.name === 'OperationError' ? 'That recovery code is not right. Check it and try again.' : (x.message || String(x))); }
+    };
+  }
+  function accountScreen() {
+    screen(`<h1>${esc(CUR.name)}</h1><p>Signed in as <b>${esc(CUR.email || (CLOUD && CLOUD.email) || '')}</b>. Your portfolio is saved in your account, locked with your password.</p>
+      <button class="lk-btn ghost" id="lk-ac-pw" data-testid="account-password">Change password</button>
+      <button class="lk-btn ghost" id="lk-ac-code" data-testid="account-new-code">Make a new recovery code</button>
+      <button class="lk-btn ghost" id="lk-ac-out" data-testid="account-signout">Sign out on this device</button>
+      <div class="lk-links"><button type="button" class="lk-link" id="lk-ac-back" data-testid="account-back">Back</button></div>`);
+    $l('#lk-ac-back').onclick = open;
+    $l('#lk-ac-out').onclick = () => forgetScreen(() => accountScreen(), 'Your portfolio stays in your account; sign in again to open it here. ');
+    $l('#lk-ac-code').onclick = async () => {
+      const b = $l('#lk-ac-code'); b.disabled = true;
+      try {
+        const prof = await readProfile(CLOUD.uid), code = recoveryCode();
+        const keys = Object.assign({}, prof.keys, { wrap: await wrapKey(PK8, cleanCode(code), 600000) });
+        await fsReq('PATCH', `users/${CLOUD.uid}`, { fields: { keys: { stringValue: JSON.stringify(keys) } } }, 'updateMask.fieldPaths=keys');
+        const a = accounts().find((x) => x.id === CUR.id); if (a) saveAccount(Object.assign(a, { keys: { v: 3, pub: keys.pub, wrap: keys.wrap } })); KEYS = { v: 3, pub: keys.pub, wrap: keys.wrap };
+        recoveryScreen(code, open);
+      } catch (e) { console.error(e); b.disabled = false; toast('Could not make a new code: ' + (e.message || e), 'error'); }
+    };
+    $l('#lk-ac-pw').onclick = () => passwordScreen({ title: 'Choose a new password', intro: 'It replaces your account password everywhere. Other devices ask for the new one next time.', back: accountScreen,
+      done: async (npw) => {
+        const p = cleanPw(npw);
+        const j = await fbAuth('update', { idToken: await idToken(), password: p, returnSecureToken: true });
+        if (j.idToken) Object.assign(CLOUD, { idToken: j.idToken, refresh: j.refreshToken || CLOUD.refresh, exp: Date.now() + (+j.expiresIn || 3600) * 1000 });
+        const prof = await readProfile(CLOUD.uid);
+        const keys = Object.assign({}, prof.keys, { pwrap: await wrapKey(PK8, p, 310000) });
+        await fsReq('PATCH', `users/${CLOUD.uid}`, { fields: { keys: { stringValue: JSON.stringify(keys) } } }, 'updateMask.fieldPaths=keys');
+        await storeV3(PK8, p); await storeSession();
+        open(); toast('Password changed.');
+      } });
+  }
+  window.pdAccountMenu = () => { if (CUR && CUR.cloud && PK8) accountScreen(); };
+  window.pdPortfolioList = () => allPortfolios().filter((p) => (CUR && p.id === CUR.id) || !!ls.get('pd.dev.' + p.id)).map((p) => ({ id: p.id, name: p.name }));
+  window.pdCurrentId = () => (CUR ? CUR.id : null);
 
   /* ---------- installable app: the service worker (offline copy) and the "Install app" button ---------- */
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {   // feature-detected; failure only means no offline copy
@@ -958,12 +1354,12 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
     await migrateLegacy();
     ls.del(OLD_BIO_LS);   // the pre-v3 passkey only gated a screen; v3 enrols afresh with PRF
     whenReady(() => { const sw = document.getElementById('pd-switch'); if (sw && PORTFOLIOS.length > 1) sw.hidden = false; });
-    const last = PORTFOLIOS.find((p) => p.id === ls.get(CUR_LS));
-    if (last) select(last); else if (PORTFOLIOS.length === 1) select(PORTFOLIOS[0]); else chooseScreen();
+    const last = findPortfolio(ls.get(CUR_LS));
+    if (last && (last.cloud || ls.get('pd.dev.' + last.id))) select(last); else chooseScreen();
   })();
 })();
 </script>
-<meta name="pd-build" content="6331cac6758c 2026-09-30 01:43">
+<meta name="pd-build" content="6331cac6758c 2026-09-30 02:10">
 <style>
 :root{
   --bg:#F3F6F4; --surface:#FFFFFF; --surface-2:#EDF2EF; --ink:#0F1A17; --ink-2:#46534E; --ink-3:#5F6C67;
@@ -3541,13 +3937,13 @@ const PORTFOLIOS = [
   { id: 'khaled', name: 'Khaled Investment Portfolio', url: 'https://claude.ai/artifact/PNjUN5wQkvgtZDcTML1HFe' },
   { id: 'yassin', name: 'Yassin Investment Portfolio', url: 'https://claude.ai/artifact/6VL6yHnoUHkNqP1PdzRazc' },
 ];
-function currentPortfolioId(){ return S.settings.portfolioId || (PORTFOLIOS.find(p=>p.name===S.settings.name)||{}).id || null; }
+function currentPortfolioId(){ if(window.pdCurrentId) return window.pdCurrentId(); return S.settings.portfolioId || (PORTFOLIOS.find(p=>p.name===S.settings.name)||{}).id || null; }
 function renderSwitch(){
   const cur = currentPortfolioId(), m = $('#pf-menu'); if(!m) return;
-  m.innerHTML = PORTFOLIOS.map(p=>{ const isCur = p.id===cur;
+  m.innerHTML = (window.pdPortfolioList ? window.pdPortfolioList() : PORTFOLIOS).map(p=>{ const isCur = p.id===cur;
     if(window.pdSelect) return `<button type="button" data-pid="${p.id}" class="${isCur?'cur':''}" data-testid="switch-${p.id}">${esc(p.name)}<small>${isCur?'open now':'switch on this site'}</small></button>`;
     return isCur ? `<button type="button" class="cur" data-testid="switch-${p.id}">${esc(p.name)}<small>this page</small></button>`
-                 : `<a href="${p.url}" data-testid="switch-${p.id}">${esc(p.name)}<small>opens its Claude page</small></a>`; }).join('');
+                 : `<a href="${p.url}" data-testid="switch-${p.id}">${esc(p.name)}<small>opens its Claude page</small></a>`; }).join('') + (window.pdSwitch ? '<button type="button" data-testid="switch-other" onclick="pdSwitch()">Another portfolio<small>sign in, or open one with a setup key</small></button>' : '');
 }
 document.addEventListener('click', e=>{
   const menu = $('#pf-menu'); if(!menu) return;
@@ -4645,5 +5041,5 @@ async function refreshNow(btn){ if(window.pdRefreshPrices) return window.pdRefre
 })();
 })();
 </script>
-<div id="pd-bar" data-testid="live-bar"><span><strong id="pd-who"></strong> · <span id="pd-updated">Loading…</span></span><span><span id="pd-prices" data-testid="live-prices-status">Prices from the last daily update</span> · <span id="pd-edit-state" data-testid="edit-state">View only</span></span><span class="pd-actions"><button type="button" id="pd-edit-on" hidden onclick="pdEditOn()" data-testid="edit-on">Turn on editing</button><button type="button" id="pd-run-market" hidden onclick="pdRunJob('market', this)" data-testid="run-market">Update prices</button><button type="button" id="pd-run-sync" hidden onclick="pdRunJob('sync', this)" data-testid="run-sync">Check inbox</button><button type="button" id="pd-edit-menu" hidden onclick="pdEditMenu()" data-testid="edit-menu">Editing</button><button type="button" id="pd-install" hidden onclick="pdInstall()" data-testid="install-app">Install app</button><button type="button" id="pd-switch" hidden onclick="pdSwitch()" data-testid="live-switch-bar">Switch portfolio</button><button type="button" onclick="pdLock()" data-testid="live-lock">Lock</button></span></div>
+<div id="pd-bar" data-testid="live-bar"><span><strong id="pd-who"></strong> · <span id="pd-updated">Loading…</span></span><span><span id="pd-prices" data-testid="live-prices-status">Prices from the last daily update</span> · <span id="pd-edit-state" data-testid="edit-state">View only</span></span><span class="pd-actions"><button type="button" id="pd-edit-on" hidden onclick="pdEditOn()" data-testid="edit-on">Turn on editing</button><button type="button" id="pd-run-market" hidden onclick="pdRunJob('market', this)" data-testid="run-market">Update prices</button><button type="button" id="pd-run-sync" hidden onclick="pdRunJob('sync', this)" data-testid="run-sync">Check inbox</button><button type="button" id="pd-edit-menu" hidden onclick="pdEditMenu()" data-testid="edit-menu">Editing</button><button type="button" id="pd-account" hidden onclick="pdAccountMenu()" data-testid="account-menu">Account</button><button type="button" id="pd-install" hidden onclick="pdInstall()" data-testid="install-app">Install app</button><button type="button" id="pd-switch" hidden onclick="pdSwitch()" data-testid="live-switch-bar">Switch portfolio</button><button type="button" onclick="pdLock()" data-testid="live-lock">Lock</button></span></div>
 </body></html>

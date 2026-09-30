@@ -15,7 +15,10 @@ assert page.count('readOnly:false,') == 1, 'page layout changed: readOnly flag n
 # view-only unless this device has editing turned on for the open portfolio (lock.js pdCanEdit); the page re-renders on change
 page = page.replace('readOnly:false,', 'get readOnly(){ return !(window.pdCanEdit && window.pdCanEdit()); }, set readOnly(v){},')
 # the Claude page's wording for a view-only reader, as it applies on the site
-for a, b in [("toast('The watchlist is edited on the Claude page.','error')", "toast('Turn on editing at the bottom of the page to change the watchlist.','error')"),
+for a, b in [("function currentPortfolioId(){ return", "function currentPortfolioId(){ if(window.pdCurrentId) return window.pdCurrentId(); return"),
+             ("m.innerHTML = PORTFOLIOS.map(p=>{", "m.innerHTML = (window.pdPortfolioList ? window.pdPortfolioList() : PORTFOLIOS).map(p=>{"),
+             ("}).join('');\n}\ndocument.addEventListener('click', e=>{\n  const menu = $('#pf-menu');", "}).join('') + (window.pdSwitch ? '<button type=\"button\" data-testid=\"switch-other\" onclick=\"pdSwitch()\">Another portfolio<small>sign in, or open one with a setup key</small></button>' : '');\n}\ndocument.addEventListener('click', e=>{\n  const menu = $('#pf-menu');"),
+             ("toast('The watchlist is edited on the Claude page.','error')", "toast('Turn on editing at the bottom of the page to change the watchlist.','error')"),
              ("toast('Retrying is only possible on the Claude page.','error')", "toast('Turn on editing at the bottom of the page to retry held emails.','error')"),
              ("as recorded on the Claude page.", "as recorded.")]:
     assert page.count(a) == 1, 'page layout changed: ' + a
@@ -37,10 +40,10 @@ assert len(gf) == 3, 'page layout changed: expected the 3 Google Fonts <link> ta
 for x in gf: page = page.replace(x, '', 1)
 assert 'fonts.googleapis.com' not in page and 'fonts.gstatic.com' not in page, 'a Google Fonts reference is left in the page'
 # Content-Security-Policy: the page loads only itself (fonts included) and talks only to the TradingView scanner and, when editing
-# is on, the GitHub API (pdf.js is never loaded on the site: it is only fetched by the Claude page's statement reader). Inline
+# is on, the GitHub API; accounts talk to Firebase's sign-in and Firestore REST APIs (pdf.js is never loaded on the site: it is only fetched by the Claude page's statement reader). Inline
 # scripts/styles are the whole app, hence 'unsafe-inline'.
 CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
-       "font-src 'self'; connect-src 'self' https://scanner.tradingview.com https://api.github.com; img-src 'self' data: blob:; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'")
+       "font-src 'self'; connect-src 'self' https://scanner.tradingview.com https://api.github.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firestore.googleapis.com; img-src 'self' data: blob:; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'")
 css, js = open('lock.css').read(), open('store.js').read() + '\n' + open('lock.js').read()
 head = '''<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="''' + CSP + '''">
@@ -59,7 +62,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
 <div id="lock" role="dialog" aria-modal="true" aria-label="Unlock portfolio"></div>
 <div id="pd-offline" data-testid="offline-banner" role="status" hidden></div>
 <script>''' + js + '</script>\n'
-bar = '''<div id="pd-bar" data-testid="live-bar"><span><strong id="pd-who"></strong> · <span id="pd-updated">Loading…</span></span><span><span id="pd-prices" data-testid="live-prices-status">Prices from the last daily update</span> · <span id="pd-edit-state" data-testid="edit-state">View only</span></span><span class="pd-actions"><button type="button" id="pd-edit-on" hidden onclick="pdEditOn()" data-testid="edit-on">Turn on editing</button><button type="button" id="pd-run-market" hidden onclick="pdRunJob('market', this)" data-testid="run-market">Update prices</button><button type="button" id="pd-run-sync" hidden onclick="pdRunJob('sync', this)" data-testid="run-sync">Check inbox</button><button type="button" id="pd-edit-menu" hidden onclick="pdEditMenu()" data-testid="edit-menu">Editing</button><button type="button" id="pd-install" hidden onclick="pdInstall()" data-testid="install-app">Install app</button><button type="button" id="pd-switch" hidden onclick="pdSwitch()" data-testid="live-switch-bar">Switch portfolio</button><button type="button" onclick="pdLock()" data-testid="live-lock">Lock</button></span></div>
+bar = '''<div id="pd-bar" data-testid="live-bar"><span><strong id="pd-who"></strong> · <span id="pd-updated">Loading…</span></span><span><span id="pd-prices" data-testid="live-prices-status">Prices from the last daily update</span> · <span id="pd-edit-state" data-testid="edit-state">View only</span></span><span class="pd-actions"><button type="button" id="pd-edit-on" hidden onclick="pdEditOn()" data-testid="edit-on">Turn on editing</button><button type="button" id="pd-run-market" hidden onclick="pdRunJob('market', this)" data-testid="run-market">Update prices</button><button type="button" id="pd-run-sync" hidden onclick="pdRunJob('sync', this)" data-testid="run-sync">Check inbox</button><button type="button" id="pd-edit-menu" hidden onclick="pdEditMenu()" data-testid="edit-menu">Editing</button><button type="button" id="pd-account" hidden onclick="pdAccountMenu()" data-testid="account-menu">Account</button><button type="button" id="pd-install" hidden onclick="pdInstall()" data-testid="install-app">Install app</button><button type="button" id="pd-switch" hidden onclick="pdSwitch()" data-testid="live-switch-bar">Switch portfolio</button><button type="button" onclick="pdLock()" data-testid="live-lock">Lock</button></span></div>
 </body></html>'''
 open(os.path.join(REPO, 'index.html'), 'w').write(head + page + bar)
 json.dump(PORTFOLIOS, open(os.path.join(REPO, 'portfolios.json'), 'w'))

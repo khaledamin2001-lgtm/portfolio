@@ -141,6 +141,7 @@ const cleanup = [];
   try {
     // ---- set up the device ----
     await page.goto(ORIGIN + '/index.html');
+    await $t('live-setup-key-list').click();
     await $t('live-pick-khaled').click();
     await $t('live-setup-key').fill(SETUP); await $t('live-setup-submit').click();
     await $t('live-new-password').fill('correct horse 42'); await $t('live-new-password-repeat').fill('correct horse 42'); await $t('live-password-continue').click();

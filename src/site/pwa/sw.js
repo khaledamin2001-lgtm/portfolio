@@ -1,6 +1,7 @@
 /* Portfolio Desk service worker. build_site.py fills in the stamps and the static file list; the built copy sits at the site
    root next to index.html so its scope is the whole site (…/portfolio/ on GitHub Pages).
-   - The page, portfolios.json and each portfolio's keys.json, data.enc.json and exports/*: network first. If the network has
+   - The page, portfolios.json, the members' shared market data (m/market.enc.json) and each portfolio's keys.json,
+     data.enc.json and exports/*: network first. If the network has
      not answered within 4 s, or fails outright, or answers 5xx, the copy saved on this device is served instead (a 404 or
      any other answer is passed through as is, so a missing file still reads as missing). Every 200 answer replaces the
      saved copy; a .json file is saved only if it parses. The saved copy carries an x-pd-saved-at header: lock.js shows its
@@ -20,7 +21,7 @@ const STATIC = __PD_STATIC__;      // cache-first files, relative to the scope
 const TIMEOUT_MS = 4000;
 const SCOPE = new URL(self.registration.scope);
 const STATIC_SET = new Set(STATIC);
-const DATA = /^(?:portfolios\.json|p\/[^/]+\/(?:keys\.json|data\.enc\.json|exports\/[^/]+))$/;
+const DATA = /^(?:portfolios\.json|m\/market\.enc\.json|p\/[^/]+\/(?:keys\.json|data\.enc\.json|exports\/[^/]+))$/;
 const rel = (url) => (url.origin === self.location.origin && url.pathname.startsWith(SCOPE.pathname) ? decodeURIComponent(url.pathname.slice(SCOPE.pathname.length)) : null);
 const keyFor = (u) => { const url = new URL(u, SCOPE); url.search = ''; url.hash = ''; return url.href; };   // ?t=<now> cache busters share one entry
 const SHELL = keyFor('./');
