@@ -1,0 +1,29 @@
+# A brand-new site account gets its first update (e.g. "Build it from my Thndr emails") within minutes instead of at
+# the next hourly run: every 5 minutes, src/jobs/kick_new_accounts.py looks for accounts created in the last hour and
+# starts the private repo's "Account emails" workflow once for them. Public repo: these runs cost no Actions minutes;
+# the logs show only counts. Needs the repository secret ENGINE_TOKEN (fine-grained token, portfolio-engine only,
+# Actions: Read and write); without it nothing is started.
+name: New accounts
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: new-accounts
+  cancel-in-progress: false
+jobs:
+  kick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: src/jobs/kick_new_accounts.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Start the account job for new accounts
+        env:
+          ENGINE_TOKEN: ${{ secrets.ENGINE_TOKEN }}
+        run: python3 src/jobs/kick_new_accounts.py
