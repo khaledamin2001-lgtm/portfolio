@@ -79,6 +79,9 @@ def list_packages(http):
         st, j = http.json("GET", f"{FS}/mail?pageSize=300" + (f"&pageToken={urllib.parse.quote(tok)}" if tok else ""))
         if st == 404:
             return out
+        if st == 403:      # the mail/ rule is not published yet: nobody can have opted in
+            jc.log("mail/ is not readable (the Firestore rules do not include it yet): no account has email updates")
+            return out
         if st != 200:
             raise jc.JobError("list", f"Firestore answered {st} for mail/")
         for d in j.get("documents") or []:
