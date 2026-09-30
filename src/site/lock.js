@@ -1202,69 +1202,52 @@
   // done: where "Not now" / "Done" leads (the portfolio after sign-up, the Account menu otherwise)
   function gmailScreen(done, first) {
     if (gmailOn()) return gmailStatusScreen(done);
-    screen(`<h1>${first ? 'One more step (optional)' : 'Automatic updates from Thndr'}</h1>
-      <p>Thndr emails you after every trade and sends a statement each month. Connect the Gmail that gets those emails and the site reads them for you twice a day: new trades, dividends and fees are added to your portfolio by themselves, and each monthly statement corrects everything to Thndr's own figures.</p>
-      <p><b>Three short steps, about 3 minutes:</b></p>
-      <ol class="lk-steps"><li>Turn on Google's 2-Step Verification (if it isn't on already).</li><li>Make an "app password" in your Google account.</li><li>Paste it here.</li></ol>
-      <p class="lk-tip"><b>Good to know.</b> An app password lets the site sign in to your Gmail. It only searches for emails from Thndr and never sends, changes or deletes anything. While this is on, the site owner's job can open your portfolio to update it. Turn it off here any time, or delete the app password in your Google account and access stops at once.</p>
-      <button class="lk-btn" id="lk-gm-go" data-testid="gmail-start">Set it up</button>
-      <div class="lk-links"><button type="button" class="lk-link" id="lk-gm-skip" data-testid="gmail-skip">${first ? 'Not now' : 'Back'}</button></div>
-      <p class="lk-tip">Rather not, or your Thndr emails go to another provider? Add trades yourself on the Activity tab, and upload each monthly statement PDF under Settings → Statements &amp; imports. You can connect Gmail later from Account.</p>`);
-    $l('#lk-gm-go').onclick = () => gmailStep1(done, first);
+    screen(`<h1>Add your trades automatically?</h1>
+      <p>Thndr emails you after every trade. If those emails go to your Gmail, the site can read them and add your trades for you, so you never have to type them in.</p>
+      <button class="lk-btn" id="lk-gm-go" data-testid="gmail-start">Yes, set it up (about 3 minutes)</button>
+      <button class="lk-btn ghost" id="lk-gm-skip" data-testid="gmail-skip">${first ? "No thanks, I'll add trades myself" : 'Back'}</button>
+      <p class="lk-hint">You can turn this on or off later: Account → Thndr emails.</p>`);
+    $l('#lk-gm-go').onclick = () => gmailSetupScreen(done, first);
     $l('#lk-gm-skip').onclick = () => done();
   }
-  function gmailStep1(done, first) {
-    screen(`<p class="lk-stepno">Step 1 of 3</p><h1>Turn on 2-Step Verification</h1>
-      <p>Google only lets you make an app password when 2-Step Verification is on.</p>
-      <ol class="lk-steps"><li>Tap <b>Open Google 2-Step Verification</b> below. It opens in a new tab.</li>
-        <li>Sign in with the Gmail that gets your Thndr emails.</li>
-        <li>If it says <b>2-Step Verification is on</b>, you are done here. If not, tap <b>Turn on 2-Step Verification</b> and follow Google's steps (it sends a code to your phone).</li>
-        <li>Come back to this tab and tap <b>Next</b>.</li></ol>
-      <a class="lk-btn ghost" href="${GOOGLE_2SV}" target="_blank" rel="noopener noreferrer" data-testid="gmail-2sv-link">Open Google 2-Step Verification</a>
-      <button class="lk-btn" id="lk-gm-next" data-testid="gmail-step1-next">It's on: Next</button>
-      <div class="lk-links"><button type="button" class="lk-link" id="lk-gm-back">Back</button></div>`);
-    $l('#lk-gm-next').onclick = () => gmailStep2(done, first);
-    $l('#lk-gm-back').onclick = () => gmailScreen(done, first);
-  }
-  function gmailStep2(done, first, change) {
-    screen(`<p class="lk-stepno">${change ? 'New app password' : 'Step 2 of 3'}</p><h1>Make an app password</h1>
-      <ol class="lk-steps"><li>Tap <b>Open Google app passwords</b> below (same Google account).</li>
-        <li>Under <b>App name</b>, type <b>EGX Tracker</b> and tap <b>Create</b>.</li>
-        <li>Google shows a password of 16 letters in a box, like <b>abcd efgh ijkl mnop</b>. Copy it: Google shows it only once.</li>
-        <li>Come back to this tab and tap <b>Next</b>.</li></ol>
-      <p class="lk-tip">Google says "The setting you are looking for is not available for your account"? Then 2-Step Verification is still off: go back one step. Some work or school accounts do not allow app passwords at all.</p>
-      <a class="lk-btn ghost" href="${GOOGLE_APPPW}" target="_blank" rel="noopener noreferrer" data-testid="gmail-apppw-link">Open Google app passwords</a>
-      <button class="lk-btn" id="lk-gm-next" data-testid="gmail-step2-next">I copied it: Next</button>
-      <div class="lk-links"><button type="button" class="lk-link" id="lk-gm-back">Back</button></div>`);
-    $l('#lk-gm-next').onclick = () => gmailStep3(done, first, change);
-    $l('#lk-gm-back').onclick = () => (change ? gmailStatusScreen(done) : gmailStep1(done, first));
-  }
-  async function gmailStep3(done, first, change) {
+  // one screen: the Gmail address, the two Google pages (opened in that Google account), the code, the Thndr name
+  async function gmailSetupScreen(done, first, change) {
     const [set, login] = await Promise.all([readCloudDoc('portfolio', 'settings').catch(() => ({})), readCloudDoc('sync', 'gmail').catch(() => ({}))]);
     const S0 = (set.doc && set.doc.data) || {}, L0 = (login.doc && login.doc.data) || {};
     const email = CUR.email || (CLOUD && CLOUD.email) || '';
     const addr0 = L0.address || (/@(gmail|googlemail)\.com$/i.test(email) ? email : '');
-    screen(`<p class="lk-stepno">${change ? 'New app password' : 'Step 3 of 3'}</p><h1>Connect your Gmail</h1>
+    let n = 0;
+    const step = (title, sub) => `<div class="lk-step"><span class="lk-num">${++n}</span><div><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}</div></div>`;
+    screen(`<h1>${change ? 'New app password' : 'Connect your Gmail'}</h1>
       <form id="lk-gm" autocomplete="off">
-      <label class="lk-lbl" for="lk-gm-addr">Your Gmail address</label>
-      <input id="lk-gm-addr" type="email" data-testid="gmail-address" value="${esc(addr0)}" placeholder="you@gmail.com" autocapitalize="none" spellcheck="false">
-      <label class="lk-lbl" for="lk-gm-pw">The 16-letter app password</label>
-      <input id="lk-gm-pw" data-testid="gmail-app-password" placeholder="abcd efgh ijkl mnop" autocomplete="off" autocapitalize="none" spellcheck="false">
-      ${change ? '' : `<label class="lk-lbl" for="lk-gm-name">Your full name, exactly as in the Thndr app</label>
-      <input id="lk-gm-name" data-testid="gmail-holder" value="${esc(((S0.account || {}).holder) || '')}" placeholder="Full name" autocomplete="name">
-      <p class="lk-hint">Thndr prints it on every invoice and statement. Only emails in this name are used, so nobody else's trades can land in your portfolio.</p>
-      ${mailOn() ? '' : '<label class="lk-check"><input type="checkbox" id="lk-gm-mail" data-testid="gmail-also-mail" checked> Also email me alerts, a Thursday summary and my month-end report (Excel + PDF)</label>'}`}
-      <button class="lk-btn" id="lk-gm-go" data-testid="gmail-connect">${change ? 'Save' : 'Connect Gmail'}</button><div class="lk-err" role="alert"></div></form>
-      <div class="lk-links"><button type="button" class="lk-link" id="lk-gm-back">Back</button></div>`);
-    $l('#lk-gm-back').onclick = () => gmailStep2(done, first, change);
+      ${step('Type your Gmail', 'The one your Thndr emails go to.')}
+      <input id="lk-gm-addr" type="email" data-testid="gmail-address" value="${esc(addr0)}" placeholder="you@gmail.com" autocapitalize="none" spellcheck="false" aria-label="Your Gmail address">
+      ${change ? '' : `${step('Turn on 2-Step Verification', 'Tap the button, then turn it on. Already says <b>On</b>? Skip this step.')}
+      <a class="lk-btn ghost" id="lk-gm-2sv" href="${GOOGLE_2SV}" target="_blank" rel="noopener noreferrer" data-testid="gmail-2sv-link">Open 2-Step Verification ↗</a>`}
+      ${step('Make an app password', 'Tap the button. Type <b>EGX Tracker</b> as the name, tap <b>Create</b>, and copy the 16 letters Google shows you.')}
+      <a class="lk-btn ghost" id="lk-gm-app" href="${GOOGLE_APPPW}" target="_blank" rel="noopener noreferrer" data-testid="gmail-apppw-link">Open App passwords ↗</a>
+      ${step('Paste the 16 letters here')}
+      <input id="lk-gm-pw" data-testid="gmail-app-password" placeholder="abcd efgh ijkl mnop" autocomplete="off" autocapitalize="none" spellcheck="false" aria-label="App password">
+      ${change ? '' : `${step('Your full name, as the Thndr app shows it', 'So only your own Thndr emails are used.')}
+      <input id="lk-gm-name" data-testid="gmail-holder" value="${esc(((S0.account || {}).holder) || '')}" placeholder="First and last name" autocomplete="name" aria-label="Your full name as in Thndr">
+      ${mailOn() ? '' : '<label class="lk-check"><input type="checkbox" id="lk-gm-mail" data-testid="gmail-also-mail" checked> Also email me alerts, a weekly summary and my month-end report</label>'}`}
+      <button class="lk-btn" id="lk-gm-go" data-testid="gmail-connect">${change ? 'Save' : 'Connect'}</button><div class="lk-err" role="alert"></div></form>
+      <p class="lk-hint">Google says "not available for your account"? Do the 2-Step Verification step first. Work or school Gmail accounts may not allow this.</p>
+      <details class="lk-more"><summary>Is this safe?</summary><p>The app password lets the site open your Gmail, but it only searches for emails from Thndr. It never sends, changes or deletes anything. While this is on, the site's daily job can open your portfolio to add the trades. To stop it, turn it off in Account → Thndr emails, or delete "EGX Tracker" in your Google App passwords.</p></details>
+      <div class="lk-links"><button type="button" class="lk-link" id="lk-gm-back" data-testid="gmail-back">Back</button></div>`);
+    $l('#lk-gm-back').onclick = () => (change ? gmailStatusScreen(done) : gmailScreen(done, first));
+    // the Google buttons open the Google account of the address typed (authuser), not whichever is signed in first
+    const links = () => { const a = $l('#lk-gm-addr').value.trim(), q = /@/.test(a) ? '?authuser=' + encodeURIComponent(a) : '';
+      const s = $l('#lk-gm-2sv'); if (s) s.href = GOOGLE_2SV + q; $l('#lk-gm-app').href = GOOGLE_APPPW + q; };
+    $l('#lk-gm-addr').oninput = links; links();
     ($l('#lk-gm-addr').value ? $l('#lk-gm-pw') : $l('#lk-gm-addr')).focus();
     $l('#lk-gm').onsubmit = async (ev) => {
       ev.preventDefault();
       const address = $l('#lk-gm-addr').value.trim(), appPassword = $l('#lk-gm-pw').value.replace(/\s+/g, '').toLowerCase();
       const holder = change ? null : $l('#lk-gm-name').value.replace(/\s+/g, ' ').trim(), also = !change && !!($l('#lk-gm-mail') || {}).checked;
-      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(address)) return err('Enter your Gmail address.');
-      if (!/^[a-z]{16}$/.test(appPassword)) return err('The app password is 16 letters (Google shows it in 4 groups of 4). Copy it again from Google.');
-      if (!change && holder.split(' ').length < 2) return err('Enter your full name as the Thndr app shows it (first and last name at least).');
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(address)) return err('Step 1: type your Gmail address.');
+      if (!/^[a-z]{16}$/.test(appPassword)) return err('The app password is 16 letters (Google shows it as 4 groups of 4). Copy it again from Google.');
+      if (!change && holder.split(' ').length < 2) return err('Type your full name as the Thndr app shows it (first and last name at least).');
       const b = $l('#lk-gm-go'); b.disabled = true; err('Connecting…');
       try {
         await saveDoc('set', 'sync/gmail', { address, appPassword, connectedAt: new Date().toISOString() });
@@ -1283,13 +1266,11 @@
     };
   }
   function gmailDoneScreen(done) {
-    screen(`<h1>Connected</h1><p>Here is what happens now:</p>
-      <ol class="lk-steps"><li>Twice a day (about 4 pm and 6:30 pm Cairo time) the site checks your Gmail for new Thndr emails. The first check is at the next of those times.</li>
-        <li>Trades from your Thndr invoices appear on the Activity tab by themselves.</li>
-        <li>When your monthly statement arrives (early each month), it corrects everything to Thndr's figures and closes the month${(mailPrefs() || {}).reports ? ', and your month-end report (Excel + PDF) is emailed to you' : ''}.</li>
+    screen(`<h1>You're connected</h1>
+      <p>From now on the site checks your Gmail at about <b>4 pm</b> and <b>6:30 pm</b> (Cairo time) and adds your new Thndr trades by itself.</p>
+      <ul class="lk-steps"><li>Your monthly Thndr statement corrects everything to Thndr's numbers${(mailPrefs() || {}).reports ? ', and your month-end report is emailed to you' : ''}.</li>
         <li>If something does not match, nothing is changed and you get an email saying what to check.</li>
-        <li>Only emails from after today count: what you entered when you started covers everything before.</li></ol>
-      <p class="lk-tip">To see the last check, change the app password or turn this off: Account → Thndr emails.</p>
+        <li>Only trades from after today are added: what you entered today covers everything before.</li></ul>
       <button class="lk-btn" id="lk-gm-done" data-testid="gmail-done">Done</button>`);
     $l('#lk-gm-done').onclick = () => done();
   }
@@ -1307,7 +1288,7 @@
       <div class="lk-err" role="alert"></div>
       <div class="lk-links"><button type="button" class="lk-link" id="lk-gm-back" data-testid="gmail-back">Back</button></div>`);
     $l('#lk-gm-back').onclick = () => done();
-    $l('#lk-gm-change').onclick = () => gmailStep2(done, false, true);
+    $l('#lk-gm-change').onclick = () => gmailSetupScreen(done, false, true);
     $l('#lk-gm-off').onclick = async () => {
       const b = $l('#lk-gm-off'); b.disabled = true; err('Turning off…');
       try {

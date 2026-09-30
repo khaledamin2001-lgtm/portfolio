@@ -69,3 +69,7 @@ body.pd-locked>:not(#lock){display:none!important}
 #pd-view{position:sticky;top:0;z-index:50;margin:0;padding:8px 16px;background:var(--accent,#0B6E5F);color:#fff;font:500 13px/1.4 var(--f-ui,system-ui,sans-serif);text-align:center}
 #pd-view button{margin-left:8px;font:600 12.5px/1 var(--f-ui,system-ui,sans-serif);padding:6px 10px;border-radius:7px;border:1px solid #fff;background:transparent;color:#fff;cursor:pointer}
 #lock [hidden]{display:none!important}
+#lock .lk-step{display:flex;gap:10px;align-items:flex-start;text-align:left;margin-top:6px;font-size:14px;color:var(--ink,#0F1A17)}
+#lock .lk-step small{display:block;font-size:12.5px;line-height:1.45;color:var(--ink-3,#5F6C67);margin-top:2px}
+#lock .lk-num{flex:0 0 24px;height:24px;border-radius:50%;background:var(--accent,#0B6E5F);color:#fff;font:700 13px/24px var(--f-ui,system-ui,sans-serif);text-align:center}
+#lock .lk-more p{margin-top:6px;font-size:12.5px}

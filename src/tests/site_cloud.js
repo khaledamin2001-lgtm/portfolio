@@ -208,16 +208,15 @@ const up = (url) => new Promise((res) => { http.get(url, (r) => { r.resume(); re
     await $t('onboard-submit').click();
     // ---- 2b. the optional Gmail steps, explained one at a time ----
     await $t('gmail-start').waitFor({ timeout: 60000 });
-    check('after onboarding, the optional Thndr emails step explains itself and can be skipped', /Thndr emails you after every trade/.test(await page.locator('#lock').textContent()) && await $t('gmail-skip').isVisible());
+    check('after onboarding, a short yes/no question about adding trades automatically', /Add your trades automatically/.test(await page.locator('#lock').textContent()) && await $t('gmail-skip').isVisible());
     await A.shot('gmail-intro');
     await $t('gmail-start').click();
-    check('step 1 links to Google 2-Step Verification in a new tab', (await $t('gmail-2sv-link').getAttribute('href')) === 'https://myaccount.google.com/signinoptions/twosv' && (await $t('gmail-2sv-link').getAttribute('target')) === '_blank');
-    await $t('gmail-step1-next').click();
-    check('step 2 links to Google app passwords and says what to type', (await $t('gmail-apppw-link').getAttribute('href')) === 'https://myaccount.google.com/apppasswords' && /EGX Tracker/.test(await page.locator('#lock').textContent()));
-    await A.shot('gmail-step2');
-    await $t('gmail-step2-next').click();
-    check('step 3 asks for the Gmail, the app password and the name as in Thndr (prefilled)', (await $t('gmail-holder').inputValue()) === 'Omar' && await $t('gmail-app-password').isVisible());
-    await $t('gmail-address').fill('friend.test@example.com'); await $t('gmail-app-password').fill('abc');
+    await $t('gmail-connect').waitFor();
+    check('one screen: numbered steps with a direct button to each Google page', (await $t('gmail-2sv-link').getAttribute('href')).startsWith('https://myaccount.google.com/signinoptions/twosv') && (await $t('gmail-apppw-link').getAttribute('href')).startsWith('https://myaccount.google.com/apppasswords') && (await $t('gmail-2sv-link').getAttribute('target')) === '_blank' && /EGX Tracker/.test(await page.locator('#lock').textContent()));
+    check('it asks for the Gmail, the app password and the name as in Thndr (prefilled)', (await $t('gmail-holder').inputValue()) === 'Omar' && await $t('gmail-app-password').isVisible());
+    await $t('gmail-address').fill('friend.test@example.com');
+    check("the Google buttons open the Google account typed in step 1", (await $t('gmail-apppw-link').getAttribute('href')) === 'https://myaccount.google.com/apppasswords?authuser=friend.test%40example.com');
+    await $t('gmail-app-password').fill('abc');
     await $t('gmail-connect').click();
     check('an app password that is not 16 letters is refused with a hint', /16 letters/.test(await A.lockErr()));
     await $t('gmail-app-password').fill('abcd efgh ijkl mnop'); await $t('gmail-connect').click();
@@ -225,7 +224,7 @@ const up = (url) => new Promise((res) => { http.get(url, (r) => { r.resume(); re
     await $t('gmail-holder').fill('Omar Test'); await A.shot('gmail-step3');
     await $t('gmail-connect').click();
     await $t('gmail-done').waitFor({ timeout: 30000 }).catch(() => {});
-    check('connected: what happens next is explained', /Twice a day/.test(await page.locator('#lock').textContent()));
+    check('connected: what happens next is explained', /4 pm/.test(await page.locator('#lock').textContent()));
     await A.shot('gmail-done');
     await $t('gmail-done').click();
     await A.lockHidden(60000).catch(() => {});
