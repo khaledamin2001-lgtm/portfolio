@@ -2,6 +2,7 @@
 /* A portfolio built from its owner's Thndr monthly statements (the site's "Build it from my Thndr emails").
      node history_seed.js --data <export dir> --inbox <dir> --out <dir> [--now ISO]
    <inbox> is what imap_fetch.py wrote (manifest.json + <id>.json raw emails). Every "Your monthly E-statement" email
+   (and "Your requested E-statement" that covers a whole month: one asked for in the Thndr app for a missing month)
    whose sender is verified (TS.authCheck: Thndr, DKIM pass), whose PDFs name this portfolio's account (TS.ownerCheck) and
    that covers a whole month with a position snapshot is used, one per month, oldest first. The statements are the
    source of truth:
@@ -49,7 +50,7 @@ const isFundName = (n) => /^thndr/i.test(n || '');
   const manifest = fs.existsSync(path.join(args.inbox, 'manifest.json')) ? JSON.parse(fs.readFileSync(path.join(args.inbox, 'manifest.json'))) : [];
   const byMonth = {}; let refused = 0; const skipped = [];
   for (const msg of manifest) {
-    if (!/monthly e-statement/i.test(msg.subject || '')) continue;
+    if (!/(monthly|requested) e-statement/i.test(msg.subject || '') || /us market/i.test(msg.subject || '')) continue;
     try {
       const raw = JSON.parse(fs.readFileSync(path.join(args.inbox, `${msg.id}.json`))).raw;
       if (!TS.authCheck(raw).ok) continue;
@@ -60,9 +61,11 @@ const isFundName = (n) => /^thndr/i.test(n || '');
       const st = TS.parseStatement(docs);
       const why = !st.cash ? 'no account statement' : !st.month ? 'no period' : !st.fullMonth ? `not a whole month (${st.from} to ${st.to})` : !st.snapshot ? 'no position snapshot' : st.cash.end == null ? 'no closing balance' : null;
       if (why) { skipped.push({ month: st.month || null, why }); continue; }
-      const prev = byMonth[st.month];   // the same month twice (a resent email): the later email wins
-      if (prev) skipped.push({ month: st.month, why: 'the same month twice (the later email is used)' });
-      if (!prev || (msg.date || '') > (prev.msg.date || '')) byMonth[st.month] = { msg, st, own };
+      // the same month twice (a resent email, or one requested in the app): Thndr's monthly one wins, then the later
+      const prev = byMonth[st.month], rank = (x) => [/monthly/i.test(x.msg.subject || '') ? 1 : 0, +x.msg.date || 0];
+      const better = !prev || (() => { const a = rank({ msg }), b = rank(prev); return a[0] !== b[0] ? a[0] > b[0] : a[1] > b[1]; })();
+      if (prev) skipped.push({ month: st.month, why: 'the same month twice (one of them is used)' });
+      if (better) byMonth[st.month] = { msg, st, own };
     } catch (e) { skipped.push({ date: msg.date, why: 'unreadable: ' + String((e && e.message) || e).slice(0, 80) }); }
   }
   const cands = Object.keys(byMonth).sort().map((m) => byMonth[m]);

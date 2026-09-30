@@ -5,7 +5,8 @@
   Jul-26  no statement (a gap)
   Aug-26  opens with more cash than Jun-26 closed with; buys the same stock under its trade-line NAME: one asset (the
           readable name, the snapshot's ticker), no share adjustment, one labelled cash adjustment on Aug 1
-  Sep-26  buys another stock; the snapshot no longer lists the first: its shares are taken out and the cash matched
+  Sep-26  (a REQUESTED statement, e.g. asked for in the app) buys another stock; the snapshot no longer lists the first:
+          its shares are taken out and the cash matched
 and a second portfolio, with the shared market data (company names, daily closes):
   Jan-26  the starting point: two stocks of 1 share each under their ISINs, and fund units the snapshot does not list
   Feb-26  both stocks sold under their company names (the same share count: the names and prices tell them apart) and
@@ -28,14 +29,14 @@ def check(name, ok, detail=""):
     fails += 0 if ok else 1
 
 
-def statement(tmp, month, *extra):
+def statement(tmp, month, *extra, subject="Your monthly E-statement"):
     d = os.path.join(tmp, "pdf-" + month)
     subprocess.run([sys.executable, os.path.join(ROOT, "tests", "fixtures", "make_statement_pdf.py"), d, "--month", month, *extra], check=True, capture_output=True)
     m = EmailMessage()
     m["Authentication-Results"] = "mx.google.com; dkim=pass header.i=@thndr.app header.s=s1 header.b=x; spf=pass smtp.mailfrom=system.thndr.app"
     m["From"] = "Thndr <no-reply@system.thndr.app>"
     m["To"] = "someone@example.com"
-    m["Subject"] = "Your monthly E-statement"
+    m["Subject"] = subject
     m.set_content("Your monthly statement is attached.")
     for f in sorted(os.listdir(d)):
         m.add_attachment(open(os.path.join(d, f), "rb").read(), maintype="application", subtype="pdf", filename=f)
@@ -47,7 +48,7 @@ def run_seed(tmp, mails, market=None):
     man = []
     for i, (date, raw) in mails.items():
         json.dump({"id": i, "raw": raw, "internalDate": date}, open(os.path.join(inbox, i + ".json"), "w"))
-        man.append({"id": i, "subject": "Your monthly E-statement", "date": date})
+        man.append({"id": i, "subject": "Your requested E-statement - Sep 2026" if i == "m-sep" else "Your monthly E-statement", "date": date})
     json.dump(man, open(os.path.join(inbox, "manifest.json"), "w"))
     data = os.path.join(tmp, "data")
     os.makedirs(os.path.join(data, "portfolio"))
@@ -71,10 +72,10 @@ def main():
         mails = {
             "m-jun": ("1780000000000", statement(tmp, "2026-06", "--snapname", isin)),   # private-scan: synthetic
             "m-aug": ("1785000000000", statement(tmp, "2026-08", "--start", "9500", "--deposit", "1000", "--qty", "5", "--price", "90", "--close", "91", "--hold", "15", "--snapname", isin)),   # private-scan: synthetic
-            "m-sep": ("1788000000000", statement(tmp, "2026-09", "--start", "10050", "--deposit", "500", "--symbol", "HRHO", "--company", "EFG Holding", "--qty", "30", "--price", "20", "--close", "21")),   # private-scan: synthetic
+            "m-sep": ("1788000000000", statement(tmp, "2026-09", "--start", "10050", "--deposit", "500", "--symbol", "HRHO", "--company", "EFG Holding", "--qty", "30", "--price", "20", "--close", "21", subject="Your requested E-statement - Sep 2026")),   # private-scan: synthetic
         }
         res, rows, items, marks, st, out = run_seed(tmp, mails)
-        check("three monthly statements used, Jun-26 to Sep-26, Jul-26 is a gap",
+        check("three statements used (Sep-26 a requested one), Jun-26 to Sep-26, Jul-26 is a gap",
               res.get("ok") and res["first"] == "2026-06" and res["last"] == "2026-09" and res["lastTo"] == "2026-09-30" and res["months"] == 3 and res["gaps"] == ["2026-07"], json.dumps(res))
         adj = [r for r in rows if r.get("src") == "history-adjust"]
         check("the same stock under its ISIN (snapshot) and its name (trade line) is one asset, with the readable name and the ticker",

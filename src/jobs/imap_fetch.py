@@ -22,7 +22,7 @@ from email import policy
 
 QUERY = 'from:no-reply@system.thndr.app (subject:Invoice OR subject:E-statement) -subject:"US Market" after:{after}'
 # only the monthly statements (the history import looks for its starting point first, without downloading every invoice)
-QUERY_MONTHLY = 'from:no-reply@system.thndr.app subject:"monthly E-statement" -subject:"US Market" after:{after}'
+QUERY_MONTHLY = 'from:no-reply@system.thndr.app {{subject:"monthly E-statement" subject:"requested E-statement"}} -subject:"US Market" after:{after}'
 KEEP = ("Your Thndr Invoice", "Your requested E-statement", "Your monthly E-statement")
 ALL_MAIL = '"[Gmail]/All Mail"'
 
