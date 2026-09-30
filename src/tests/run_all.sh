@@ -69,6 +69,8 @@ step_tools() {
   echo "  test_account_mail.py: $(tail -1 "$O/acctmail.out")"
   python3 src/tests/test_history_seed.py "$T" > "$O/hseed.out" 2>&1 || { tail -20 "$O/hseed.out"; die "test_history_seed.py"; }
   echo "  test_history_seed.py: $(tail -1 "$O/hseed.out")"
+  python3 src/tests/test_fund_fix.py "$T" > "$O/fundfix.out" 2>&1 || { tail -20 "$O/fundfix.out"; die "test_fund_fix.py"; }
+  echo "  test_fund_fix.py: $(tail -1 "$O/fundfix.out")"
 
   say "tools: plan.js"
   node "$T/plan.js" --now 2026-09-24T12:00:00Z > "$O/plan.json"; jsonline "$O/plan.json" "d['today'] == '2026-09-24' and d['weekday'] == 'Thu' and d['isEgxSession'] and d['prevMonth'] == '2026-08'"
