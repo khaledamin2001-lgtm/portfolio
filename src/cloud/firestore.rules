@@ -25,6 +25,12 @@ service cloud.firestore {
       allow create: if request.auth != null;
       allow update, delete: if false;
     }
+    // Email updates (opt-in): an account's package for the site owner's email job, sealed in the browser to the mail key,
+    // so anyone may fetch it (the job reads it without signing in) but nobody else can open it; only the account writes it.
+    match /mail/{uid} {
+      allow read: if true;
+      allow write: if request.auth != null && request.auth.uid == uid;
+    }
     // Everything else: nobody.
     match /{document=**} {
       allow read, write: if false;

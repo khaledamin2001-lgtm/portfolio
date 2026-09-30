@@ -1103,6 +1103,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
     }
     macroMarks(docs);
     lastFetch = Date.now(); SAVED_AT = saved;
+    if (!saved) resealMail().catch((e) => console.warn('email updates not refreshed', e));
     return { exportedAt: market.exportedAt || new Date().toISOString(), docs };
   }
   // the Firebase session on this device, sealed to the account's key (readable only while it is unlocked)
@@ -1282,10 +1283,12 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   function accountScreen() {
     screen(`<h1>${esc(CUR.name)}</h1><p>Signed in as <b>${esc(CUR.email || (CLOUD && CLOUD.email) || '')}</b>. Your portfolio is saved in your account, locked with your password.</p>
       <button class="lk-btn ghost" id="lk-ac-pw" data-testid="account-password">Change password</button>
+      <button class="lk-btn ghost" id="lk-ac-mail" data-testid="account-email">Email updates${mailPrefs() ? ' · on' : ''}</button>
       <button class="lk-btn ghost" id="lk-ac-code" data-testid="account-new-code">Make a new recovery code</button>
       <button class="lk-btn ghost" id="lk-ac-out" data-testid="account-signout">Sign out on this device</button>
       <div class="lk-links"><button type="button" class="lk-link" id="lk-ac-back" data-testid="account-back">Back</button></div>`);
     $l('#lk-ac-back').onclick = open;
+    $l('#lk-ac-mail').onclick = () => mailScreen();
     $l('#lk-ac-out').onclick = () => forgetScreen(() => accountScreen(), 'Your portfolio stays in your account; sign in again to open it here. ');
     $l('#lk-ac-code').onclick = async () => {
       const b = $l('#lk-ac-code'); b.disabled = true;
@@ -1305,9 +1308,56 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
         const prof = await readProfile(CLOUD.uid);
         const keys = Object.assign({}, prof.keys, { pwrap: await wrapKey(PK8, p, 310000) });
         await fsReq('PATCH', `users/${CLOUD.uid}`, { fields: { keys: { stringValue: JSON.stringify(keys) } } }, 'updateMask.fieldPaths=keys');
-        await storeV3(PK8, p); await storeSession();
+        await storeV3(PK8, p); await storeSession(); await resealMail().catch((e) => console.warn('email updates not refreshed', e));
         open(); toast('Password changed.');
       } });
+  }
+  /* Email updates (opt-in): the account lets the site owner's daily email job open its portfolio to write its heads-up
+     alerts and weekly summary (src/jobs/run_account_mail.py). The browser seals {uid, email, refresh token, private key,
+     prefs} to the MAIL key (the public key in p/khaled/keys.json, label 'portfolio-mail-v1') and stores it as Firestore
+     mail/{uid}; switching off deletes it. The job reads the portfolio with the account's own token. */
+  const MAIL_LABEL = 'portfolio-mail-v1';
+  const mailLS = () => 'pd.mail.' + CUR.id;
+  const mailPrefs = () => ls.get(mailLS());
+  const sha = async (s) => b64big(await crypto.subtle.digest('SHA-256', enc.encode(s)));
+  async function sealTo(pubB64, bytes, label) {
+    const saved = KEYS; KEYS = { pub: pubB64 };
+    try { return await seal(bytes, label); } finally { KEYS = saved; }
+  }
+  async function writeMail(prefs) {
+    const mk = await (await fetch('p/khaled/keys.json', { cache: 'no-store' })).json();
+    const pkg = { v: 1, uid: CLOUD.uid, email: prefs.email, refresh: CLOUD.refresh, pk8: b64big(PK8), prefs: { alerts: !!prefs.alerts, weekly: !!prefs.weekly }, at: new Date().toISOString() };
+    const env = Object.assign({ v: 1 }, await sealTo(mk.pub, enc.encode(JSON.stringify(pkg)), MAIL_LABEL));
+    await fsReq('PATCH', `mail/${CLOUD.uid}`, { fields: { pkg: { stringValue: JSON.stringify(env) }, at: { stringValue: pkg.at } } });
+    ls.set(mailLS(), Object.assign({}, prefs, { ref: await sha(CLOUD.refresh) }));
+  }
+  // the job signs in with the saved refresh token: after a password change (which ends old sessions) it is sealed again
+  async function resealMail() { const m = mailPrefs(); if (m && CLOUD && CLOUD.refresh && m.ref !== (await sha(CLOUD.refresh))) await writeMail(m); }
+  function mailScreen(note) {
+    const m = mailPrefs() || { email: CUR.email || (CLOUD && CLOUD.email) || '', alerts: true, weekly: true };
+    screen(`<h1>Email updates</h1><p>Get an email when something needs your attention (a dividend coming up, a target or stop reached, a big drop), and a summary every Thursday night.</p>
+      <p class="lk-tip">To write these, the site owner's email job has to open your portfolio, so while this is on your figures are not private from that job. Switch it off any time: nothing is kept after that.</p>
+      <form id="lk-ml" autocomplete="off"><input id="lk-ml-email" type="email" data-testid="mail-address" value="${esc(m.email)}" placeholder="Email address" aria-label="Email address">
+      <label class="lk-check"><input type="checkbox" id="lk-ml-alerts" data-testid="mail-alerts" ${m.alerts ? 'checked' : ''}> Heads-up alerts</label>
+      <label class="lk-check"><input type="checkbox" id="lk-ml-weekly" data-testid="mail-weekly" ${m.weekly ? 'checked' : ''}> Weekly summary (Thursday night)</label>
+      <button class="lk-btn" id="lk-ml-go" data-testid="mail-on">${mailPrefs() ? 'Save' : 'Turn on email updates'}</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>
+      ${mailPrefs() ? '<button class="lk-btn ghost" id="lk-ml-off" data-testid="mail-off">Turn off email updates</button>' : ''}
+      <div class="lk-links"><button type="button" class="lk-link" id="lk-ml-back" data-testid="mail-back">Back</button></div>`);
+    $l('#lk-ml-back').onclick = accountScreen;
+    $l('#lk-ml').onsubmit = async (ev) => {
+      ev.preventDefault(); const email = $l('#lk-ml-email').value.trim(), alerts = $l('#lk-ml-alerts').checked, weekly = $l('#lk-ml-weekly').checked;
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return err('Enter an email address.');
+      if (!alerts && !weekly) return err('Pick at least one kind of email, or turn email updates off.');
+      const b = $l('#lk-ml-go'); b.disabled = true; err('Saving…');
+      try { await writeMail({ email, alerts, weekly }); open(); toast('Email updates are on. The first ones come after the next market close.'); }
+      catch (e) { console.error(e); b.disabled = false; err(e.message || String(e)); }
+    };
+    const off = $l('#lk-ml-off');
+    if (off) off.onclick = async () => {
+      off.disabled = true;
+      try { await fsReq('DELETE', `mail/${CLOUD.uid}`); ls.del(mailLS()); open(); toast('Email updates are off.'); }
+      catch (e) { console.error(e); off.disabled = false; err(e.message || String(e)); }
+    };
   }
   window.pdAccountMenu = () => { if (CUR && CUR.cloud && PK8) accountScreen(); };
   window.pdPortfolioList = () => allPortfolios().filter((p) => (CUR && p.id === CUR.id) || !!ls.get('pd.dev.' + p.id)).map((p) => ({ id: p.id, name: p.name }));
@@ -1364,7 +1414,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   })();
 })();
 </script>
-<meta name="pd-build" content="55352a29e249 2026-09-30 02:40">
+<meta name="pd-build" content="55352a29e249 2026-09-30 02:47">
 <style>
 :root{
   --bg:#F3F6F4; --surface:#FFFFFF; --surface-2:#EDF2EF; --ink:#0F1A17; --ink-2:#46534E; --ink-3:#5F6C67;

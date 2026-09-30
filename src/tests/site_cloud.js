@@ -38,6 +38,7 @@ fs.cpSync(path.join(ROOT, 'src'), BLD, { recursive: true });
 sh('python3', ['build.py'], { cwd: BLD });
 fs.mkdirSync(SITE, { recursive: true });
 sh('python3', ['build_site.py', SITE], { cwd: path.join(BLD, 'site') });
+sh('python3', [path.join(ROOT, 'src/site/make_keys.py'), path.join(SITE, 'p/khaled/keys.json'), path.join(TMP, 'mailsec')]);   // a throwaway mail key
 const rd = (f) => { const x = JSON.parse(fs.readFileSync(path.join(SYN, f), 'utf8')); return x && x.data && typeof x.data === 'object' ? x.data : x; };
 const MARKET = { 'market/latest': rd('market/latest.json'), 'bench/egx30': rd('bench/egx30.json'), 'market/macro': { benchClose: {}, cpiMoM: {} } };
 for (const f of fs.readdirSync(path.join(SYN, 'history'))) MARKET['history/' + f.replace('.json', '')] = rd('history/' + f);
@@ -71,6 +72,7 @@ function allowed(uid, method, p) {
   if (m) return !!uid && uid === m[1];
   if (p === 'shared/membersPub') return method === 'GET' || (!!uid && method === 'PATCH' && !FB.docs[p]);
   if (p === 'shared/members') return !!uid && (method === 'GET' || (method === 'PATCH' && !FB.docs[p]));
+  if (/^mail\/[^/]+$/.test(p)) return method === 'GET' || (!!uid && uid === p.split('/')[1]);
   return false;
 }
 function firestore(method, url, headers, body) {
@@ -214,6 +216,19 @@ const up = (url) => new Promise((res) => { http.get(url, (r) => { r.resume(); re
     await page.waitForTimeout(1500);
     await page.click('#tab-activity'); await page.waitForTimeout(300);
     check('the statement rows are in the ledger on the page', /Deposit[\s\S]*10,000/.test(await page.locator('#main').textContent()));
+
+    // ---- 4c. email updates: the package is sealed to the mail key and names this account ----
+    await $t('account-menu').click(); await $t('account-email').click();
+    await $t('mail-on').click();
+    for (let i = 0; i < 40 && !FB.docs['mail/' + uid]; i++) await page.waitForTimeout(250);
+    const pkgEnv = FB.docs['mail/' + uid] && FB.docs['mail/' + uid].fields.pkg.stringValue;
+    const opened = pkgEnv ? JSON.parse(sh('python3', ['-c', `import sys, json, os; sys.path.insert(0, ${JSON.stringify(path.join(ROOT, 'src/jobs'))}); import store, run_account_mail as r
+k = store.unlock(${JSON.stringify(path.join(SITE, 'p/khaled/keys.json'))}, open(${JSON.stringify(path.join(TMP, 'mailsec', 'setup_key.txt'))}).read().strip())
+p = r.open_mail_pkg(k, sys.stdin.read()); print(json.dumps({"uid": p["uid"], "email": p["email"], "prefs": p["prefs"], "refresh": bool(p["refresh"]), "pk8": bool(p["pk8"])}))`], { input: pkgEnv, stdio: ['pipe', 'pipe', 'inherit'] })) : null;
+    check('email updates: the package opens only with the mail key and names this account, its address and choices', !!opened && opened.uid === uid && opened.email === EMAIL && opened.prefs.alerts && opened.prefs.weekly && opened.refresh && opened.pk8 && !pkgEnv.includes(EMAIL), JSON.stringify(opened));
+    await $t('account-menu').click(); await $t('account-email').click(); await $t('mail-off').click();
+    for (let i = 0; i < 40 && FB.docs['mail/' + uid]; i++) await page.waitForTimeout(250);
+    check('switching email updates off deletes the package', !FB.docs['mail/' + uid]);
 
     // ---- 5. lock + unlock ----
     await page.click('[data-testid=live-lock]');

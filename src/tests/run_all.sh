@@ -64,6 +64,10 @@ step_tools() {
   if [ -n "${PDFJS_NODE_MODULES:-}" ]; then cp -r "$PDFJS_NODE_MODULES" "$T/node_modules"
   else (cd "$T" && npm install --no-save --no-package-lock --no-audit --no-fund --loglevel=error pdfjs-dist@3.11.174 >/dev/null) || die "npm install pdfjs-dist"; fi
 
+  say "tools: the account email job (fake Firebase and mailer, synthetic data)"
+  python3 src/tests/test_account_mail.py "$S" > "$O/acctmail.out" 2>&1 || { tail -20 "$O/acctmail.out"; die "test_account_mail.py"; }
+  echo "  test_account_mail.py: $(tail -1 "$O/acctmail.out")"
+
   say "tools: plan.js"
   node "$T/plan.js" --now 2026-09-24T12:00:00Z > "$O/plan.json"; jsonline "$O/plan.json" "d['today'] == '2026-09-24' and d['weekday'] == 'Thu' and d['isEgxSession'] and d['prevMonth'] == '2026-08'"
   node "$T/plan.js" > "$O/plan_now.json"; jsonline "$O/plan_now.json" "len(d['today']) == 10 and d['nowCairo'][-6:] in ('+02:00', '+03:00')"
