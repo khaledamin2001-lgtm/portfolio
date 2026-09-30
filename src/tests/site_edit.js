@@ -148,6 +148,9 @@ const cleanup = [];
     if (await $t('live-bio-skip').count()) await $t('live-bio-skip').click();
     await page.waitForFunction(() => document.getElementById('lock').hidden, null, { timeout: 30000 });
     check('unlocked: view only, "Turn on editing" offered', (await $t('edit-on').isVisible()) && /View only on this device/.test(await $t('edit-state').textContent()) && !(await $t('run-market').isVisible()));
+    await page.click('#tab-overview');
+    const heads = await page.locator('[data-testid=heads-up-item]').allTextContents();
+    check('heads-up worked out on the page: the synthetic target hit is listed', heads.some((t) => /reached its target/.test(t)), JSON.stringify(heads));
     await page.click('#tab-settings');
     check('view only: the settings save button is hidden', !(await $t('save-settings').isVisible()));
 

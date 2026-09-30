@@ -370,6 +370,78 @@
   // Daily-linked TWR over a range ({twr, from, to, n}); the same chain as dailyStats(D, range).twr. Lives in engine.js (run() uses it).
   const dailyTwr = PE.dailyTwr;
 
-  const api = { priceBook, makePricer, daily, dailyStats, dailyTwr, capWeights, benchWeights, holdingsAt, estimateMarks, attribution, activeWeights, tradeChecks, income, trailing, calendar, TRADING_DAYS, TRADING_NOTE };
+  // ---------- heads-up list (shared by the inbox job, tools/sync.js digest(), and the page, which computes it live) ----------
+  const EXDIV_DAYS = 7, DRAWDOWN = 0.10;
+  const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const hFmt = (x) => (x == null ? '—' : Number(x).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+  const addDays = (d, k) => new Date(Date.parse(d + 'T00:00:00Z') + k * 864e5).toISOString().slice(0, 10);
+  const dayLbl = (d) => `${+d.slice(8, 10)} ${MONTH_NAMES[+d.slice(5, 7) - 1]}`;
+  const dayLblY = (d) => `${dayLbl(d)} ${d.slice(0, 4)}`;
+  const pctTxt = (x) => `${(x * 100).toFixed(1)}%`;
+  // shares held today per stock (funds and cash-like rows excluded), by ledger name
+  function heldStocks(rows, items) {
+    const sh = {};
+    rows.forEach((t) => { if (!t.a || t.acc === 'MF' || !(t.t === 'Buy' || t.t === 'Sell' || t.t === 'Bonus')) return; sh[t.a] = (sh[t.a] || 0) + (t.t === 'Sell' ? -1 : 1) * (t.q || 0); });
+    const byName = {}; Object.values(items || {}).forEach((a) => { if (a && a.name) byName[a.name] = a; });
+    return Object.entries(sh).filter(([, q]) => q > 0.5).map(([name, q]) => ({ name, q, asset: byName[name] || {} }))
+      .filter((h) => !h.asset.fund && h.asset.symbol).map((h) => ({ ...h, sym: h.asset.symbol.toUpperCase() }));
+  }
+  // Portfolio return index over the last 12 months (daily from history when there is any, else month-end), with the live
+  // value (engine R.live: broker cash + positions at the latest prices) as the last point. Flow-adjusted, so a withdrawal
+  // is never mistaken for a loss. Returns { dd, peak: {d, idx}, now: {d, value}, points, basis } or null (also when there is
+  // no market/latest: without today's prices there is no live value to compare).
+  function drawdownCheck(o) {
+    if (!o.settings || !o.settings.inception || !o.market || !o.market.quotes) return null;
+    const pb = priceBook(o.history || {});
+    const pricer = makePricer(o.assets, PE.runLedger(o.tx), pb);
+    const fallback = (name) => { const p = pricer(name, o.today); return p ? { p: p.p, d: pb.last } : null; };
+    const R = PE.run({ settings: o.settings, marks: o.marks, assets: o.assets, tx: o.tx, market: o.market }, { type: 'Since Inception' }, { today: o.today, fallback });
+    const from = addDays(o.today, -365), pts = [];
+    const Dly = pb.days.length ? daily(o.settings, R.ledger, o.assets, pb, o.marks, o.today) : null;
+    const drows = Dly ? Dly.rows.filter((r) => r.d >= from && r.d <= o.today) : [];
+    let basis = 'daily';
+    if (drows.length) drows.forEach((r, i) => pts.push({ d: r.d, value: r.value, idx: i === 0 ? 1 : pts[i - 1].idx * (1 + (r.ret == null ? 0 : r.ret)) }));
+    else {
+      basis = 'month-end';
+      R.months.filter((r) => r.has && PE.eom(r.month) >= from && r.month < PE.monthOf(o.today)).forEach((r, i) => pts.push({ d: PE.eom(r.month), value: r.value, idx: i === 0 ? 1 : pts[i - 1].idx * (1 + (r.ret == null ? 0 : r.ret)) }));
+    }
+    if (R.live && pts.length) {
+      const last = pts[pts.length - 1], V = R.live.cash + R.live.securities;
+      const flow = o.tx.filter((t) => (t.t === 'Deposit' || t.t === 'Withdrawal') && t.d > last.d && t.d <= o.today).reduce((s, t) => s + (t.amt || 0), 0);
+      if (last.d < o.today && last.value + flow > 0) pts.push({ d: o.today, value: V, idx: last.idx * V / (last.value + flow), live: true });
+    }
+    if (pts.length < 2) return null;
+    const peak = pts.reduce((a, p) => (p.idx > a.idx ? p : a)), now = pts[pts.length - 1];
+    return { dd: now.idx / peak.idx - 1, peak: { d: peak.d, idx: peak.idx }, now: { d: now.d, value: now.value, live: !!now.live }, points: pts.length, basis };
+  }
+  // The heads-up items that follow from the data alone: ex-dividend within a week for a held stock, a held stock at or past
+  // its target / stop, and the portfolio more than 10% below its 12-month high. o = {today, tx, assets, settings, marks,
+  // market, history}. Every check is independent; one that fails is listed in errors. (The inbox job adds overdue statements.)
+  function headsUp(o) {
+    const items = [], errors = [];
+    let drawdown = null;
+    const quotes = (o.market && o.market.quotes) || {};
+    let held = [];
+    try { held = heldStocks(o.tx || [], o.assets); } catch (e) { errors.push('holdings: ' + (e.message || e)); }
+    held.forEach((h) => {
+      const q = quotes[h.sym]; if (!q) return;
+      if (q.exDate && q.exDate >= o.today && q.exDate <= addDays(o.today, EXDIV_DAYS))
+        items.push({ kind: 'exdiv', key: `exdiv:${h.sym}:${q.exDate}`, text: `Ex-dividend on ${dayLbl(q.exDate)}: ${h.sym} ${q.divUp != null ? `${hFmt(q.divUp)} EGP a share` : '(amount not published yet)'}` });
+      const px = Number(q.price), tg = Number(h.asset.target), sp = Number(h.asset.stop);
+      if (!(px > 0)) return;
+      if (h.asset.target != null && h.asset.target !== '' && tg > 0 && px >= tg) items.push({ kind: 'target', key: `target:${h.sym}:${tg}`, text: `${h.sym} reached its target: ${hFmt(px)} vs target ${hFmt(tg)}` });
+      if (h.asset.stop != null && h.asset.stop !== '' && sp > 0 && px <= sp) items.push({ kind: 'stop', key: `stop:${h.sym}:${sp}`, text: `${h.sym} is at or below its stop: ${hFmt(px)} vs stop ${hFmt(sp)}` });
+    });
+    try {
+      drawdown = drawdownCheck(o);
+      if (drawdown && drawdown.dd < -DRAWDOWN) {
+        const band = Math.floor(-drawdown.dd * 10) * 10;
+        items.push({ kind: 'drawdown', key: `drawdown:${drawdown.peak.d}:${band}`, text: `Portfolio down ${pctTxt(-drawdown.dd)} from its 12-month high on ${dayLblY(drawdown.peak.d)} (returns only, deposits and withdrawals left out); value now ${hFmt(drawdown.now.value)} EGP` });
+      }
+    } catch (e) { errors.push('drawdown: ' + (e.message || e)); }
+    return { items, drawdown, errors };
+  }
+
+  const api = { headsUp, drawdownCheck, heldStocks, priceBook, makePricer, daily, dailyStats, dailyTwr, capWeights, benchWeights, holdingsAt, estimateMarks, attribution, activeWeights, tradeChecks, income, trailing, calendar, TRADING_DAYS, TRADING_NOTE };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.PA = api;
 })(this);

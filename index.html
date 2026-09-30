@@ -963,7 +963,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   })();
 })();
 </script>
-<meta name="pd-build" content="498b520390fd 2026-09-30 01:23">
+<meta name="pd-build" content="6331cac6758c 2026-09-30 01:43">
 <style>
 :root{
   --bg:#F3F6F4; --surface:#FFFFFF; --surface-2:#EDF2EF; --ink:#0F1A17; --ink-2:#46534E; --ink-3:#5F6C67;
@@ -2289,7 +2289,79 @@ button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.pl
   // Daily-linked TWR over a range ({twr, from, to, n}); the same chain as dailyStats(D, range).twr. Lives in engine.js (run() uses it).
   const dailyTwr = PE.dailyTwr;
 
-  const api = { priceBook, makePricer, daily, dailyStats, dailyTwr, capWeights, benchWeights, holdingsAt, estimateMarks, attribution, activeWeights, tradeChecks, income, trailing, calendar, TRADING_DAYS, TRADING_NOTE };
+  // ---------- heads-up list (shared by the inbox job, tools/sync.js digest(), and the page, which computes it live) ----------
+  const EXDIV_DAYS = 7, DRAWDOWN = 0.10;
+  const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const hFmt = (x) => (x == null ? '—' : Number(x).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+  const addDays = (d, k) => new Date(Date.parse(d + 'T00:00:00Z') + k * 864e5).toISOString().slice(0, 10);
+  const dayLbl = (d) => `${+d.slice(8, 10)} ${MONTH_NAMES[+d.slice(5, 7) - 1]}`;
+  const dayLblY = (d) => `${dayLbl(d)} ${d.slice(0, 4)}`;
+  const pctTxt = (x) => `${(x * 100).toFixed(1)}%`;
+  // shares held today per stock (funds and cash-like rows excluded), by ledger name
+  function heldStocks(rows, items) {
+    const sh = {};
+    rows.forEach((t) => { if (!t.a || t.acc === 'MF' || !(t.t === 'Buy' || t.t === 'Sell' || t.t === 'Bonus')) return; sh[t.a] = (sh[t.a] || 0) + (t.t === 'Sell' ? -1 : 1) * (t.q || 0); });
+    const byName = {}; Object.values(items || {}).forEach((a) => { if (a && a.name) byName[a.name] = a; });
+    return Object.entries(sh).filter(([, q]) => q > 0.5).map(([name, q]) => ({ name, q, asset: byName[name] || {} }))
+      .filter((h) => !h.asset.fund && h.asset.symbol).map((h) => ({ ...h, sym: h.asset.symbol.toUpperCase() }));
+  }
+  // Portfolio return index over the last 12 months (daily from history when there is any, else month-end), with the live
+  // value (engine R.live: broker cash + positions at the latest prices) as the last point. Flow-adjusted, so a withdrawal
+  // is never mistaken for a loss. Returns { dd, peak: {d, idx}, now: {d, value}, points, basis } or null (also when there is
+  // no market/latest: without today's prices there is no live value to compare).
+  function drawdownCheck(o) {
+    if (!o.settings || !o.settings.inception || !o.market || !o.market.quotes) return null;
+    const pb = priceBook(o.history || {});
+    const pricer = makePricer(o.assets, PE.runLedger(o.tx), pb);
+    const fallback = (name) => { const p = pricer(name, o.today); return p ? { p: p.p, d: pb.last } : null; };
+    const R = PE.run({ settings: o.settings, marks: o.marks, assets: o.assets, tx: o.tx, market: o.market }, { type: 'Since Inception' }, { today: o.today, fallback });
+    const from = addDays(o.today, -365), pts = [];
+    const Dly = pb.days.length ? daily(o.settings, R.ledger, o.assets, pb, o.marks, o.today) : null;
+    const drows = Dly ? Dly.rows.filter((r) => r.d >= from && r.d <= o.today) : [];
+    let basis = 'daily';
+    if (drows.length) drows.forEach((r, i) => pts.push({ d: r.d, value: r.value, idx: i === 0 ? 1 : pts[i - 1].idx * (1 + (r.ret == null ? 0 : r.ret)) }));
+    else {
+      basis = 'month-end';
+      R.months.filter((r) => r.has && PE.eom(r.month) >= from && r.month < PE.monthOf(o.today)).forEach((r, i) => pts.push({ d: PE.eom(r.month), value: r.value, idx: i === 0 ? 1 : pts[i - 1].idx * (1 + (r.ret == null ? 0 : r.ret)) }));
+    }
+    if (R.live && pts.length) {
+      const last = pts[pts.length - 1], V = R.live.cash + R.live.securities;
+      const flow = o.tx.filter((t) => (t.t === 'Deposit' || t.t === 'Withdrawal') && t.d > last.d && t.d <= o.today).reduce((s, t) => s + (t.amt || 0), 0);
+      if (last.d < o.today && last.value + flow > 0) pts.push({ d: o.today, value: V, idx: last.idx * V / (last.value + flow), live: true });
+    }
+    if (pts.length < 2) return null;
+    const peak = pts.reduce((a, p) => (p.idx > a.idx ? p : a)), now = pts[pts.length - 1];
+    return { dd: now.idx / peak.idx - 1, peak: { d: peak.d, idx: peak.idx }, now: { d: now.d, value: now.value, live: !!now.live }, points: pts.length, basis };
+  }
+  // The heads-up items that follow from the data alone: ex-dividend within a week for a held stock, a held stock at or past
+  // its target / stop, and the portfolio more than 10% below its 12-month high. o = {today, tx, assets, settings, marks,
+  // market, history}. Every check is independent; one that fails is listed in errors. (The inbox job adds overdue statements.)
+  function headsUp(o) {
+    const items = [], errors = [];
+    let drawdown = null;
+    const quotes = (o.market && o.market.quotes) || {};
+    let held = [];
+    try { held = heldStocks(o.tx || [], o.assets); } catch (e) { errors.push('holdings: ' + (e.message || e)); }
+    held.forEach((h) => {
+      const q = quotes[h.sym]; if (!q) return;
+      if (q.exDate && q.exDate >= o.today && q.exDate <= addDays(o.today, EXDIV_DAYS))
+        items.push({ kind: 'exdiv', key: `exdiv:${h.sym}:${q.exDate}`, text: `Ex-dividend on ${dayLbl(q.exDate)}: ${h.sym} ${q.divUp != null ? `${hFmt(q.divUp)} EGP a share` : '(amount not published yet)'}` });
+      const px = Number(q.price), tg = Number(h.asset.target), sp = Number(h.asset.stop);
+      if (!(px > 0)) return;
+      if (h.asset.target != null && h.asset.target !== '' && tg > 0 && px >= tg) items.push({ kind: 'target', key: `target:${h.sym}:${tg}`, text: `${h.sym} reached its target: ${hFmt(px)} vs target ${hFmt(tg)}` });
+      if (h.asset.stop != null && h.asset.stop !== '' && sp > 0 && px <= sp) items.push({ kind: 'stop', key: `stop:${h.sym}:${sp}`, text: `${h.sym} is at or below its stop: ${hFmt(px)} vs stop ${hFmt(sp)}` });
+    });
+    try {
+      drawdown = drawdownCheck(o);
+      if (drawdown && drawdown.dd < -DRAWDOWN) {
+        const band = Math.floor(-drawdown.dd * 10) * 10;
+        items.push({ kind: 'drawdown', key: `drawdown:${drawdown.peak.d}:${band}`, text: `Portfolio down ${pctTxt(-drawdown.dd)} from its 12-month high on ${dayLblY(drawdown.peak.d)} (returns only, deposits and withdrawals left out); value now ${hFmt(drawdown.now.value)} EGP` });
+      }
+    } catch (e) { errors.push('drawdown: ' + (e.message || e)); }
+    return { items, drawdown, errors };
+  }
+
+  const api = { headsUp, drawdownCheck, heldStocks, priceBook, makePricer, daily, dailyStats, dailyTwr, capWeights, benchWeights, holdingsAt, estimateMarks, attribution, activeWeights, tradeChecks, income, trailing, calendar, TRADING_DAYS, TRADING_NOTE };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.PA = api;
 })(this);
 
@@ -2728,7 +2800,7 @@ const S = {
   tab: ls.get('pd.tab','overview'),
   sel: ls.get('pd.sel',{type:'Since Inception',asOf:null,from:null,to:null}),
   ledgerFilter: {q:'', type:'', year:'', src:''},
-  R:null, get readOnly(){ return !(window.pdCanEdit && window.pdCanEdit()); }, set readOnly(v){}, bench:null, imports:{}, sync:null, stmt:{list:null, busy:false, error:null, review:null}, fsMonth:null, fallback:null,
+  R:null, get readOnly(){ return !(window.pdCanEdit && window.pdCanEdit()); }, set readOnly(v){}, bench:null, imports:{}, sync:null, stmt:{list:null, busy:false, error:null, review:null}, fsMonth:null, fallback:null, heads:null,
   D:undefined, exportsList:null,
 };
 if(location.hash && /^#[a-z]+$/.test(location.hash)) S.tab = location.hash.slice(1);
@@ -2764,6 +2836,8 @@ function recompute(){
     S.D = null; try{ S.D = PA.daily(S.settings, led, S.assets, pb, S.marks, today); }catch(e){ console.error(e); S.D = null; }
     S.R = PE.run(dataset(true), S.sel, { fallback: S.fallback, daily: S.D || undefined });
     if(S.R.stats && S.R.stats.label) S.R.stats.label = plabel(S.R.stats.label);
+    // heads-up items computed here, from the data on the page (every portfolio gets them, with or without an inbox job)
+    S.heads = null; try{ S.heads = PA.headsUp({ today, tx:allTx(), assets:S.assets, settings:S.settings, marks:S.marks, market:S.market, history:S.history }); }catch(e){ console.error(e); }
   }catch(e){ console.error(e); $('#main').innerHTML = `<div class="empty"><h2>The model hit an error</h2><p>${esc(e.message)}</p></div>`; return; }
   $('#pf-name-text').textContent = S.settings.name || 'Portfolio';
   renderTape(); renderPeriod(); renderTab(false);
@@ -3033,10 +3107,13 @@ function briefPanel(){
   s.push(...moneyWeightedSentences(R));
   return `<div class="panel brief" data-testid="brief"><div class="eyebrow">In brief</div><p>${s.join(' ')} <a href="#analysis" data-go="analysis">Read the full review on the Analysis tab →</a></p></div>`;
 }
-// The inbox job's latest heads-up list (sync/state.digest): ex-dividend dates, targets/stops hit, drawdown, overdue statements.
+// Heads-up list: ex-dividend dates, targets/stops hit and drawdown worked out live on the page (PA.headsUp, the same checks
+// the inbox job runs), plus the inbox job's overdue-statement items (sync/state.digest) when there is an inbox job.
 const HEADS = {exdiv:['Ex-dividend','auto'], target:['Target','win'], stop:['Stop','loss'], drawdown:['Drawdown','loss'], statement:['Statement','stale']};
-function headsUp(){ const dg=S.sync&&S.sync.digest; const items=(dg&&Array.isArray(dg.items))?dg.items.filter(x=>x&&x.text):[]; if(!items.length) return '';
-  return `<div class="panel" data-testid="heads-up"><div class="eyebrow">Heads-up${dg.at?` <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:500">· ${esc(cairoAt(dg.at))}</span>`:''}</div>
+function headsUp(){ const dg=S.sync&&S.sync.digest; const live=(S.heads&&S.heads.items)||[];
+  const job=(dg&&Array.isArray(dg.items))?dg.items.filter(x=>x&&x.text&&(x.kind==='statement'||!S.heads)):[];
+  const seen=new Set(), items=[...live,...job].filter(x=>x&&x.text&&!seen.has(x.key||x.text)&&seen.add(x.key||x.text)); if(!items.length) return '';
+  return `<div class="panel" data-testid="heads-up"><div class="eyebrow">Heads-up <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:500">· ${S.heads?'as of the latest prices':dg&&dg.at?esc(cairoAt(dg.at)):''}</span></div>
     <ul class="heads">${items.map(x=>{ const k=HEADS[x.kind]||['Note','man']; return `<li data-testid="heads-up-item"><span class="pill ${k[1]}">${k[0]}</span><span>${esc(x.text)}</span></li>`; }).join('')}</ul></div>`; }
 // Calendar months covered by the selected period (used to decide whether an annual XIRR is meaningful).
 function periodMonths(range){ const [y1,m1]=range.from.split('-').map(Number), [y2,m2]=range.to.split('-').map(Number); return (y2-y1)*12+(m2-m1)+1; }

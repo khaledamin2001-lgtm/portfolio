@@ -12,8 +12,8 @@
    A new build is a new cache name: the new worker installs, skips waiting, takes over open pages, carries the saved data
    files over from the old cache (only those missing from the new one) and deletes the old caches. */
 'use strict';
-const BUILD = '498b520390fd 2026-09-30 01:23';     // the page's pd-build stamp
-const SITE = 'f72dbc71f4';       // hash over this site build (index.html, sw.js template, icons, manifest, fonts)
+const BUILD = '6331cac6758c 2026-09-30 01:43';     // the page's pd-build stamp
+const SITE = '150c2430e8';       // hash over this site build (index.html, sw.js template, icons, manifest, fonts)
 const PREFIX = 'portfolio-desk-';  // the github.io origin is shared by every Pages site of the account: touch only our caches
 const CACHE = PREFIX + BUILD.split(' ')[0] + '-' + SITE;
 const STATIC = ["manifest.webmanifest", "icon-180.png", "icon-192.png", "icon-512.png", "icon-maskable-192.png", "icon-maskable-512.png", "fonts/ibm-plex-mono-latin-500.woff2", "fonts/ibm-plex-mono-latin-ext-500.woff2", "fonts/public-sans-latin-400.woff2", "fonts/public-sans-latin-ext-400.woff2", "fonts/spectral-latin-500.woff2", "fonts/spectral-latin-600.woff2", "fonts/spectral-latin-ext-500.woff2", "fonts/spectral-latin-ext-600.woff2"];      // cache-first files, relative to the scope

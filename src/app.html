@@ -369,7 +369,7 @@ const S = {
   tab: ls.get('pd.tab','overview'),
   sel: ls.get('pd.sel',{type:'Since Inception',asOf:null,from:null,to:null}),
   ledgerFilter: {q:'', type:'', year:'', src:''},
-  R:null, readOnly:false, bench:null, imports:{}, sync:null, stmt:{list:null, busy:false, error:null, review:null}, fsMonth:null, fallback:null,
+  R:null, readOnly:false, bench:null, imports:{}, sync:null, stmt:{list:null, busy:false, error:null, review:null}, fsMonth:null, fallback:null, heads:null,
   D:undefined, exportsList:null,
 };
 if(location.hash && /^#[a-z]+$/.test(location.hash)) S.tab = location.hash.slice(1);
@@ -404,6 +404,8 @@ function recompute(){
     S.D = null; try{ S.D = PA.daily(S.settings, led, S.assets, pb, S.marks, today); }catch(e){ console.error(e); S.D = null; }
     S.R = PE.run(dataset(true), S.sel, { fallback: S.fallback, daily: S.D || undefined });
     if(S.R.stats && S.R.stats.label) S.R.stats.label = plabel(S.R.stats.label);
+    // heads-up items computed here, from the data on the page (every portfolio gets them, with or without an inbox job)
+    S.heads = null; try{ S.heads = PA.headsUp({ today, tx:allTx(), assets:S.assets, settings:S.settings, marks:S.marks, market:S.market, history:S.history }); }catch(e){ console.error(e); }
   }catch(e){ console.error(e); $('#main').innerHTML = `<div class="empty"><h2>The model hit an error</h2><p>${esc(e.message)}</p></div>`; return; }
   $('#pf-name-text').textContent = S.settings.name || 'Portfolio';
   renderTape(); renderPeriod(); renderTab(false);
@@ -673,10 +675,13 @@ function briefPanel(){
   s.push(...moneyWeightedSentences(R));
   return `<div class="panel brief" data-testid="brief"><div class="eyebrow">In brief</div><p>${s.join(' ')} <a href="#analysis" data-go="analysis">Read the full review on the Analysis tab →</a></p></div>`;
 }
-// The inbox job's latest heads-up list (sync/state.digest): ex-dividend dates, targets/stops hit, drawdown, overdue statements.
+// Heads-up list: ex-dividend dates, targets/stops hit and drawdown worked out live on the page (PA.headsUp, the same checks
+// the inbox job runs), plus the inbox job's overdue-statement items (sync/state.digest) when there is an inbox job.
 const HEADS = {exdiv:['Ex-dividend','auto'], target:['Target','win'], stop:['Stop','loss'], drawdown:['Drawdown','loss'], statement:['Statement','stale']};
-function headsUp(){ const dg=S.sync&&S.sync.digest; const items=(dg&&Array.isArray(dg.items))?dg.items.filter(x=>x&&x.text):[]; if(!items.length) return '';
-  return `<div class="panel" data-testid="heads-up"><div class="eyebrow">Heads-up${dg.at?` <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:500">· ${esc(cairoAt(dg.at))}</span>`:''}</div>
+function headsUp(){ const dg=S.sync&&S.sync.digest; const live=(S.heads&&S.heads.items)||[];
+  const job=(dg&&Array.isArray(dg.items))?dg.items.filter(x=>x&&x.text&&(x.kind==='statement'||!S.heads)):[];
+  const seen=new Set(), items=[...live,...job].filter(x=>x&&x.text&&!seen.has(x.key||x.text)&&seen.add(x.key||x.text)); if(!items.length) return '';
+  return `<div class="panel" data-testid="heads-up"><div class="eyebrow">Heads-up <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:500">· ${S.heads?'as of the latest prices':dg&&dg.at?esc(cairoAt(dg.at)):''}</span></div>
     <ul class="heads">${items.map(x=>{ const k=HEADS[x.kind]||['Note','man']; return `<li data-testid="heads-up-item"><span class="pill ${k[1]}">${k[0]}</span><span>${esc(x.text)}</span></li>`; }).join('')}</ul></div>`; }
 // Calendar months covered by the selected period (used to decide whether an annual XIRR is meaningful).
 function periodMonths(range){ const [y1,m1]=range.from.split('-').map(Number), [y2,m2]=range.to.split('-').map(Number); return (y2-y1)*12+(m2-m1)+1; }
