@@ -763,6 +763,14 @@
   const allPortfolios = () => PORTFOLIOS.concat(accounts().map(acctPortfolio));
   const findPortfolio = (id) => allPortfolios().find((p) => p.id === id);
   const netErr = () => Object.assign(new Error('The connection failed. Check the internet and try again.'), { code: 'network' });
+  // a dropped connection is tried again (up to 3 tries). Safe for every call here: sign-in calls are idempotent, and a save
+  // is pinned to the document's updateTime, so a repeat of one that did land is refused and redone on the newer copy.
+  async function netFetch(url, opt) {
+    for (let i = 0; ; i++) {
+      try { return await fetch(url, opt); }
+      catch (e) { if (i >= 2) throw netErr(); await sleep(600 * 3 ** i); }
+    }
+  }
   const AUTH_TEXT = { EMAIL_EXISTS: 'An account with that email already exists. Sign in instead.', INVALID_LOGIN_CREDENTIALS: 'Wrong email or password.',
     EMAIL_NOT_FOUND: 'Wrong email or password.', INVALID_PASSWORD: 'Wrong email or password.', USER_DISABLED: 'This account has been switched off.',
     TOO_MANY_ATTEMPTS_TRY_LATER: 'Too many tries. Wait a few minutes and try again.', WEAK_PASSWORD: 'Choose a longer password (at least 8 characters).',
@@ -772,16 +780,14 @@
   const authErr = (code) => Object.assign(new Error(AUTH_TEXT[String(code).split(/[ :]/)[0]] || 'Sign-in failed (' + code + ')'), { code: 'auth', fb: String(code) });
   async function fbAuth(endpoint, body) {
     let r;
-    try { r = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:${endpoint}?key=${FB.apiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), referrerPolicy: 'no-referrer' }); }
-    catch (e) { throw netErr(); }
+    r = await netFetch(`https://identitytoolkit.googleapis.com/v1/accounts:${endpoint}?key=${FB.apiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), referrerPolicy: 'no-referrer' });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw authErr((j.error && j.error.message) || r.status);
     return j;
   }
   async function refreshToken(refresh) {
     let r;
-    try { r = await fetch(`https://securetoken.googleapis.com/v1/token?key=${FB.apiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'grant_type=refresh_token&refresh_token=' + encodeURIComponent(refresh), referrerPolicy: 'no-referrer' }); }
-    catch (e) { throw netErr(); }
+    r = await netFetch(`https://securetoken.googleapis.com/v1/token?key=${FB.apiKey}`, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: 'grant_type=refresh_token&refresh_token=' + encodeURIComponent(refresh), referrerPolicy: 'no-referrer' });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw authErr((j.error && j.error.message) || 'TOKEN_EXPIRED');
     return { idToken: j.id_token, refresh: j.refresh_token, uid: j.user_id, exp: Date.now() + (+j.expires_in || 3600) * 1000 };
@@ -803,8 +809,7 @@
     for (let attempt = 0; ; attempt++) {
       const tok = anon ? null : await idToken();
       let r;
-      try { r = await fetch(url, { method, cache: 'no-store', referrerPolicy: 'no-referrer', body: body ? JSON.stringify(body) : undefined, headers: Object.assign({ 'Content-Type': 'application/json' }, tok ? { Authorization: 'Bearer ' + tok } : {}) }); }
-      catch (e) { throw netErr(); }
+      r = await netFetch(url, { method, cache: 'no-store', referrerPolicy: 'no-referrer', body: body ? JSON.stringify(body) : undefined, headers: Object.assign({ 'Content-Type': 'application/json' }, tok ? { Authorization: 'Bearer ' + tok } : {}) });
       if (r.ok) return r.json().catch(() => ({}));
       const j = await r.json().catch(() => ({})), st = (j.error && j.error.status) || '';
       if (r.status === 401 && attempt === 0 && !anon && CLOUD) { CLOUD.exp = 0; continue; }
