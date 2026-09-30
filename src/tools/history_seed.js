@@ -59,19 +59,21 @@ const isFundName = (n) => /^thndr/i.test(n || '');
       const own = TS.ownerCheck(docs, settings);
       if (own.error) { refused++; skipped.push({ date: msg.date, why: 'another account' }); continue; }
       const st = TS.parseStatement(docs);
-      const why = !st.cash ? 'no account statement' : !st.month ? 'no period' : !st.fullMonth ? `not a whole month (${st.from} to ${st.to})` : !st.snapshot ? 'no position snapshot' : st.cash.end == null ? 'no closing balance' : null;
+      const why = !st.cash ? 'no account statement' : !st.month ? 'no period' : !st.fullMonth ? `not a whole month (${st.from} to ${st.to})` : st.cash.end == null ? 'no closing balance' : null;
       if (why) { skipped.push({ month: st.month || null, why }); continue; }
-      // the same month twice (a resent email, or one requested in the app): Thndr's monthly one wins, then the later
-      const prev = byMonth[st.month], rank = (x) => [/monthly/i.test(x.msg.subject || '') ? 1 : 0, +x.msg.date || 0];
-      const better = !prev || (() => { const a = rank({ msg }), b = rank(prev); return a[0] !== b[0] ? a[0] > b[0] : a[1] > b[1]; })();
+      // the same month twice (a resent email, or one requested in the app): one with a position snapshot wins, then
+      // Thndr's monthly one, then the later
+      const prev = byMonth[st.month], rank = (x) => [x.st.snapshot ? 1 : 0, /monthly/i.test(x.msg.subject || '') ? 1 : 0, +x.msg.date || 0];
+      const better = !prev || (() => { const a = rank({ msg, st }), b = rank(prev); for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i]; return false; })();
       if (prev) skipped.push({ month: st.month, why: 'the same month twice (one of them is used)' });
       if (better) byMonth[st.month] = { msg, st, own };
     } catch (e) { skipped.push({ date: msg.date, why: 'unreadable: ' + String((e && e.message) || e).slice(0, 80) }); }
   }
   const cands = Object.keys(byMonth).sort().map((m) => byMonth[m]);
-  if (!cands.length) {
+  const s0 = cands.findIndex((c) => c.st.snapshot);   // the first month whose holdings Thndr printed
+  if (s0 < 0) {
     const holder = ((settings.account || {}).holder || '').trim();
-    console.log(JSON.stringify({ ok: false, error: refused ? `found ${refused} monthly statement${refused > 1 ? 's' : ''}, but not in the name "${holder}" (the name set as it appears in the Thndr app)` : 'no monthly Thndr statement in this Gmail yet' }));
+    console.log(JSON.stringify({ ok: false, error: refused ? `found ${refused} monthly statement${refused > 1 ? 's' : ''}, but not in the name "${holder}" (the name set as it appears in the Thndr app)` : (cands.length ? 'no monthly Thndr statement with your holdings (position snapshot) in this Gmail yet' : 'no monthly Thndr statement in this Gmail yet') }));
     return;
   }
   const now = args.now || new Date().toISOString();
@@ -120,11 +122,14 @@ const isFundName = (n) => /^thndr/i.test(n || '');
   };
 
   // ---- one build of the portfolio; openFunds = fund units held before the first statement that it never printed ----
-  const build = (openFunds) => {
+  // start = {idx, empty}: from cands[idx]; empty = from nothing (that month's opening cash, no holdings) and that month's
+  // rows, else from cands[idx]'s snapshot and closing cash
+  const build = (openFunds, start) => {
+    const list = cands.slice(start.idx);
     const items = {};            // canonical name -> asset
     const alias = {};            // lower-case other name -> canonical name
     const snapTicker = {};       // lower-case snapshot name -> ticker, from every statement's snapshot
-    cands.forEach(({ st }) => st.snapshot.holdings.forEach((h) => { if (h.name) snapTicker[h.name.toLowerCase()] = h.ticker; }));
+    cands.forEach(({ st }) => st.snapshot && st.snapshot.holdings.forEach((h) => { if (h.name) snapTicker[h.name.toLowerCase()] = h.ticker; }));
     const bySymbol = (tk) => tk && Object.values(items).find((a) => (a.symbol || '').toUpperCase() === tk.toUpperCase());
     const sectorOf = (tk) => { const m = tk && (bench.members || []).find((x) => x.s === tk); return (m && m.sector) || 'Unclassified'; };
     const fundAsset = (name) => ({ name, fund: true, sector: /saving/i.test(name) ? 'Cash & Savings' : 'Mutual Funds' });
@@ -174,17 +179,21 @@ const isFundName = (n) => /^thndr/i.test(n || '');
     const isStock = (name) => !isFund(name);
     const lastPrice = (name) => { const t = rows.filter((x) => x.a === name && x.p > 0).pop(); return t ? t.p : 0; };
 
-    // ---- the starting point: the earliest statement's snapshot and closing cash, plus fund units it did not print ----
-    const first = cands[0], M0 = first.st.month, to0 = first.st.to;
+    // ---- the starting point: the earliest statement's snapshot and closing cash, plus fund units it did not print; or,
+    // for an empty start, only that statement's opening cash (its rows are added like any later month's) ----
+    const first = list[0], M0 = first.st.month, to0 = start.empty ? addDays(first.st.from, -1) : first.st.to;
     let sec = 0, fundsOpen = 0;
-    for (const h of first.st.snapshot.holdings) {
-      if (!(h.qty > 0) || !(h.value > 0)) continue;
-      const fund = h.kind === 'fund';
-      const nm = fund ? fundName(h) : (h.name || h.ticker);
-      const name = fund ? (known(nm) || ((items[nm] = fundAsset(nm)), nm)) : (bySymbol(h.ticker) || {}).name || ((items[nm] = { name: nm, symbol: h.ticker, sector: sectorOf(h.ticker) }), nm);
-      const price = h.price > 0 ? h.price : h.value / h.qty;
-      const amt = r2(h.qty * price); sec += amt;
-      rows.push({ id: rid(), d: to0, t: 'Buy', a: name, q: h.qty, p: price, amt: -amt, acc: fund ? 'MF' : 'Main', src: 'history', opening: true, note: `Held on ${to0}, from the Thndr ${lbl(M0)} statement` });
+    const marks = Object.assign({}, marks0), imports = {};
+    if (!start.empty) {
+      for (const h of first.st.snapshot.holdings) {
+        if (!(h.qty > 0) || !(h.value > 0)) continue;
+        const fund = h.kind === 'fund';
+        const nm = fund ? fundName(h) : (h.name || h.ticker);
+        const name = fund ? (known(nm) || ((items[nm] = fundAsset(nm)), nm)) : (bySymbol(h.ticker) || {}).name || ((items[nm] = { name: nm, symbol: h.ticker, sector: sectorOf(h.ticker) }), nm);
+        const price = h.price > 0 ? h.price : h.value / h.qty;
+        const amt = r2(h.qty * price); sec += amt;
+        rows.push({ id: rid(), d: to0, t: 'Buy', a: name, q: h.qty, p: price, amt: -amt, acc: fund ? 'MF' : 'Main', src: 'history', opening: true, note: `Held on ${to0}, from the Thndr ${lbl(M0)} statement` });
+      }
     }
     Object.entries(openFunds).forEach(([n, f]) => {
       if (!items[n]) items[n] = fundAsset(n);
@@ -193,11 +202,15 @@ const isFundName = (n) => /^thndr/i.test(n || '');
         note: `Held on ${to0}: the ${lbl(M0)} statement does not list fund units; later fund statements sell these`, });
     });
     const holdings0 = rows.length;
-    rows.unshift({ id: rid(), d: to0, t: 'Deposit', amt: r2(r2(first.st.cash.end) + sec), acc: 'Main', src: 'history', opening: true, note: `Starting value on ${to0} (cash + holdings, from the Thndr ${lbl(M0)} statement)` });
-    const snapFunds0 = first.st.snapshot.holdings.some((h) => h.kind === 'fund');
-    const marks = Object.assign({}, marks0, { [M0]: { cash: r2(first.st.cash.end), securities: r2(first.st.snapshot.total + (snapFunds0 ? 0 : fundsOpen)), provisional: false, source: 'statement' } });
-    const imports = { [M0]: { month: M0, messageId: first.msg.id, postedAt: now, added: rows.length, corrected: 0, removed: 0, marks: true, fullMonth: true, postedBy: 'history import (starting point)', reportsPending: true } };
-    const gaps = []; let adjTotal = 0; const adjMonths = [];
+    const cash0 = start.empty ? r2(first.st.cash.start || 0) : r2(first.st.cash.end);
+    if (cash0 + sec > 0.005 || !start.empty) rows.unshift({ id: rid(), d: to0, t: 'Deposit', amt: r2(cash0 + sec), acc: 'Main', src: 'history', opening: true,
+      note: start.empty ? `Cash on ${to0}, from the Thndr ${lbl(M0)} statement's opening balance` : `Starting value on ${to0} (cash + holdings, from the Thndr ${lbl(M0)} statement)` });
+    const snapFunds0 = !start.empty && first.st.snapshot.holdings.some((h) => h.kind === 'fund');
+    if (!start.empty) {
+      marks[M0] = { cash: r2(first.st.cash.end), securities: r2(first.st.snapshot.total + (snapFunds0 ? 0 : fundsOpen)), provisional: false, source: 'statement' };
+      imports[M0] = { month: M0, messageId: first.msg.id, postedAt: now, added: rows.length, corrected: 0, removed: 0, marks: true, fullMonth: true, postedBy: 'history import (starting point)', reportsPending: true };
+    }
+    const gaps = []; let adjTotal = 0; const adjMonths = [], adjHold = {};
     // fund units that went below zero before a snapshot first listed funds: held from the start (pass 2 adds them)
     const fundLow = {}; let fundsSeen = snapFunds0;
     const trackFunds = (upTo) => {
@@ -211,8 +224,8 @@ const isFundName = (n) => /^thndr/i.test(n || '');
     };
 
     // ---- every later month: its rows, then the month-end matched to Thndr's figures ----
-    let prevM = M0;
-    for (const { msg, st } of cands.slice(1)) {
+    let prevM = start.empty ? prevMonth(M0) : M0;
+    for (const { msg, st } of start.empty ? list : list.slice(1)) {
       const M = st.month, tag = `history-${M}`;
       for (let g = nextMonth(prevM); g < M; g = nextMonth(g)) gaps.push(g);
       prevM = M;
@@ -236,36 +249,38 @@ const isFundName = (n) => /^thndr/i.test(n || '');
         push(o, adds);
       });
       tieNames();
-      const snapFunds = st.snapshot.holdings.some((h) => h.kind === 'fund');
+      const snapFunds = !!st.snapshot && st.snapshot.holdings.some((h) => h.kind === 'fund');
       trackFunds(snapFunds ? addDays(st.to, -1) : st.to);
-      // stocks at the month's end vs the snapshot
-      let sh = shares(st.to);
-      const target = {}, tprice = {};
-      const loose = () => Object.keys(sh).filter((n) => Math.abs(sh[n]) >= 0.5 && items[n] && isStock(n) && !items[n].symbol && !(n in target));
-      st.snapshot.holdings.filter((h) => h.kind !== 'fund' && h.qty > 0).forEach((h) => {
-        const a = bySymbol(h.ticker) || (h.name && known(h.name) && items[known(h.name)]) || null;
-        let name = a ? a.name : null, have = name ? sh[name] || 0 : 0;
-        if (Math.abs(have - h.qty) >= 0.5) {
-          // a name-only stock (trade-line wording) that makes up exactly the difference is this security
-          const c = pick(loose().filter((n) => n !== name && Math.abs(have + sh[n] - h.qty) < 0.5), h.ticker);
-          if (c) { if (name) name = unify(name, c); else { name = c; setSymbol(c, h.ticker); } sh = shares(st.to); }
-        }
-        if (!name) { name = resolve(h.name || h.ticker, false, h.ticker); if (!items[name].symbol) setSymbol(name, h.ticker); }
-        target[name] = (target[name] || 0) + h.qty; tprice[name] = h.price > 0 ? h.price : h.value / h.qty;
-      });
-      // a ticker stock the snapshot no longer lists, and a name-only stock whose shares cancel it (sold under its name)
-      Object.keys(sh).forEach((s) => {
-        if (!items[s] || !items[s].symbol || s in target || !isStock(s) || Math.abs(sh[s] || 0) < 0.5) return;
-        const c = pick(loose().filter((n) => n !== s && Math.abs(sh[s] + sh[n]) < 0.5), items[s].symbol);
-        if (c) { unify(s, c); sh = shares(st.to); }
-      });
-      Object.keys(target).forEach((n) => {
-        const have = sh[n] || 0, d = r2(target[n] - have);
-        if (Math.abs(d) >= 0.5) adjust(d > 0 ? 'Buy' : 'Sell', n, Math.abs(d), tprice[n], `${n} set to the ${target[n]} shares on the Thndr ${lbl(M)} snapshot (the statement's trades gave ${r2(have)})`);
-      });
-      Object.keys(sh).filter((n) => !(n in target) && Math.abs(sh[n]) >= 0.5 && isStock(n)).forEach((n) => {
-        adjust(sh[n] > 0 ? 'Sell' : 'Buy', n, r2(Math.abs(sh[n])), lastPrice(n), `${n} is not on the Thndr ${lbl(M)} snapshot, so its ${r2(sh[n])} shares are set to none`);
-      });
+      if (st.snapshot) {
+        // stocks at the month's end vs the snapshot
+        let sh = shares(st.to);
+        const target = {}, tprice = {};
+        const loose = () => Object.keys(sh).filter((n) => Math.abs(sh[n]) >= 0.5 && items[n] && isStock(n) && !items[n].symbol && !(n in target));
+        st.snapshot.holdings.filter((h) => h.kind !== 'fund' && h.qty > 0).forEach((h) => {
+          const a = bySymbol(h.ticker) || (h.name && known(h.name) && items[known(h.name)]) || null;
+          let name = a ? a.name : null, have = name ? sh[name] || 0 : 0;
+          if (Math.abs(have - h.qty) >= 0.5) {
+            // a name-only stock (trade-line wording) that makes up exactly the difference is this security
+            const c = pick(loose().filter((n) => n !== name && Math.abs(have + sh[n] - h.qty) < 0.5), h.ticker);
+            if (c) { if (name) name = unify(name, c); else { name = c; setSymbol(c, h.ticker); } sh = shares(st.to); }
+          }
+          if (!name) { name = resolve(h.name || h.ticker, false, h.ticker); if (!items[name].symbol) setSymbol(name, h.ticker); }
+          target[name] = (target[name] || 0) + h.qty; tprice[name] = h.price > 0 ? h.price : h.value / h.qty;
+        });
+        // a ticker stock the snapshot no longer lists, and a name-only stock whose shares cancel it (sold under its name)
+        Object.keys(sh).forEach((s) => {
+          if (!items[s] || !items[s].symbol || s in target || !isStock(s) || Math.abs(sh[s] || 0) < 0.5) return;
+          const c = pick(loose().filter((n) => n !== s && Math.abs(sh[s] + sh[n]) < 0.5), items[s].symbol);
+          if (c) { unify(s, c); sh = shares(st.to); }
+        });
+        Object.keys(target).forEach((n) => {
+          const have = sh[n] || 0, d = r2(target[n] - have);
+          if (Math.abs(d) >= 0.5) adjust(d > 0 ? 'Buy' : 'Sell', n, Math.abs(d), tprice[n], `${n} set to the ${target[n]} shares on the Thndr ${lbl(M)} snapshot (the statement's trades gave ${r2(have)})`);
+        });
+        Object.keys(sh).filter((n) => !(n in target) && Math.abs(sh[n]) >= 0.5 && isStock(n)).forEach((n) => {
+          adjust(sh[n] > 0 ? 'Sell' : 'Buy', n, r2(Math.abs(sh[n])), lastPrice(n), `${n} is not on the Thndr ${lbl(M)} snapshot, so its ${r2(sh[n])} shares are set to none`);
+        });
+      }
       // fund units, when the snapshot lists them
       if (snapFunds) {
         fundsSeen = true;
@@ -287,26 +302,56 @@ const isFundName = (n) => /^thndr/i.test(n || '');
           note: `Adjustment: cash on ${st.to} set to the Thndr ${lbl(M)} statement's closing balance ${fmt(st.cash.end)} (the statement's rows gave ${fmt(close)}${rc.unknown.length ? `; ${rc.unknown.length} line${rc.unknown.length > 1 ? 's' : ''} not recognised` : ''})` }, adj);
       }
       if (adj.length) { adjTotal += adj.length; adjMonths.push(M); }
-      const mp = rc.markProposal || {};
-      marks[M] = { cash: r2(st.cash.end), securities: r2(mp.securities != null ? mp.securities : st.snapshot.total), provisional: false, source: 'statement' };
-      imports[M] = { month: M, messageId: msg.id, postedAt: now, added: adds.length, corrected: 0, removed: 0, adjustments: adj.length, marks: true, fullMonth: true, postedBy: 'history import', reportsPending: true };
+      adjHold[M] = adj.filter((t) => t.a).length;
+      if (st.snapshot) {
+        const mp = rc.markProposal || {};
+        marks[M] = { cash: r2(st.cash.end), securities: r2(mp.securities != null ? mp.securities : st.snapshot.total), provisional: false, source: 'statement' };
+      } else {
+        // no snapshot: the holdings valued at the month's last closes (every stock needs one), funds at their last NAV
+        const hs = shares(st.to); let v = 0, ok = true;
+        Object.keys(hs).filter((n) => Math.abs(hs[n]) >= 0.5).forEach((n) => {
+          if (isFund(n)) { v += hs[n] * (lastPrice(n) || 1); return; }
+          const c = items[n] && items[n].symbol && closeNear(items[n].symbol, st.to);
+          if (c) v += hs[n] * c; else ok = false;
+        });
+        if (ok) marks[M] = { cash: r2(st.cash.end), securities: r2(v), provisional: false, source: 'price-estimate', note: `the Thndr ${lbl(M)} statement has no position snapshot: holdings valued at that month's last closes` };
+        else delete marks[M];
+      }
+      imports[M] = { month: M, messageId: msg.id, postedAt: now, added: adds.length, corrected: 0, removed: 0, adjustments: adj.length, marks: !!marks[M], fullMonth: true, postedBy: 'history import', reportsPending: true };
     }
-    trackFunds(cands[cands.length - 1].st.to);
-    return { items, rows, marks, imports, gaps, adjTotal, adjMonths, fundLow, holdings0, first };
+    trackFunds(list[list.length - 1].st.to);
+    return { items, rows, marks, imports, gaps, adjTotal, adjMonths, adjHold, fundLow, holdings0, first, to0, months: list.length };
   };
 
-  let B = build({});
-  const need = Object.fromEntries(Object.entries(B.fundLow).filter(([, f]) => f.q >= 0.5));
-  if (Object.keys(need).length) B = build(need);
-  const { items, rows, marks, imports, gaps, adjTotal, adjMonths, holdings0, first } = B;
-  const M0 = first.st.month, to0 = first.st.to;
+  // a build, again with the fund units found missing at the start (fund sales before any snapshot lists funds)
+  const run = (start) => {
+    let b = build({}, start);
+    const need = Object.fromEntries(Object.entries(b.fundLow).filter(([, f]) => f.q >= 0.5));
+    if (Object.keys(need).length) { b = build(need, start); b.need = need; } else b.need = {};
+    return b;
+  };
+  let B = run({ idx: s0, empty: false });
+  // months before the first snapshot, one after another with no gap: start from nothing at the earliest and add every
+  // row; used only when that reaches the first snapshot's holdings exactly (no share adjustment up to it, no fund units
+  // missing at the start), which shows the account held nothing before
+  let e0 = s0;
+  while (e0 > 0 && cands[e0 - 1].st.month === prevMonth(cands[e0].st.month)) e0--;
+  let earlier = null;
+  if (e0 < s0) {
+    const B2 = run({ idx: e0, empty: true }), Ms = cands[s0].st.month;
+    const clean = !Object.keys(B2.need).length && Object.keys(B2.adjHold).every((m) => m > Ms || !B2.adjHold[m]);
+    earlier = { from: cands[e0].st.month, used: clean };
+    if (clean) B = B2;
+  }
+  const { items, rows, marks, imports, gaps, adjTotal, adjMonths, holdings0, first, to0 } = B;
+  const need = B.need, M0 = first.st.month;
 
   // ---- write ----
   const last = cands[cands.length - 1], ML = last.st.month, toL = last.st.to;
   const acct = Object.assign({}, settings.account || {}, first.own.code ? { unifiedCode: first.own.code } : {});
   const P = prevMonth(M0), num = (x) => typeof x === 'number' && isFinite(x);
   const s2 = Object.assign({}, settings, { inception: M0, trackFrom: toL, openingValue: 0, cash: r2(last.st.cash.end), cashDate: toL, cashSource: `Thndr statement to ${toL}`, account: acct,
-    historyImport: { status: 'done', from: M0, to: ML, months: cands.length, adjustments: adjTotal, adjustedMonths: adjMonths, gaps, at: now } });
+    historyImport: { status: 'done', from: M0, to: ML, months: B.months, adjustments: adjTotal, adjustedMonths: adjMonths, gaps, at: now } });
   if (num((macro.benchClose || {})[P])) s2.benchCloseStart = macro.benchClose[P];
   if (num((macro.fxEom || {})[P])) s2.fxStart = macro.fxEom[P];
   const W = (f, o) => fs.writeFileSync(path.join(args.out, f), JSON.stringify(o));
@@ -323,6 +368,6 @@ const isFundName = (n) => /^thndr/i.test(n || '');
   const used = new Set(rows.map((t) => t.a).filter(Boolean));
   W('assets_update.json', { items: Object.fromEntries(Object.entries(items).filter(([n]) => used.has(n) && JSON.stringify(assets0[n]) !== JSON.stringify(items[n]))) });
   Object.keys(imports).forEach((m) => W(`import_${m}.json`, imports[m]));
-  console.log(JSON.stringify({ ok: true, month: M0, to: to0, first: M0, last: ML, lastTo: toL, months: cands.length, holdings: holdings0, adjustments: adjTotal, adjustedMonths: adjMonths, gaps, code: first.own.code || null, candidates: cands.length, skipped,
-    openingFunds: Object.keys(need), fundsOnSnapshot: cands.filter((c) => c.st.snapshot.holdings.some((h) => h.kind === 'fund')).map((c) => c.st.month), fundStatement: cands.filter((c) => c.st.mf).map((c) => c.st.month) }));
+  console.log(JSON.stringify({ ok: true, month: M0, to: to0, first: M0, last: ML, lastTo: toL, months: B.months, holdings: holdings0, earlier, adjustments: adjTotal, adjustedMonths: adjMonths, gaps, code: first.own.code || null, candidates: cands.length, skipped,
+    openingFunds: Object.keys(need), noSnapshot: cands.filter((c) => !c.st.snapshot).map((c) => c.st.month), fundsOnSnapshot: cands.filter((c) => c.st.snapshot && c.st.snapshot.holdings.some((h) => h.kind === 'fund')).map((c) => c.st.month), fundStatement: cands.filter((c) => c.st.mf).map((c) => c.st.month) }));
 })().catch((e) => { console.log(JSON.stringify({ ok: false, error: String((e && e.message) || e) })); process.exit(1); });

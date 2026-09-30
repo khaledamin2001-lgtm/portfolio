@@ -508,7 +508,9 @@ def history_email(name, seed, summary, site):
     n, adj = seed.get("months") or 1, seed.get("adjustments") or 0
     first, last = jc.short(seed.get("first") or seed["month"]), jc.short(seed.get("last") or seed["month"])
     lines = [f"{name} has been built from your Thndr emails.", "",
-             f"• Starting point: your {first} monthly statement, with your {seed.get('holdings', 0)} holdings and your cash as Thndr printed them on {seed['to']}.",
+             (f"• Starting point: your {first} statement, when your account held nothing yet: every trade since is on your statements."
+              if (seed.get("earlier") or {}).get("used") else
+              f"• Starting point: your {first} monthly statement, with your {seed.get('holdings', 0)} holdings and your cash as Thndr printed them on {seed['to']}."),
              (f"• Then {n - 1} more monthly statement{'s' if n - 1 != 1 else ''}, up to {last}: every deposit, trade, dividend and fee on them." if n > 1 else "• That is your only monthly statement so far.")]
     if adj:
         months = ", ".join(jc.short(m) for m in seed.get("adjustedMonths") or [])

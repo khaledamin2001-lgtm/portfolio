@@ -12,6 +12,10 @@ and a second portfolio, with the shared market data (company names, daily closes
   Feb-26  both stocks sold under their company names (the same share count: the names and prices tell them apart) and
           the fund sold (its statement): the stocks are tied to their tickers and the fund units are held from the start,
           so no adjustment at all
+and a third, whose first statement (requested, no snapshot) comes before the first one with a snapshot:
+  Apr-26  from nothing (opening cash 0): used, because its rows lead exactly to May-26's snapshot; its month-end is valued
+          at the month's last closes
+  and the same with a May-26 snapshot the rows do not reach: Apr-26 is not used, the portfolio starts at May-26
 
     python3 src/tests/test_history_seed.py <tools dir with history_seed.js, statement.js and node_modules/pdfjs-dist>
 exit 0 = all pass."""
@@ -119,6 +123,22 @@ def main():
                 sh[r["a"]] = sh.get(r["a"], 0) + (1 if r["t"] == "Buy" else -1) * r["q"]
         check("the ledger ends on Feb-26's statement: 15 COMI, nothing else, cash 11,311.34", {k: v for k, v in sh.items() if abs(v) > 1e-9} == {"Commercial International Bank": 15} and round(sum(r["amt"] for r in rows), 2) == 11311.34, json.dumps([sh, sum(r["amt"] for r in rows)]))   # private-scan: synthetic
         check("Jan-26's month-end includes the fund units the snapshot left out (926 stocks + 1,550 fund)", marks["2026-01"]["securities"] == 2476, json.dumps(marks))
+        # the third: an earlier statement without a snapshot
+        for hold, used in (("15", True), ("20", False)):
+            tmp3 = os.path.join(tmp, "c" + hold); os.makedirs(tmp3)
+            mails = {"c-apr": ("1777500000000", statement(tmp3, "2026-04", "--nosnap", subject="Your requested E-statement - Apr 2026")),   # private-scan: synthetic
+                     "c-may": ("1780200000000", statement(tmp3, "2026-05", "--start", "9145", "--deposit", "1000", "--qty", "5", "--price", "90", "--close", "91", "--hold", hold))}   # private-scan: synthetic
+            market = {"history/2026-04.json": {"month": "2026-04", "days": {"2026-04-30": {"COMI": 86}}}}
+            res, rows, items, marks, st, out = run_seed(tmp3, mails, market)
+            if used:
+                check("an earlier statement without a snapshot is used when its rows reach the first snapshot exactly: the portfolio starts from nothing in Apr-26",
+                      res.get("earlier") == {"from": "2026-04", "used": True} and st["inception"] == "2026-04" and res["adjustments"] == 0 and not [r for r in rows if r.get("opening")]
+                      and sorted((r["d"], r["t"]) for r in rows) == [("2026-04-01", "Deposit"), ("2026-04-02", "Buy"), ("2026-05-01", "Deposit"), ("2026-05-02", "Buy")], json.dumps([res, rows])[:700])
+                check("its month-end (no snapshot) is valued at the month's last close, marked as an estimate",
+                      marks["2026-04"] == {"cash": 9145, "securities": 860, "provisional": False, "source": "price-estimate", "note": marks["2026-04"].get("note")} and marks["2026-05"]["source"] == "statement", json.dumps(marks))
+            else:
+                check("... and not used when they do not (the account held something before): the portfolio starts at May-26's snapshot",
+                      res.get("earlier") == {"from": "2026-04", "used": False} and st["inception"] == "2026-05" and [r["t"] for r in rows if r.get("opening")] == ["Deposit", "Buy"], json.dumps([res, rows])[:700])
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("ALL PASS" if not fails else f"{fails} FAILED")

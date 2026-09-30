@@ -78,7 +78,7 @@ def main(argv=None):
         r = subprocess.run(["node", os.path.join(ctx.code, "src", "tools", "history_seed.js"), "--data", data, "--inbox", inbox_m, "--out", seed_out],
                            capture_output=True, text=True, timeout=1200)
         seed = json.loads((r.stdout or "{}").strip().splitlines()[-1] if (r.stdout or "").strip() else "{}")
-        out = {"ok": True, "monthlyStatementsFound": cm.get("kept"), "seed": {k: seed.get(k) for k in ("ok", "first", "last", "lastTo", "months", "holdings", "adjustments", "adjustedMonths", "gaps", "skipped", "openingFunds", "fundsOnSnapshot", "fundStatement", "error")}}
+        out = {"ok": True, "monthlyStatementsFound": cm.get("kept"), "seed": {k: seed.get(k) for k in ("ok", "first", "last", "lastTo", "months", "holdings", "adjustments", "adjustedMonths", "gaps", "earlier", "noSnapshot", "openingFunds", "fundsOnSnapshot", "fundStatement", "error")}}
         if not seed.get("ok"):
             print(json.dumps(out))
             return 0

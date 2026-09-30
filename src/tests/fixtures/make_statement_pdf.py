@@ -8,6 +8,7 @@
         [--row "DAY|DESCRIPTION|VALUE"]...   more cash-account rows (a trade as "Sell X ( 1 @ 49.02 )")
         [--snap "TICKER|LABEL|QTY|PRICE"]... more stock holdings on the snapshot; [--fund ...] the same under "Mutual funds holdings"
         [--mfrow "DAY|DESCRIPTION|VALUE"]... rows of a mutual-fund account statement (mf-statement.pdf, only when given)
+        [--nosnap]   no position-snapshot.pdf
 
 Writes <out dir>/account-statement.pdf (the brokerage cash account: header with the holder name and Unified Code, the
 period "From d/m/yyyy To d/m/yyyy", Start/End Balance and two rows: a deposit on the 1st and a buy on the 2nd) and
@@ -59,6 +60,7 @@ def main():
     ap.add_argument("--snap", action="append", default=[])
     ap.add_argument("--fund", action="append", default=[])
     ap.add_argument("--mfrow", action="append", default=[])
+    ap.add_argument("--nosnap", action="store_true")   # no position snapshot (as in most statements requested in the app)
     a = ap.parse_args()
     y, m = int(a.month[:4]), int(a.month[5:])
     last = calendar.monthrange(y, m)[1]
@@ -84,7 +86,7 @@ def main():
             "Ticker Name Quantity Price Value", hl(a.symbol, a.snapname or a.company, hold, a.close)] + [hl(*h) for h in extra]
     if funds:
         snap += ["Mutual funds holdings", "Ticker Name Quantity Price Value"] + [hl(*h) for h in funds]
-    files = [("account-statement.pdf", acct), ("position-snapshot.pdf", snap)]
+    files = [("account-statement.pdf", acct)] + ([] if a.nosnap else [("position-snapshot.pdf", snap)])
     if a.mfrow:
         files.append(("mf-statement.pdf", account(0, [split(r) for r in a.mfrow], "Mutual Funds Account Statement")[0]))
     os.makedirs(a.out, exist_ok=True)
