@@ -76,6 +76,13 @@ service cloud.firestore {
       allow write: if me(owner) && get(/databases/$(database)/documents/links/$(owner)/with/$(viewer)).data.status == 'friends';
       allow delete: if me(owner) || me(viewer) || isAdmin();
     }
+    // An account the site owner deleted: its data is wiped at once; this marker makes the sign-in delete itself the next
+    // time it is used (only an account can delete its own sign-in).
+    match /deleted/{uid} {
+      allow read: if me(uid) || isAdmin();
+      allow create: if isAdmin();
+      allow delete: if me(uid) || isAdmin();
+    }
     // Everything else: nobody.
     match /{document=**} {
       allow read, write: if false;

@@ -93,7 +93,8 @@ function allowed(a, method, p, cur, next) {
   if (p === 'shared/membersPub') return method === 'GET' || (!!uid && method === 'PATCH' && !cur);
   if (p === 'shared/members') return !!uid && (method === 'GET' || (method === 'PATCH' && !cur));
   if ((m = p.match(/^mail\/([^/]+)$/))) return method === 'GET' || me(m[1]) || (admin && method === 'DELETE');
-  if (p === 'status') return admin && method === 'GET';
+  if (p === 'status' || p === 'deleted') return admin && method === 'GET';
+  if ((m = p.match(/^deleted\/([^/]+)$/))) return method === 'PATCH' ? admin && !cur : me(m[1]) || admin;
   if ((m = p.match(/^status\/([^/]+)$/))) return me(m[1]) || (admin && (method === 'GET' || method === 'DELETE'));
   if (p === 'directory') return false;
   if ((m = p.match(/^directory\/([^/]+)$/))) {
@@ -459,6 +460,10 @@ print(r.seal_json(json.load(open(${JSON.stringify(path.join(TMP, 'snap.json'))})
     await G.$t('admin-reset-confirm').fill('reset'); await G.$t('admin-reset-go').click();
     const gone = await until(() => !FB.docs[`users/${uidB}`] && !Object.keys(FB.docs).some((k) => k.includes(uidB) || k === 'directory/' + EMAIL_B), 20000);
     check('a reset deletes everything of the account (documents, friends, copies, directory, status) but not its sign-in', gone && !!FB.users[uidB], Object.keys(FB.docs).filter((k) => k.includes(uidB)).join(','));
+    await F.page.reload(); await F.$t('live-password').waitFor({ timeout: 30000 });
+    await F.$t('live-password').fill(PWB); await F.$t('live-password-submit').click();
+    await F.page.waitForFunction(() => /reset by the site owner/.test((document.querySelector('#lock .lk-err') || {}).textContent || ''), null, { timeout: 30000 }).catch(() => {});
+    check('a device still signed in to a reset account is sent to sign in again, not into an empty portfolio', /reset by the site owner/.test(await F.lockErr()) && !FB.docs['status/' + uidB]);
     const H = await device('H');
     await H.page.goto(ORIGIN + '/index.html'); await H.$t('live-signin').click();
     await H.$t('signin-email').fill(EMAIL_B); await H.$t('signin-password').fill(PWB); await H.$t('signin-submit').click();
@@ -469,10 +474,26 @@ print(r.seal_json(json.load(open(${JSON.stringify(path.join(TMP, 'snap.json'))})
     await H.$t('gmail-skip').waitFor({ timeout: 60000 }); await H.$t('gmail-skip').click();
     await H.lockHidden(60000).catch(() => {}); if (await H.$t('live-bio-skip').count()) await H.$t('live-bio-skip').click();
     check('starting again makes a fresh portfolio with the same sign-in', !!FB.docs[`users/${uidB}`] && /Sara/.test(await H.page.locator('#pf-name-text').textContent()));
-    await H.$t('account-menu').click(); await H.$t('account-delete').click();
-    await H.$t('delete-confirm').fill('DELETE'); await H.$t('delete-go').click();
-    await H.$t('live-signup').waitFor({ timeout: 30000 }).catch(() => {});
-    check('"Delete my account" removes the sign-in and everything else', !FB.users[uidB] && !Object.keys(FB.docs).some((k) => k.includes(uidB)) && await H.$t('live-signup').isVisible());
+    // the owner deletes the account: data at once, the sign-in the next time it is used
+    await G.$t('admin-back').click(); await G.$t('account-admin').click(); await G.$t('admin-row').first().waitFor({ timeout: 20000 }).catch(() => {});
+    await G.page.locator('[data-testid=admin-row]', { hasText: 'Sara' }).locator('[data-testid=admin-delete]').click();
+    await G.$t('admin-reset-confirm').fill('delete'); await G.$t('admin-reset-go').click();
+    await until(() => !FB.docs[`users/${uidB}`], 20000);
+    await G.$t('admin-deleted').waitFor({ timeout: 20000 }).catch(() => {});
+    check('"Delete account" on the admin page wipes everything and marks the sign-in for removal', !Object.keys(FB.docs).some((k) => k.includes(uidB) && k !== 'deleted/' + uidB) && !!FB.docs['deleted/' + uidB] && /sara@example\.com/.test(await G.$t('admin-deleted').textContent()));
+    await G.shot('admin-deleted');
+    await H.page.reload(); await H.$t('live-password').waitFor({ timeout: 30000 });
+    await H.$t('live-password').fill(PWB); await H.$t('live-password-submit').click();
+    await H.$t('gone-screen').waitFor({ timeout: 30000 }).catch(() => {});
+    check('the deleted account\'s next use removes its own sign-in and says so', await H.$t('gone-screen').isVisible() && !FB.users[uidB] && !FB.docs['deleted/' + uidB]);
+    // an account deletes itself
+    const I = await device('I');
+    await signUp(I, 'Tariq', 'tariq@example.com', 'green door 44');
+    const uidT = FB.byEmail['tariq@example.com'].uid;
+    await I.$t('account-menu').click(); await I.$t('account-delete').click();
+    await I.$t('delete-confirm').fill('DELETE'); await I.$t('delete-go').click();
+    await I.$t('live-signup').waitFor({ timeout: 30000 }).catch(() => {});
+    check('"Delete my account" removes the sign-in and everything else', !FB.users[uidT] && !Object.keys(FB.docs).some((k) => k.includes(uidT)) && await I.$t('live-signup').isVisible());
   } catch (e) {
     check('run', false, e.stack || String(e));
   }

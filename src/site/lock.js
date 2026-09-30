@@ -733,7 +733,7 @@
   async function unlocked(pk8) {
     if (!(await keyMatches(pk8))) return rotatedScreen();
     PK8 = pk8;
-    try { await start(); } catch (e) { console.error(e); if (CUR.cloud && e && (e.code === 'signin' || e.code === 'auth')) return signInScreen(CUR.email, e.message); return dataErrorScreen(e); }
+    try { await start(); } catch (e) { if (e && e.code === 'gone') return; console.error(e); if (CUR.cloud && e && (e.code === 'signin' || e.code === 'auth')) return signInScreen(CUR.email, e.message); return dataErrorScreen(e); }
     open();
   }
   function dataErrorScreen(e) {
@@ -742,7 +742,9 @@
     wireSwitch(); $l('#lk-relock').onclick = () => lock(false);
     $l('#lk-retry').onclick = async () => { const b = $l('#lk-retry'); b.disabled = true; b.textContent = 'Trying…'; if (!PK8) return lock(false); await unlocked(PK8); };
   }
-  async function start() { await loadEdit(); publish(await fetchData()); dbResolve(db); editBar();
+  async function start() {
+    if (CUR.cloud && !VIEW) { await loadSession(); const g = await accountGone().catch(() => null); if (g) { await leaveGoneAccount(g); throw Object.assign(new Error('account ' + g), { code: 'gone' }); } }
+    await loadEdit(); publish(await fetchData()); dbResolve(db); editBar();
     if (CUR.cloud && !VIEW) housekeeping().catch((e) => console.warn('account housekeeping', e));
     updateLive().catch((e) => { console.warn('live prices unavailable', e); notice('Live prices are unavailable right now: showing prices from the last daily update.'); }); }
   async function refresh() { if (!PK8) return; fetchTry = Date.now(); try { const b = await fetchData(); if (b.exportedAt !== DATA_AT) publish(b); else offlineBanner(); } catch (e) { console.warn('refresh failed', e); }
@@ -1074,6 +1076,7 @@
       try {
         const a = await fbAuth('signInWithPassword', { email: e, password: p, returnSecureToken: true });
         CLOUD = session(a);
+        if (await tombstoned(a.localId)) { await fsDel(`deleted/${a.localId}`).catch(() => {}); await fbAuth('delete', { idToken: a.idToken }).catch(() => {}); CLOUD = null; return goneScreen(); }
         let prof;
         try { prof = await readProfile(a.localId); }
         catch (x) { if (x && x.code === 'not_found') return restartScreen(a, p, e); throw x; }
@@ -1504,6 +1507,25 @@
     await fsDel(`users/${uid}`);
     await fsDel(`status/${uid}`);
   }
+  // the site owner deleted (deleted/{uid}) or reset (no profile) this account while this device was still signed in
+  async function tombstoned(uid) { try { await fsReq('GET', `deleted/${uid}`); return true; } catch (e) { return false; } }
+  async function accountGone() {
+    if (await tombstoned(CLOUD.uid)) return 'deleted';
+    try { await fsReq('GET', `users/${CLOUD.uid}`); return null; } catch (e) { if (e.code === 'not_found') return 'reset'; throw e; }
+  }
+  async function leaveGoneAccount(kind) {
+    const email = CLOUD.email || CUR.email, id = CUR.id;
+    if (kind === 'deleted') { await fsDel(`deleted/${CLOUD.uid}`).catch(() => {}); await fbAuth('delete', { idToken: await idToken() }).catch(() => {}); }
+    await forget(); dropAccount(id); ['pd.mail.', 'pd.dir.', 'pd.status.'].forEach((k) => ls.del(k + id)); ls.del(CUR_LS);
+    PK8 = null; CLOUD = null; VIEW = null; FRIENDS = null; DOCS = {}; CUR = null; OPENED = null; listeners.forEach(fire); blank();
+    if (kind === 'deleted') goneScreen(); else signInScreen(email, 'Your account was reset by the site owner. Sign in to set up a fresh portfolio.');
+  }
+  function goneScreen() {
+    screen(`<h1>Account deleted</h1><p data-testid="gone-screen">The site owner deleted this account and everything in it. You can create a new account any time.</p>
+      <button class="lk-btn" id="lk-gone-new" data-testid="gone-signup">Create an account</button>
+      <div class="lk-links"><button type="button" class="lk-link" id="lk-gone-back">Back</button></div>`);
+    $l('#lk-gone-new').onclick = () => signUpScreen(); $l('#lk-gone-back').onclick = () => chooseScreen();
+  }
   function deleteScreen() {
     screen(`<h1>Delete my account</h1><p>This deletes your portfolio, your sign-in, email updates, Thndr emails and your friends, for good. It cannot be undone.</p>
       <p class="lk-tip">Only want to start over? Ask the site owner to reset your account instead: you keep your email and password and set up a fresh portfolio.</p>
@@ -1547,7 +1569,7 @@
     screen('<h1>Admin</h1><p>Loading…</p>');
     try {
       if (!claims(await idToken()).email_verified) return verifyScreen();
-      const [docs, mk] = await Promise.all([listAll('status'), fetch('m/market.enc.json?t=' + Date.now(), { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null)]);
+      const [docs, mk, dels] = await Promise.all([listAll('status'), fetch('m/market.enc.json?t=' + Date.now(), { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null), listAll('deleted').catch(() => [])]);
       const rows = docs.map((d) => { const x = fsData(d); return Object.assign(x, { uid: d.name.split('/').pop(), site: jparse(x.site) || {}, job: jparse(x.job) || null }); })
         .sort((a, b) => String(b.lastSeen || '').localeCompare(String(a.lastSeen || '')));
       const now = Date.now(), old = (iso, days) => !iso || now - Date.parse(iso) > days * 864e5;
@@ -1564,17 +1586,19 @@
         const facts = [`Joined ${dayOf(r.createdAt)} · last opened ${dayOf(r.lastSeen)}`, `Email updates ${s.mail ? 'on' : 'off'} · month-end report ${s.reports ? 'on' : 'off'} · Thndr emails ${s.gmail ? 'on' : 'off'} · friends ${s.friends || 0}`];
         return `<div class="lk-card${bad.length ? ' bad' : ''}" data-testid="admin-row"><div class="lk-card-head"><b>${esc(r.name || '(no name)')}</b><small>${esc(r.email || '')}</small></div>
           <ul class="lk-facts">${facts.map((t) => `<li>${esc(t)}</li>`).join('')}${ok.map((t) => `<li class="ok">${esc(t)}</li>`).join('')}${bad.map((t) => `<li class="bad">${esc(t)}</li>`).join('')}</ul>
-          ${r.uid === CLOUD.uid ? '' : `<button class="lk-btn ghost" data-reset="${esc(r.uid)}" data-testid="admin-reset">Reset account</button>`}</div>`;
+          ${r.uid === CLOUD.uid ? '' : `<div class="lk-friend-btns"><button class="lk-btn ghost" data-reset="${esc(r.uid)}" data-testid="admin-reset">Reset (start over)</button><button class="lk-btn danger" data-delete="${esc(r.uid)}" data-testid="admin-delete">Delete account</button></div>`}</div>`;
       };
       const problems = rows.filter((r) => /class="lk-card bad/.test(card(r))).length;
       screen(`<h1>Admin</h1><p>${rows.length} account${rows.length === 1 ? '' : 's'}${problems ? `, <b>${problems} with a problem</b>` : ', no problems'}. Shared prices updated ${esc(mk && mk.at ? whenOf(mk.at) : '—')}.</p>
         <p class="lk-hint">You see names, emails and whether things work, never anyone's figures. Accounts appear here once they open the site.</p>
         ${rows.map(card).join('') || '<p>No accounts yet.</p>'}
+        ${dels.length ? `<p class="lk-hint" data-testid="admin-deleted">Deleted, sign-in removed the next time they try it: ${dels.map((d) => esc(fsData(d).email || '?')).join(', ')}</p>` : ''}
         <a class="lk-btn ghost" href="${JOB_URL}" target="_blank" rel="noopener noreferrer" data-testid="admin-job-link">Run the daily friends' job now (GitHub)</a>
         <div class="lk-err" role="alert"></div>
         <div class="lk-links"><button type="button" class="lk-link" id="lk-ad-back" data-testid="admin-back">Back</button></div>`);
       $l('#lk-ad-back').onclick = accountScreen;
       document.querySelectorAll('#lock [data-reset]').forEach((b) => { b.onclick = () => resetScreen(rows.find((r) => r.uid === b.dataset.reset)); });
+      document.querySelectorAll('#lock [data-delete]').forEach((b) => { b.onclick = () => resetScreen(rows.find((r) => r.uid === b.dataset.delete), true); });
     } catch (e) {
       console.error(e);
       if (e.code === 'forbidden') return verifyScreen('The database did not accept this sign-in as the admin yet. If you just verified your email, tap "I clicked the link".');
@@ -1591,18 +1615,25 @@
     $l('#lk-vf-send').onclick = async () => { try { await fbAuth('sendOobCode', { requestType: 'VERIFY_EMAIL', idToken: await idToken() }); err('Sent. Check your inbox.'); } catch (e) { err(e.message || String(e)); } };
     $l('#lk-vf-done').onclick = () => { CLOUD.exp = 0; adminScreen(); };   // a fresh token carries email_verified
   }
-  function resetScreen(r) {
-    screen(`<h1>Reset ${esc(r.name || 'this account')}?</h1><p>This deletes their portfolio, email updates, Thndr emails connection and friends. Their sign-in stays: when they sign in again, they set up a fresh portfolio with the same email and password.</p>
+  function resetScreen(r, del) {
+    const W = del ? 'DELETE' : 'RESET';
+    screen((del ? `<h1>Delete ${esc(r.name || 'this account')}?</h1><p>This deletes the whole account: portfolio, email updates, Thndr emails connection, friends and the sign-in (${esc(r.email || '')}). Their email becomes free to sign up again.</p>`
+        : `<h1>Reset ${esc(r.name || 'this account')}?</h1><p>This deletes their portfolio, email updates, Thndr emails connection and friends. Their sign-in stays: when they sign in again, they set up a fresh portfolio with the same email and password.</p>`) + `
       <p class="lk-tip">Only do this when they asked for it. It cannot be undone.</p>
-      <form id="lk-rst" autocomplete="off"><input id="lk-rst-word" data-testid="admin-reset-confirm" placeholder="Type RESET to confirm" autocapitalize="characters" spellcheck="false">
-      <button class="lk-btn danger" id="lk-rst-go" data-testid="admin-reset-go">Reset the account</button><div class="lk-err" role="alert"></div></form>
+      <form id="lk-rst" autocomplete="off"><input id="lk-rst-word" data-testid="admin-reset-confirm" placeholder="Type ${W} to confirm" autocapitalize="characters" spellcheck="false">
+      <button class="lk-btn danger" id="lk-rst-go" data-testid="admin-reset-go">${del ? 'Delete the account' : 'Reset the account'}</button><div class="lk-err" role="alert"></div></form>
       <div class="lk-links"><button type="button" class="lk-link" id="lk-rst-back">Back</button></div>`);
     $l('#lk-rst-back').onclick = adminScreen;
     $l('#lk-rst').onsubmit = async (ev) => {
       ev.preventDefault();
-      if ($l('#lk-rst-word').value.trim().toUpperCase() !== 'RESET') return err('Type RESET to confirm.');
-      const b = $l('#lk-rst-go'); b.disabled = true; err('Resetting…');
-      try { await wipeAccount(r.uid, r.email); toast(`${r.name || 'The account'} is reset. They can sign in and start again.`); adminScreen(); }
+      if ($l('#lk-rst-word').value.trim().toUpperCase() !== W) return err(`Type ${W} to confirm.`);
+      const b = $l('#lk-rst-go'); b.disabled = true; err(del ? 'Deleting…' : 'Resetting…');
+      try {
+        // the marker first: if the rules do not allow it yet, nothing is wiped
+        if (del) await fsReq('PATCH', `deleted/${r.uid}`, fsFields({ email: r.email || '', at: new Date().toISOString() }), 'currentDocument.exists=false').catch((e) => { if (e.code !== 'conflict') throw e; });
+        await wipeAccount(r.uid, r.email);
+        toast(del ? `${r.name || 'The account'} is deleted.` : `${r.name || 'The account'} is reset. They can sign in and start again.`); adminScreen();
+      }
       catch (e) { console.error(e); b.disabled = false; err(e.message || String(e)); }
     };
   }
