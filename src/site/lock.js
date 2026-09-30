@@ -738,7 +738,7 @@
     open();
   }
   function dataErrorScreen(e) {
-    screen(`<h1>${esc(CUR.name)}</h1><p data-testid="live-data-error">The portfolio data could not be read. Try again later; if it keeps happening, tell Claude.</p><p class="lk-foot">${esc((e && e.message) || e || '')}</p>
+    screen(`<h1>${esc(CUR.name)}</h1><p data-testid="live-data-error">The portfolio data could not be read. Try again later; if it keeps happening, tell the site owner.</p><p class="lk-foot">${esc((e && e.message) || e || '')}</p>
       <button class="lk-btn" id="lk-retry" data-testid="live-data-retry">Try again</button><div class="lk-links">${switchLink()}<button type="button" class="lk-link" id="lk-relock" data-testid="live-data-lock">Lock</button></div>`);
     wireSwitch(); $l('#lk-relock').onclick = () => lock(false);
     $l('#lk-retry').onclick = async () => { const b = $l('#lk-retry'); b.disabled = true; b.textContent = 'Trying…'; if (!PK8) return lock(false); await unlocked(PK8); };

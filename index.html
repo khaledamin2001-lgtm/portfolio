@@ -1003,7 +1003,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
     open();
   }
   function dataErrorScreen(e) {
-    screen(`<h1>${esc(CUR.name)}</h1><p data-testid="live-data-error">The portfolio data could not be read. Try again later; if it keeps happening, tell Claude.</p><p class="lk-foot">${esc((e && e.message) || e || '')}</p>
+    screen(`<h1>${esc(CUR.name)}</h1><p data-testid="live-data-error">The portfolio data could not be read. Try again later; if it keeps happening, tell the site owner.</p><p class="lk-foot">${esc((e && e.message) || e || '')}</p>
       <button class="lk-btn" id="lk-retry" data-testid="live-data-retry">Try again</button><div class="lk-links">${switchLink()}<button type="button" class="lk-link" id="lk-relock" data-testid="live-data-lock">Lock</button></div>`);
     wireSwitch(); $l('#lk-relock').onclick = () => lock(false);
     $l('#lk-retry').onclick = async () => { const b = $l('#lk-retry'); b.disabled = true; b.textContent = 'Trying…'; if (!PK8) return lock(false); await unlocked(PK8); };
@@ -2183,7 +2183,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   })();
 })();
 </script>
-<meta name="pd-build" content="3aea8ec32a0c 2026-09-30 13:36">
+<meta name="pd-build" content="3aea8ec32a0c 2026-09-30 13:51">
 <style>
 :root{
   --bg:#F3F6F4; --surface:#FFFFFF; --surface-2:#EDF2EF; --ink:#0F1A17; --ink-2:#46534E; --ink-3:#5F6C67;
@@ -4038,7 +4038,7 @@ if(location.hash && /^#[a-z]+$/.test(location.hash)) S.tab = location.hash.slice
 
 window.pdToast = (m, k) => toast(m, k);
 function toast(msg, kind){ const t=$('#toast'); t.textContent=msg; t.className='toast'+(kind?' '+kind:''); t.hidden=false; clearTimeout(toast._t); toast._t=setTimeout(()=>t.hidden=true, Math.max(kind==='error'?6000:2800, 60*String(msg).length)); }
-function errText(e){ const c=e&&e.code; if(c==='invalid_argument') return 'Saving was refused. You may only have view access to this page.'; if(c==='quota_exceeded') return 'The portfolio database is full. Ask Claude to delete old history months to free space.'; if(c==='resource_exhausted') return 'Too many saves in a row. Wait a few seconds and try again.'; return 'Could not save: '+(e&&e.message||'unknown error')+'. Try again in a moment.'; }
+function errText(e){ const c=e&&e.code; if(c==='invalid_argument') return 'Saving was refused. You may only have view access to this page.'; if(c==='quota_exceeded') return 'The portfolio could not be saved (storage is full). Tell the site owner.'; if(c==='resource_exhausted') return 'Too many saves in a row. Wait a few seconds and try again.'; return 'Could not save: '+(e&&e.message||'unknown error')+'. Try again in a moment.'; }
 async function save(fn, ok){ try{ await fn(); if(ok) toast(ok); document.querySelectorAll('#main .dirty').forEach(x=>x.classList.remove('dirty')); if(document.activeElement && document.activeElement.blur) document.activeElement.blur(); S.pending=false; renderTab(true); return true; }catch(e){ console.error(e); if(e&&e.code==='invalid_argument') S.readOnly=true; toast(errText(e),'error'); return false; } }
 
 function allTx(){
@@ -4073,7 +4073,7 @@ function recompute(){
   $('#pf-name-text').textContent = S.settings.name || 'Portfolio';
   renderTape(); renderPeriod(); renderTab(false);
 }
-function renderEmpty(){ $('#main').innerHTML = `<div class="empty"><h2>No portfolio data yet</h2><p>The database for this page is empty. Ask Claude to load your workbook into it.</p></div>`; $('#period').innerHTML=''; }
+function renderEmpty(){ $('#main').innerHTML = `<div class="empty"><h2>No portfolio data yet</h2><p>Nothing has been added to this portfolio yet.</p></div>`; $('#period').innerHTML=''; }
 
 // Live or saved copy: on the site, lock.js sets #pd-offline data-state to 'online' | 'offline' | 'saved'; 'offline' and 'saved'
 // mean the figures are the copy saved on this device, so nothing is labelled live. The Claude page has no #pd-offline: live.
@@ -4644,7 +4644,7 @@ function vInputs(){
     const title = showEst ? (stored!=null ? `Estimated ${ph} · typed placeholder: ${esc(String(stored))}` : `Estimated ${ph}`) : '';
     return `<td class="in-cell"><input type="number" step="${step}" data-m="${m}" data-f="${f}" value="${showEst?'':v==null?'':v}" id="mk-${m}-${f}"${showEst?` placeholder="${ph}" title="${title}"`:''}></td>`; };
   return `
-  ${ro?`<div class="banner" data-testid="readonly-banner" style="background:var(--surface-2);color:var(--ink-2)"><span><b>View only</b> — this is the published site. Edit on the Claude page; changes appear here after the next daily update.</span></div>`:''}
+  ${ro?`<div class="banner" data-testid="readonly-banner" style="background:var(--surface-2);color:var(--ink-2)"><span><b>View only</b>. To change something, turn on editing at the bottom of the page.</span></div>`:''}
   <div class="panel"><div class="phead"><div><h2>Month-end marks</h2><div class="sub">${ro?'Values from each Thndr month-end statement, as recorded.':'Enter values from each Thndr month-end statement. The EGX30 Capped close is filled automatically; a typed % is used only where closes are missing.'}</div></div>
     <div class="row"><button class="btn primary" id="save-marks" data-testid="save-marks" ${S.readOnly?'disabled':''}>Save changes</button></div></div>
     <div class="tbl ${ro?'':'grid-in'}"><table data-testid="marks-table"><thead><tr><th>Month</th><th class="n">Cash (EGP)</th><th class="n">Securities (EGP)</th><th class="n">EGX30 Capped close</th><th class="n">EGX30 Capped %</th><th class="n">USD/EGP (CBE mid)</th><th class="n">CPI MoM</th><th>Note</th><th>Status</th></tr></thead><tbody>
@@ -4778,7 +4778,7 @@ function renderSwitch(){ if(window.pdHub){ window.pdHub($('#pf-menu')); return; 
   m.innerHTML = (window.pdPortfolioList ? window.pdPortfolioList() : PORTFOLIOS).map(p=>{ const isCur = p.id===cur;
     if(window.pdSelect) return `<button type="button" data-pid="${p.id}" class="${isCur?'cur':''}" data-testid="switch-${p.id}">${esc(p.name)}<small>${isCur?'open now':'switch on this site'}</small></button>`;
     return isCur ? `<button type="button" class="cur" data-testid="switch-${p.id}">${esc(p.name)}<small>this page</small></button>`
-                 : `<a href="${p.url}" data-testid="switch-${p.id}">${esc(p.name)}<small>opens its Claude page</small></a>`; }).join('') + (window.pdSwitch ? '<button type="button" data-testid="switch-other" onclick="pdSwitch()">Another portfolio<small>sign in, or open one with a setup key</small></button>' : '');
+                 : `<a href="${p.url}" data-testid="switch-${p.id}">${esc(p.name)}<small>opens it</small></a>`; }).join('') + (window.pdSwitch ? '<button type="button" data-testid="switch-other" onclick="pdSwitch()">Another portfolio<small>sign in, or open one with a setup key</small></button>' : '');
 }
 document.addEventListener('click', e=>{
   const menu = $('#pf-menu'); if(!menu) return;

@@ -26,6 +26,11 @@ for a, b in [("function currentPortfolioId(){ return", "function currentPortfoli
              ("toast('The watchlist is edited on the Claude page.','error')", "toast('Turn on editing at the bottom of the page to change the watchlist.','error')"),
              ("toast('Retrying is only possible on the Claude page.','error')", "toast('Turn on editing at the bottom of the page to retry held emails.','error')"),
              ("as recorded on the Claude page.", "as recorded."),
+             ("<b>View only</b> — this is the published site. Edit on the Claude page; changes appear here after the next daily update.",
+              "<b>View only</b>. To change something, turn on editing at the bottom of the page."),
+             ("<small>opens its Claude page</small>", "<small>opens it</small>"),
+             ("The database for this page is empty. Ask Claude to load your workbook into it.", "Nothing has been added to this portfolio yet."),
+             ("The portfolio database is full. Ask Claude to delete old history months to free space.", "The portfolio could not be saved (storage is full). Tell the site owner."),
              # statement PDFs are read with the site's own copy of pdf.js (vendor/, the same 3.11.174 build the Claude page loads)
              ("'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'", "'vendor/pdf.worker.min.js'"),
              ("'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'", "'vendor/pdf.min.js'")]:
