@@ -3,7 +3,8 @@
 
     python3 make_statement_pdf.py <out dir> [--code 1234567] [--name "Test Friend"] [--month 2026-09] [--symbol COMI]   # private-scan: synthetic
         [--company "Commercial International Bank"] [--qty 10] [--price 85.50] [--close 86.00] [--deposit 10000]
-        [--start 0] [--hold N]      (opening cash; shares on the snapshot, default --qty)
+        [--start 0] [--hold N] [--snapname LABEL]   (opening cash; shares on the snapshot, default --qty; the snapshot's
+        label for the stock, default --company: an ISIN such as EGS60121C018 is printed the way Thndr prints one)   # private-scan: synthetic
 
 Writes <out dir>/account-statement.pdf (the brokerage cash account: header with the holder name and Unified Code, the
 period "From d/m/yyyy To d/m/yyyy", Start/End Balance and two rows: a deposit on the 1st and a buy on the 2nd) and
@@ -50,6 +51,7 @@ def main():
     ap.add_argument("--deposit", type=float, default=10000)
     ap.add_argument("--start", type=float, default=0)
     ap.add_argument("--hold", type=float, default=None)
+    ap.add_argument("--snapname", default=None)
     a = ap.parse_args()
     y, m = int(a.month[:4]), int(a.month[5:])
     last = calendar.monthrange(y, m)[1]
@@ -67,7 +69,7 @@ def main():
     snap = ["Thndr Securities Brokerage", f"Client Name {a.name} Unified Code {a.code}",
             f"Position Snapshot as of {calendar.month_name[m]} {last}, {y}", "Stocks holdings",
             "Ticker Name Quantity Price Value",
-            f"{a.symbol} {a.company} EGP {hq} {a.close:.2f} {f(round(hold * a.close, 2))}"]
+            f"{a.symbol} {a.snapname or a.company} EGP {hq} {a.close:.2f} {f(round(hold * a.close, 2))}"]
     os.makedirs(a.out, exist_ok=True)
     for name, lines in (("account-statement.pdf", acct), ("position-snapshot.pdf", snap)):
         with open(os.path.join(a.out, name), "wb") as fh:

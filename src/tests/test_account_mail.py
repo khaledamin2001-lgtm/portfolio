@@ -14,7 +14,8 @@ with the friend's key and carries the portfolio documents without the Thndr acco
 verified account shares the MAIN portfolio (the engine's documents) while another account asking for that gets its own;
 status/{uid}.job is written for the admin screen.
 History import: an account created with "Build it from my Thndr emails" starts from its earliest monthly statement in
-Gmail (Aug-26: holdings and cash as opening rows) and the later one (Sep-26) is applied on top in the same run; only the
+Gmail (Aug-26: holdings and cash as opening rows) and the later one (Sep-26: its rows, then its snapshot's one extra share
+and the cash matched with labelled adjustments) is built on top; the Gmail import starts after the latest; only the
 latest month's report is emailed, with one summary email; an account with no monthly statement yet is told once and
 nothing in its portfolio changes.
     python3 src/tests/test_account_mail.py <synthetic export dir> <tools dir with node_modules/pdfjs-dist>   (exit 0 = all pass)"""
@@ -118,7 +119,7 @@ try:
         for f in ("account-statement.pdf", "position-snapshot.pdf"):
             m.add_attachment(open(os.path.join(d, f), "rb").read(), maintype="application", subtype="pdf", filename=f)
         return base64.urlsafe_b64encode(m.as_bytes()).decode()
-    RAW_SEP = statement_raw("2026-09", "--start", "9145", "--deposit", "1000", "--qty", "5", "--price", "90", "--close", "91", "--hold", "15")
+    RAW_SEP = statement_raw("2026-09", "--start", "9145", "--deposit", "1000", "--qty", "5", "--price", "90", "--close", "91", "--hold", "16")
     HIST_MAIL = {"h-aug": ("1788400000000", RAW), "h-sep": ("1791000000000", RAW_SEP)}   # private-scan: synthetic
     fetches = []
     def fake_fetch(after, seen, out_dir, addr=None, pw=None, query=None):
@@ -313,16 +314,18 @@ try:
     hset = adoc(HUID, hacct, "portfolio/settings") or {}
     hmk = (adoc(HUID, hacct, "portfolio/marks") or {}).get("months") or {}
     check("history: the monthly statements are looked for first, then everything after the starting point",
-          [f["query"] for f in fetches if f["addr"] == "hist@example.com"] == ["monthly", "all"] and [f["after"] for f in fetches if f["addr"] == "hist@example.com"] == ["2019/01/01", "2026/08/31"], json.dumps([f for f in fetches if f["addr"] == "hist@example.com"]))
+          [f["query"] for f in fetches if f["addr"] == "hist@example.com"] == ["monthly", "all"] and [f["after"] for f in fetches if f["addr"] == "hist@example.com"] == ["2019/01/01", "2026/09/30"], json.dumps([f for f in fetches if f["addr"] == "hist@example.com"]))
     check("history: the earliest statement (Aug-26) is the starting point: its holding and cash as opening rows on its last day",
           [(r["d"], r["t"], r.get("q"), r.get("opening")) for r in hrows if r.get("opening")] == [("2026-08-31", "Deposit", None, True), ("2026-08-31", "Buy", 10, True)]
           and abs([r for r in hrows if r.get("opening") and r["t"] == "Deposit"][0]["amt"] - 10005) < 0.01, json.dumps(hrows)[:400])
-    check("history: the later statement (Sep-26) is applied on top (its deposit and buy)", sorted((r["d"], r["t"]) for r in hrows if not r.get("opening")) == [("2026-09-01", "Deposit"), ("2026-09-02", "Buy")], json.dumps(hrows)[:400])
+    check("history: the later statement (Sep-26) is built on top: its deposit and buy, then the snapshot's extra share and the cash as adjustments",
+          sorted((r["d"], r["t"], r.get("src")) for r in hrows if not r.get("opening")) == [("2026-09-01", "Deposit", "history-2026-09"), ("2026-09-02", "Buy", "history-2026-09"), ("2026-09-30", "Buy", "history-adjust"), ("2026-09-30", "Deposit", "history-adjust")]
+          and [(r.get("q"), r.get("amt")) for r in hrows if r.get("src") == "history-adjust"] == [(1, -91), (None, 91)] and all(r["note"].startswith("Adjustment") for r in hrows if r.get("src") == "history-adjust"), json.dumps(hrows)[:600])
     check("history: settings start at Aug-26 with the account code; the import is marked done",
-          hset.get("inception") == "2026-08" and hset.get("trackFrom") == "2026-08-31" and (hset.get("historyImport") or {}).get("status") == "done" and (hset.get("account") or {}).get("unifiedCode") == "1234567", json.dumps({k: hset.get(k) for k in ("inception", "trackFrom", "historyImport", "account")}))   # private-scan: synthetic
-    check("history: both months' marks come from the statements", (hmk.get("2026-08") or {}).get("source") == "statement" and abs((hmk.get("2026-09") or {}).get("cash", 0) - 9695) < 0.01 and abs((hmk.get("2026-09") or {}).get("securities", 0) - 1365) < 0.01, json.dumps(hmk))
+          hset.get("inception") == "2026-08" and hset.get("trackFrom") == "2026-09-30" and (hset.get("historyImport") or {}).get("status") == "done" and (hset.get("historyImport") or {}).get("adjustments") == 2 and (hset.get("account") or {}).get("unifiedCode") == "1234567", json.dumps({k: hset.get(k) for k in ("inception", "trackFrom", "historyImport", "account")}))   # private-scan: synthetic
+    check("history: both months' marks come from the statements", (hmk.get("2026-08") or {}).get("source") == "statement" and abs((hmk.get("2026-09") or {}).get("cash", 0) - 9695) < 0.01 and abs((hmk.get("2026-09") or {}).get("securities", 0) - 1456) < 0.01, json.dumps(hmk))
     check("history: one summary email, and only the latest month's report (Sep-26), not the old one",
-          [m["subject"] for m in hs] == ["History Portfolio: built from your Thndr emails", "History Portfolio · month-end report Sep-26"] and "Aug-26" in hs[0]["text"] and "1 more monthly statement" in hs[0]["text"]
+          [m["subject"] for m in hs] == ["History Portfolio: built from your Thndr emails", "History Portfolio · month-end report Sep-26"] and "Aug-26" in hs[0]["text"] and "1 more monthly statement, up to Sep-26" in hs[0]["text"] and "2 adjustments (Sep-26)" in hs[0]["text"]
           and ((adoc(HUID, hacct, "imports/2026-08") or {}).get("reports") or {}).get("emailedAt") == "skipped (history import)", json.dumps([m["subject"] for m in hs]))
     ws = [m for m in hsent if m["to"] == "wait2@example.com"]
     wstate = adoc(WUID, wacct, "sync/mail") or {}

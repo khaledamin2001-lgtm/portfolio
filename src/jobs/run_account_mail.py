@@ -19,9 +19,10 @@ its portfolio (the site says so when it is switched on). For each package this j
      (heads-up items included) goes to the account's address when it notifies. The result, or the Gmail error, is kept
      in sync/mail.gmail; a new error is emailed once. When the import ran, its heads-up digest replaces step 3.
      History import (settings.historyImport.status 'pending', the site's "Build it from my Thndr emails"): first only the
-     monthly statements since 2019 are fetched and src/tools/history_seed.js makes the starting point from the earliest
-     one (its holdings and cash, as opening rows); then every Thndr email after it is fetched and sync.js applies them,
-     all in the same commit. Older months' reports are marked skipped (only the latest is emailed) and one summary email
+     monthly statements since 2019 are fetched and src/tools/history_seed.js builds the portfolio from them (the earliest
+     one's holdings and cash as opening rows, then every later month's rows, each month-end matched to Thndr's holdings
+     and cash with labelled adjustments); then every Thndr email after the latest statement is fetched and sync.js
+     applies them, all in the same commit. Older months' reports are marked skipped (only the latest is emailed) and one summary email
      says what was built. With no usable monthly statement yet, nothing is written: the account is told once, and every
      run looks again.
   3. adds the shared market data (engine shared/: latest, history, bench) and runs src/jobs/account_alerts.js (the same
@@ -300,7 +301,7 @@ def gmail_import(http, tok, pkg, keys, docs, shared, code, work, now, dry, read_
             seed = json.loads((r.stdout or "{}").strip().splitlines()[-1] if (r.stdout or "").strip() else "{}")
             if not seed.get("ok"):
                 raise HistoryWait(seed.get("error") or "the starting point could not be made")
-            after = seed["to"].replace("-", "/")
+            after = (seed.get("lastTo") or seed["to"]).replace("-", "/")
         else:
             after = gmail_after(code, st, settings, now)
         inbox = os.path.join(work, "inbox")
@@ -503,17 +504,25 @@ def write_status_job(http, tok, uid, job):
 
 
 def history_email(name, seed, summary, site):
-    posted = summary.get("monthlyPosted") or []
     held = [e for e in summary.get("log") or [] if e.get("status") == "hold"]
-    other = max(0, (summary.get("applied") or 0) - len(posted))
+    n, adj = seed.get("months") or 1, seed.get("adjustments") or 0
+    first, last = jc.short(seed.get("first") or seed["month"]), jc.short(seed.get("last") or seed["month"])
     lines = [f"{name} has been built from your Thndr emails.", "",
-             f"• Starting point: your {jc.short(seed['month'])} monthly statement, with your {seed.get('holdings', 0)} holdings and your cash as Thndr printed them on {seed['to']}.",
-             f"• Since then: {len(posted)} more monthly statement{'s' if len(posted) != 1 else ''} and {other} other Thndr email{'s' if other != 1 else ''} applied."]
+             f"• Starting point: your {first} monthly statement, with your {seed.get('holdings', 0)} holdings and your cash as Thndr printed them on {seed['to']}.",
+             (f"• Then {n - 1} more monthly statement{'s' if n - 1 != 1 else ''}, up to {last}: every deposit, trade, dividend and fee on them." if n > 1 else "• That is your only monthly statement so far.")]
+    if adj:
+        months = ", ".join(jc.short(m) for m in seed.get("adjustedMonths") or [])
+        lines += [f"• {adj} adjustment{'s' if adj != 1 else ''} ({months}) so each month ends exactly on Thndr's holdings and cash; they are labelled \"Adjustment\" in your ledger."]
+    else:
+        lines += ["• Every month ends exactly on Thndr's holdings and cash."]
+    if seed.get("gaps"):
+        lines += ["", "Monthly statements not in your Gmail: " + ", ".join(jc.short(m) for m in seed["gaps"]) + ". The month after each is matched to Thndr's figures."]
+    other = summary.get("applied") or 0
+    if other:
+        lines += [f"• Since {last}: {other} newer Thndr email{'s' if other != 1 else ''} added."]
     if held:
-        lines += ["", f"{len(held)} email{'s' if len(held) > 1 else ''} could not be applied (nothing from {'them' if len(held) > 1 else 'it'} was used):"]
+        lines += ["", f"{len(held)} newer email{'s' if len(held) > 1 else ''} could not be applied (nothing from {'them' if len(held) > 1 else 'it'} was used):"]
         lines += [f"  - {e.get('subject')}{(' (' + e['period'] + ')') if e.get('period') else ''}: {(e.get('reasons') or ['see the site'])[0]}" for e in held[:8]]
-    if summary.get("alert"):
-        lines += ["", "Monthly statements not in your Gmail: " + ", ".join(jc.short(m) for m in summary["alert"]) + ". Request them in the Thndr app; they are added by themselves."]
     lines += ["", f"Open it: {site}", "From now on, new Thndr emails are added every hour during the day.", ""]
     return f"{name}: built from your Thndr emails", "\n".join(lines)
 

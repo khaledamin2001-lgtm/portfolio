@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+"""src/tools/history_seed.js on synthetic Thndr monthly statements (src/tests/fixtures/make_statement_pdf.py):
+
+  Jun-26  the starting point; its snapshot prints the stock's ISIN, not its name (the asset is named by its ticker)
+  Jul-26  no statement (a gap)
+  Aug-26  opens with more cash than Jun-26 closed with; buys the same stock under its trade-line NAME: one asset (the
+          readable name, the snapshot's ticker), no share adjustment, one labelled cash adjustment on Aug 1
+  Sep-26  buys another stock; the snapshot no longer lists the first: its shares are taken out and the cash matched
+
+    python3 src/tests/test_history_seed.py <tools dir with history_seed.js, statement.js and node_modules/pdfjs-dist>
+exit 0 = all pass."""
+import os, sys, json, base64, shutil, tempfile, subprocess
+from email.message import EmailMessage
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TOOLS = os.path.abspath(sys.argv[1])
+fails = 0
+
+
+def check(name, ok, detail=""):
+    global fails
+    print(("PASS " if ok else "FAIL ") + name + ("" if ok else f"\n     {detail}"))
+    fails += 0 if ok else 1
+
+
+def statement(tmp, month, *extra):
+    d = os.path.join(tmp, "pdf-" + month)
+    subprocess.run([sys.executable, os.path.join(ROOT, "tests", "fixtures", "make_statement_pdf.py"), d, "--month", month, *extra], check=True, capture_output=True)
+    m = EmailMessage()
+    m["Authentication-Results"] = "mx.google.com; dkim=pass header.i=@thndr.app header.s=s1 header.b=x; spf=pass smtp.mailfrom=system.thndr.app"
+    m["From"] = "Thndr <no-reply@system.thndr.app>"
+    m["To"] = "someone@example.com"
+    m["Subject"] = "Your monthly E-statement"
+    m.set_content("Your monthly statement is attached.")
+    for f in ("account-statement.pdf", "position-snapshot.pdf"):
+        m.add_attachment(open(os.path.join(d, f), "rb").read(), maintype="application", subtype="pdf", filename=f)
+    return base64.urlsafe_b64encode(m.as_bytes()).decode()
+
+
+def main():
+    tmp = tempfile.mkdtemp(prefix="hseed-")
+    try:
+        isin = "EGS60121C018"   # private-scan: synthetic
+        mails = {
+            "m-jun": ("1780000000000", statement(tmp, "2026-06", "--snapname", isin)),   # private-scan: synthetic
+            "m-aug": ("1785000000000", statement(tmp, "2026-08", "--start", "9500", "--deposit", "1000", "--qty", "5", "--price", "90", "--close", "91", "--hold", "15", "--snapname", isin)),   # private-scan: synthetic
+            "m-sep": ("1788000000000", statement(tmp, "2026-09", "--start", "10050", "--deposit", "500", "--symbol", "HRHO", "--company", "EFG Holding", "--qty", "30", "--price", "20", "--close", "21")),   # private-scan: synthetic
+        }
+        inbox = os.path.join(tmp, "inbox"); os.makedirs(inbox)
+        man = []
+        for i, (date, raw) in mails.items():
+            json.dump({"id": i, "raw": raw, "internalDate": date}, open(os.path.join(inbox, i + ".json"), "w"))
+            man.append({"id": i, "subject": "Your monthly E-statement", "date": date})
+        json.dump(man, open(os.path.join(inbox, "manifest.json"), "w"))
+        data = os.path.join(tmp, "data")
+        os.makedirs(os.path.join(data, "portfolio"))
+        json.dump({"data": {"name": "Seed Test", "inception": "2026-09", "cash": 0, "account": {"holder": "Test Friend", "unifiedCode": ""}, "historyImport": {"status": "pending"}}},   # private-scan: synthetic
+                  open(os.path.join(data, "portfolio", "settings.json"), "w"))
+        out = os.path.join(tmp, "out")
+        r = subprocess.run(["node", os.path.join(TOOLS, "history_seed.js"), "--data", data, "--inbox", inbox, "--out", out, "--now", "2026-09-30T12:00:00Z"], capture_output=True, text=True, timeout=300)
+        res = json.loads(r.stdout.strip().splitlines()[-1])
+        check("three monthly statements used, Jun-26 to Sep-26, Jul-26 is a gap",
+              res.get("ok") and res["first"] == "2026-06" and res["last"] == "2026-09" and res["lastTo"] == "2026-09-30" and res["months"] == 3 and res["gaps"] == ["2026-07"], json.dumps(res))
+        rows = json.load(open(os.path.join(out, "ledger_y2026.json")))["rows"]
+        items = json.load(open(os.path.join(out, "assets_update.json")))["items"]
+        adj = [r for r in rows if r.get("src") == "history-adjust"]
+        check("the same stock under its ISIN (snapshot) and its name (trade line) is one asset, with the readable name and the ticker",
+              sorted(items) == ["Commercial International Bank", "EFG Holding"] and items["Commercial International Bank"].get("symbol") == "COMI"
+              and {r.get("a") for r in rows if r.get("a")} == {"Commercial International Bank", "EFG Holding"}, json.dumps(items))
+        check("adjustments: Aug-26's opening cash (after the gap), then Sep-26's stock not on the snapshot and its cash",
+              [(r["d"], r["t"], r.get("a"), r.get("q"), r["amt"]) for r in adj] == [("2026-08-01", "Deposit", None, None, 355), ("2026-09-30", "Sell", "Commercial International Bank", 15, 1350), ("2026-09-30", "Withdrawal", None, None, -1350)]
+              and all(r["note"].startswith("Adjustment") for r in adj) and res["adjustments"] == 3 and res["adjustedMonths"] == ["2026-08", "2026-09"], json.dumps(adj))
+        cash = round(sum(r["amt"] for r in rows), 2)
+        sh = {}
+        for r in rows:
+            if r["t"] in ("Buy", "Sell"):
+                sh[r["a"]] = sh.get(r["a"], 0) + (1 if r["t"] == "Buy" else -1) * r["q"]
+        check("the ledger ends exactly on Sep-26's statement: cash 9,950 and 30 EFG Holding", cash == 9950 and {k: v for k, v in sh.items() if v} == {"EFG Holding": 30}, json.dumps([cash, sh]))
+        marks = json.load(open(os.path.join(out, "marks.json")))["months"]
+        st = json.load(open(os.path.join(out, "settings.json")))
+        check("each month's mark is its statement's; settings track from Sep-26's last day",
+              sorted(marks) == ["2026-06", "2026-08", "2026-09"] and all(m["source"] == "statement" for m in marks.values()) and marks["2026-09"]["securities"] == 630
+              and st["inception"] == "2026-06" and st["trackFrom"] == "2026-09-30" and st["cash"] == 9950 and st["historyImport"]["status"] == "done", json.dumps([marks, st.get("historyImport")]))
+        check("one import per month, posted by the history import", sorted(f for f in os.listdir(out) if f.startswith("import_")) == ["import_2026-06.json", "import_2026-08.json", "import_2026-09.json"])
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    print("ALL PASS" if not fails else f"{fails} FAILED")
+    return 1 if fails else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

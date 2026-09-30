@@ -1558,8 +1558,8 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
       screen(`<h1>You're connected</h1>
         <p>Your portfolio is built from your Thndr emails <b>within the hour</b>, and you get an email when it is ready. Until then it looks empty: that is expected.</p>
         <ul class="lk-steps"><li>It starts from your first monthly Thndr statement in Gmail: your holdings and cash on that date, exactly as Thndr printed them.</li>
-          <li>Every statement and trade since then is added on top, so your returns go back to that date.</li>
-          <li>If a monthly statement is missing from your Gmail, the email says which one: request it in the Thndr app and it is added by itself.</li></ul>
+          <li>Every monthly statement since then is added on top, so your returns go back to that date. Each month ends exactly on Thndr's holdings and cash; anything the statements don't explain is a clearly labelled "Adjustment".</li>
+          <li>If a monthly statement is missing from your Gmail, the email says which one.</li></ul>
         <button class="lk-btn" id="lk-gm-done" data-testid="gmail-done">Done</button>`);
       $l('#lk-gm-done').onclick = () => done();
       return;
@@ -2183,7 +2183,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   })();
 })();
 </script>
-<meta name="pd-build" content="3aea8ec32a0c 2026-09-30 06:20">
+<meta name="pd-build" content="3aea8ec32a0c 2026-09-30 07:18">
 <style>
 :root{
   --bg:#F3F6F4; --surface:#FFFFFF; --surface-2:#EDF2EF; --ink:#0F1A17; --ink-2:#46534E; --ink-3:#5F6C67;

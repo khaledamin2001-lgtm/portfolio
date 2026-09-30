@@ -4,7 +4,7 @@
     python3 history_check.py --engine DIR [--code DIR]
 
 Builds a throwaway portfolio exactly as the account job builds a friend's (run_account_mail.py: the monthly statements
-since 2019, src/tools/history_seed.js from the earliest, then sync.js on every later Thndr email), from the owner's
+since 2019 through src/tools/history_seed.js, then sync.js on every Thndr email after the latest), from the owner's
 Thndr account name and code only, and compares the result with the owner's real portfolio (the engine's documents):
 share counts per stock and fund now, broker cash, and each month-end mark both have from a statement. Nothing is
 written, sent or published. Prints one JSON line of counts and matches (tickers of any mismatch, never an amount).
@@ -27,8 +27,10 @@ def load_dir(d):
     return out
 
 
-def holdings(docs):
+def holdings(docs, names=None):
+    """Shares per security now, keyed by ticker where either portfolio knows one (names: lower-case name -> ticker)."""
     items = (docs.get("portfolio/assets") or {}).get("items") or {}
+    names = names or {}
     q = {}
     for k, v in docs.items():
         if not k.startswith("ledger/"):
@@ -37,9 +39,19 @@ def holdings(docs):
             if t.get("t") not in ("Buy", "Sell", "Bonus") or not t.get("a"):
                 continue
             a = items.get(t["a"]) or {}
-            key = (a.get("symbol") or t["a"]).upper()
+            key = (a.get("symbol") or names.get(t["a"].lower()) or t["a"]).upper()
             q[key] = q.get(key, 0) + (-1 if t["t"] == "Sell" else 1) * (t.get("q") or 0)
     return {k: v for k, v in q.items() if abs(v) > 0.5}
+
+
+def ticker_names(*docs):
+    out = {}
+    for d in docs:
+        for n, a in ((d.get("portfolio/assets") or {}).get("items") or {}).items():
+            if a.get("symbol"):
+                out[n.lower()] = a["symbol"]
+                out[(a.get("name") or n).lower()] = a["symbol"]
+    return out
 
 
 def main(argv=None):
@@ -66,13 +78,13 @@ def main(argv=None):
         r = subprocess.run(["node", os.path.join(ctx.code, "src", "tools", "history_seed.js"), "--data", data, "--inbox", inbox_m, "--out", seed_out],
                            capture_output=True, text=True, timeout=1200)
         seed = json.loads((r.stdout or "{}").strip().splitlines()[-1] if (r.stdout or "").strip() else "{}")
-        out = {"ok": True, "monthlyStatementsFound": cm.get("kept"), "seed": {k: seed.get(k) for k in ("ok", "month", "to", "holdings", "candidates", "error")}}
+        out = {"ok": True, "monthlyStatementsFound": cm.get("kept"), "seed": {k: seed.get(k) for k in ("ok", "first", "last", "lastTo", "months", "holdings", "adjustments", "adjustedMonths", "gaps", "error")}}
         if not seed.get("ok"):
             print(json.dumps(out))
             return 0
         ram.apply_to_data(data, run_sync.writes_from_plan(seed_out, {}))
         inbox, run = os.path.join(work, "inbox"), os.path.join(work, "run")
-        c = imap_fetch.fetch(seed["to"].replace("-", "/"), set(), inbox)
+        c = imap_fetch.fetch(seed["lastTo"].replace("-", "/"), set(), inbox)
         os.makedirs(run)
         r = subprocess.run(["node", os.path.join(ctx.code, "src", "tools", "sync.js"), "--data", data, "--inbox", inbox, "--out", run, "--today", today],
                            capture_output=True, text=True, timeout=1800)
@@ -81,7 +93,8 @@ def main(argv=None):
         summary = json.load(open(os.path.join(run, "summary.json")))
         ram.apply_to_data(data, run_sync.writes_from_plan(os.path.join(run, "write"), {}))
         built = load_dir(data)
-        hr, hb = holdings(real), holdings(built)
+        tn = ticker_names(real, built)
+        hr, hb = holdings(real, tn), holdings(built, tn)
         keys = sorted(set(hr) | set(hb))
         differ = [k for k in keys if abs(hr.get(k, 0) - hb.get(k, 0)) >= 0.5]
         mr = ((real.get("portfolio/marks") or {}).get("months") or {})
