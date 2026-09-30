@@ -525,7 +525,7 @@ def history_email(name, seed, summary, site):
     if held:
         lines += ["", f"{len(held)} newer email{'s' if len(held) > 1 else ''} could not be applied (nothing from {'them' if len(held) > 1 else 'it'} was used):"]
         lines += [f"  - {e.get('subject')}{(' (' + e['period'] + ')') if e.get('period') else ''}: {(e.get('reasons') or ['see the site'])[0]}" for e in held[:8]]
-    lines += ["", f"Open it: {site}", "From now on, new Thndr emails are added every hour during the day.", ""]
+    lines += ["", f"Open it: {site}", "From now on, new Thndr emails are added three times a day (4:15 pm, 6:15 pm and 11 pm Cairo time).", ""]
     return f"{name}: built from your Thndr emails", "\n".join(lines)
 
 

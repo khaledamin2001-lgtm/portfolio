@@ -95,10 +95,11 @@ finally:
 
 # ---- time gate
 P = lambda t, d="2026-09-28": {"today": d, "minuteOfDay": int(t[:2]) * 60 + int(t[3:])}
-check("gate: sync 18:16 no, 18:17 early, 22:16 early, 22:17 late, 23:59 late",
-      [jc.gate(P(t), run_sync.WINDOWS, {}, False)[0] for t in ("18:16", "18:17", "22:16", "22:17", "23:59")] == [None, "early", "early", "late", "late"])
+check("gate: sync 16:14 no, 16:15 afternoon, 18:14 afternoon, 18:15 evening, 23:00 night, 00:30 after midnight, 07:00 no",
+      [jc.gate(P(t), run_sync.WINDOWS, {}, False)[0] for t in ("16:14", "16:15", "18:14", "18:15", "22:59", "23:00", "23:59", "00:30", "07:00")]
+      == [None, "afternoon", "afternoon", "evening", "evening", "night", "night", "after midnight", None])
 check("gate: a slot already run today is skipped, yesterday's is not",
-      jc.gate(P("19:17"), run_sync.WINDOWS, {"early": "2026-09-28"}, False)[0] is None and jc.gate(P("19:17"), run_sync.WINDOWS, {"early": "2026-09-27"}, False)[0] == "early")
+      jc.gate(P("19:17"), run_sync.WINDOWS, {"evening": "2026-09-28"}, False)[0] is None and jc.gate(P("19:17"), run_sync.WINDOWS, {"evening": "2026-09-27"}, False)[0] == "evening")
 check("gate: market before 15:10 no, 15:10 yes; manual always", jc.gate(P("15:09"), run_market.WINDOW, {}, False)[0] is None
       and jc.gate(P("15:10"), run_market.WINDOW, {}, False)[0] == "day" and jc.gate(P("03:00"), run_market.WINDOW, {"day": "2026-09-28"}, True)[0] == "manual")
 

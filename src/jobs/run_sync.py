@@ -6,7 +6,8 @@
                         [--site-remote URL|PATH]
 
 Schedule: the workflow fires at 18:17 and 22:17 Cairo in both UTC offsets (15:17, 16:17, 19:17, 20:17 UTC); a run
-goes ahead only inside a slot window - "early" 18:17-22:16, "late" 22:17-23:59 Cairo - when jobs.json has no run of
+goes ahead only inside a slot window - "afternoon" 16:15-18:14, "evening" 18:15-22:59, "night" 23:00-23:59 and "after
+midnight" 00:00-06:59 Cairo (a late-started 11 pm run) - when jobs.json has no run of
 that slot today. --manual (workflow_dispatch, e.g. "Check inbox now" on the site) always runs and is not recorded as
 a scheduled slot.
 
@@ -46,7 +47,9 @@ if HERE not in sys.path:
 import jobs_common as jc  # noqa: E402
 import store  # noqa: E402
 
-WINDOWS = [("early", 18 * 60 + 17, 22 * 60 + 17), ("late", 22 * 60 + 17, 24 * 60)]
+# the email run's three checks (4:15 pm, 6:15 pm, 11 pm Cairo), each window lasting until the next; GitHub starts scheduled
+# runs hours late at times, so a run after midnight still counts once as last night's check
+WINDOWS = [("afternoon", 16 * 60 + 15, 18 * 60 + 15), ("evening", 18 * 60 + 15, 23 * 60), ("night", 23 * 60, 24 * 60), ("after midnight", 0, 7 * 60)]
 JOB = "inbox sync"
 
 
@@ -271,7 +274,16 @@ def main(argv=None):
         jc.engine_refresh(ctx)
         plan0 = ctx.plan()
         jobs = jc.jobs_state(ctx)
-        slot, why = jc.gate(plan0, WINDOWS, (jobs.get("sync") or {}).get("slots") or {}, a.manual)
+        done = (jobs.get("sync") or {}).get("slots") or {}
+        slot, why = jc.gate(plan0, WINDOWS, done, a.manual)
+        if slot == "after midnight":   # only for a late-started 11 pm check: last night's check must be missing
+            yday = (datetime.date.fromisoformat(plan0["today"]) - datetime.timedelta(days=1)).isoformat()
+            if done.get("night") == yday or (done.get("after midnight") or "") >= plan0["today"]:
+                slot, why = None, "last night's check already happened"
+        # the email run's later steps (friends, Yassin's reports) follow this decision
+        if os.environ.get("GITHUB_OUTPUT"):
+            with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+                fh.write(f"ran={'true' if slot else 'false'}\n")
         if not slot:
             jc.log(f"sync: skipped ({why}; Cairo {plan0['nowCairo'][11:16]})")
             return 0

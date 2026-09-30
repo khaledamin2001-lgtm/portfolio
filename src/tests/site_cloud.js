@@ -233,7 +233,7 @@ const up = (url) => new Promise((res) => { http.get(url, (r) => { r.resume(); re
     await $t('gmail-holder').fill('Omar Test'); await A.shot('gmail-step3');
     await $t('gmail-connect').click();
     await $t('gmail-done').waitFor({ timeout: 30000 }).catch(() => {});
-    check('connected: what happens next is explained', /every hour/.test(await page.locator('#lock').textContent()));
+    check('connected: what happens next is explained', /three times a day/.test(await page.locator('#lock').textContent()));
     await A.shot('gmail-done');
     await $t('gmail-done').click();
     await A.lockHidden(60000).catch(() => {});
@@ -574,7 +574,7 @@ print(r.seal_json(json.load(open(${JSON.stringify(path.join(TMP, 'snap.json'))})
     check('"Build it from my Thndr emails" goes straight to connecting Gmail, and says what will happen', /first monthly Thndr statement/.test(await K.page.locator('#lock').textContent()));
     await K.$t('gmail-address').fill('nour.test@example.com'); await K.$t('gmail-app-password').fill('abcd efgh ijkl mnop'); await K.$t('gmail-holder').fill('Nour Test');
     await K.$t('gmail-connect').click(); await K.$t('gmail-done').waitFor({ timeout: 30000 }).catch(() => {});
-    check('connected: it says the portfolio is built within the hour, from the first monthly statement', /within the hour/.test(await K.page.locator('#lock').textContent()));
+    check('connected: it says the portfolio is built at the next check, from the first monthly statement', /at the next check/.test(await K.page.locator('#lock').textContent()));
     await K.$t('gmail-done').click(); await K.lockHidden(60000).catch(() => {}); if (await K.$t('live-bio-skip').count()) await K.$t('live-bio-skip').click();
     await K.page.click('#tab-overview'); await K.$t('history-pending').waitFor({ timeout: 15000 }).catch(() => {});
     check('until it is built, the Overview says so (and shows the friends section)', await K.$t('history-pending').isVisible() && await K.$t('friends-panel').isVisible());
