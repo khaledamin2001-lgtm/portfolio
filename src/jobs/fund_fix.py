@@ -38,11 +38,15 @@ def main(argv=None):
         rep = json.load(open(os.path.join(out, "report.json")))
         print(f"statements found {found.get('kept')}, with a fund account page {rep['statementsWithFunds']}, fund trades on them {rep['fundTradesOnStatements']}")
         print(f"unconfirmed fund rows {rep['unconfirmed']}: corrected {len(rep['corrected'])}, confirmed as they are {len(rep['confirmed'])}, "
-              f"not on the statements {len(rep['notOnStatements'])}, no statement covers them {len(rep['uncovered'])}")
+              f"units differ {len(rep.get('unitsDiffer') or [])}, not on the statements {len(rep['notOnStatements'])}, no statement covers them {len(rep['uncovered'])}")
         for c in rep["corrected"]:
             f, t = c["from"], c["to"]
             print(f"  {c['t']} {c['a']}: {f['d']} {f.get('q')} units -> {t['d']} {t.get('q')} units"
                   f"{'' if abs((f.get('amt') or 0) - (t.get('amt') or 0)) < 0.005 else ' (amount changed)'} [{c['statement']}{'' if c['unitsPrinted'] else ', date only'}]")
+        if rep.get("unitsDiffer"):
+            print("units differ from the statement by more than 1% (left as they are, for a look):")
+            for x in rep["unitsDiffer"]:
+                print(f"  {x['d']} {x['t']} {x['a']} {x['q']} units; statement {x['statementDate']} {x['statementUnits']} units at {x['statementNav']} [{x['statement']}]")
         for k, title in (("notOnStatements", "not on the statements (left as they are)"), ("uncovered", "no statement covers them (left as they are)"),
                          ("missing", "on the statements but not in the ledger (not added)")):
             if rep[k]:

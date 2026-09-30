@@ -5,7 +5,8 @@
      node fund_fix.js --data <export dir> --inbox <dir> --out <dir>
    A match: same type and fund, dates at most 6 days apart, units within 1% or amount within 2%; the closest wins, each
    statement trade is used once. On a match the row takes the statement's date, units and NAV (and its amount when it
-   is 1 EGP or more off) and a note "checked against the Thndr <Mon-YY> statement". A savings-wallet trade the statement
+   is 1 EGP or more off) and a note "checked against the Thndr <Mon-YY> statement"; units more than 1% apart are listed
+   (unitsDiffer) and the row left as it is. A savings-wallet trade the statement
    shows only as a cash transfer (no units printed) corrects the date and amount only (units = amount / the row's NAV).
    Nothing is removed or added: rows the statements do not show, and statement fund trades the ledger lacks, are
    listed. Writes <out>/write/ledger_yYYYY.json for each year that changed (run_sync.writes_from_plan) and <out>/report.json; prints ONE JSON line of counts. */
@@ -57,16 +58,21 @@ const days = (a, b) => Math.abs((Date.parse(a) - Date.parse(b)) / 864e5);
   }
   const covered = (d) => windows.some(([a, b]) => d >= a && d <= b);
 
-  const corrected = [], confirmed = [], notOnStatements = [], uncovered = [];
+  const corrected = [], confirmed = [], notOnStatements = [], uncovered = [], unitsDiffer = [];
   unconfirmed.sort((a, b) => (a.d < b.d ? -1 : 1)).forEach((t) => {
     const c = trades.filter((x) => !x.used && x.t === t.t && x.a.toLowerCase() === t.a.toLowerCase() && days(x.d, t.d) <= 6 &&
       ((x.units && Math.abs((x.q || 0) - (t.q || 0)) <= Math.max(0.01, Math.abs(t.q || 0) * 0.01)) || Math.abs(Math.abs(x.amt) - Math.abs(t.amt || 0)) <= Math.max(1, Math.abs(t.amt || 0) * 0.02)))
       .sort((a, b) => days(a.d, t.d) - days(b.d, t.d) || Math.abs(Math.abs(a.amt) - Math.abs(t.amt)) - Math.abs(Math.abs(b.amt) - Math.abs(t.amt)))[0];
     if (!c) { (covered(t.d) ? notOnStatements : uncovered).push({ d: t.d, t: t.t, a: t.a, q: t.q }); return; }
     c.used = true;
+    // units that differ by more than 1% are not a small correction: listed for a look, the row is left as it is
+    if (c.units && Math.abs(c.q - (t.q || 0)) > Math.max(0.01, Math.abs(t.q || 0) * 0.01)) {
+      unitsDiffer.push({ d: t.d, t: t.t, a: t.a, q: t.q, statementDate: c.d, statementUnits: c.q, statementNav: c.p, statement: c.M }); return;
+    }
     const before = { d: t.d, q: t.q, p: t.p, amt: t.amt };
-    const next = { d: c.d, amt: Math.abs(c.amt - t.amt) >= 1 ? c.amt : t.amt };
-    if (c.units) { next.q = c.q; next.p = c.p; } else { next.p = t.p; next.q = t.p > 0 ? Math.round(Math.abs(next.amt) / t.p * 1e4) / 1e4 : t.q; }
+    const amtMoved = Math.abs(c.amt - t.amt) >= 1;
+    const next = { d: c.d, amt: amtMoved ? c.amt : t.amt };
+    if (c.units) { next.q = c.q; next.p = c.p; } else { next.p = t.p; next.q = amtMoved && t.p > 0 ? Math.round(Math.abs(next.amt) / t.p * 1e4) / 1e4 : t.q; }
     const diff = next.d !== t.d || Math.abs((next.q || 0) - (t.q || 0)) > 1e-4 || Math.abs((next.p || 0) - (t.p || 0)) > 1e-6 || Math.abs(next.amt - t.amt) > 0.005;
     const note = `checked against the Thndr ${lbl(c.M)} statement`;
     if (diff) {
@@ -95,8 +101,8 @@ const days = (a, b) => Math.abs((Date.parse(a) - Date.parse(b)) / 864e5);
       fs.writeFileSync(path.join(W, `ledger_y${y}.json`), JSON.stringify({ rows: into }));
     }
   });
-  const report = { statementsWithFunds: used, fundTradesOnStatements: trades.length, unconfirmed: unconfirmed.length, corrected, confirmed, notOnStatements, uncovered, missing, changedYears };
+  const report = { statementsWithFunds: used, fundTradesOnStatements: trades.length, unconfirmed: unconfirmed.length, corrected, confirmed, unitsDiffer, notOnStatements, uncovered, missing, changedYears };
   fs.writeFileSync(path.join(args.out, 'report.json'), JSON.stringify(report, null, 1));
-  console.log(JSON.stringify({ ok: true, statementsWithFunds: used, fundTradesOnStatements: trades.length, unconfirmed: unconfirmed.length, corrected: corrected.length, confirmed: confirmed.length,
+  console.log(JSON.stringify({ ok: true, statementsWithFunds: used, fundTradesOnStatements: trades.length, unconfirmed: unconfirmed.length, corrected: corrected.length, confirmed: confirmed.length, unitsDiffer: unitsDiffer.length,
     notOnStatements: notOnStatements.length, uncovered: uncovered.length, missing: missing.length, changedYears }));
 })().catch((e) => { console.log(JSON.stringify({ ok: false, error: String((e && e.message) || e) })); process.exit(1); });
