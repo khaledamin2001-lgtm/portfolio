@@ -47,7 +47,7 @@ const isFundName = (n) => /^thndr/i.test(n || '');
   const bench = opt(D('bench', 'egx30.json'), { members: [] });
   const macro = opt(D('market', 'macro.json'), {});
   const manifest = fs.existsSync(path.join(args.inbox, 'manifest.json')) ? JSON.parse(fs.readFileSync(path.join(args.inbox, 'manifest.json'))) : [];
-  const byMonth = {}; let refused = 0;
+  const byMonth = {}; let refused = 0; const skipped = [];
   for (const msg of manifest) {
     if (!/monthly e-statement/i.test(msg.subject || '')) continue;
     try {
@@ -56,12 +56,14 @@ const isFundName = (n) => /^thndr/i.test(n || '');
       const docs = [];
       for (const a of TS.attachments(raw)) docs.push({ filename: a.filename, lines: await TS.pdfLines(pdfjs, a.bytes) });
       const own = TS.ownerCheck(docs, settings);
-      if (own.error) { refused++; continue; }
+      if (own.error) { refused++; skipped.push({ date: msg.date, why: 'another account' }); continue; }
       const st = TS.parseStatement(docs);
-      if (!st.cash || !st.fullMonth || !st.snapshot || st.cash.end == null || !st.month) continue;
+      const why = !st.cash ? 'no account statement' : !st.month ? 'no period' : !st.fullMonth ? `not a whole month (${st.from} to ${st.to})` : !st.snapshot ? 'no position snapshot' : st.cash.end == null ? 'no closing balance' : null;
+      if (why) { skipped.push({ month: st.month || null, why }); continue; }
       const prev = byMonth[st.month];   // the same month twice (a resent email): the later email wins
+      if (prev) skipped.push({ month: st.month, why: 'the same month twice (the later email is used)' });
       if (!prev || (msg.date || '') > (prev.msg.date || '')) byMonth[st.month] = { msg, st, own };
-    } catch (e) { /* an unreadable email is simply not used */ }
+    } catch (e) { skipped.push({ date: msg.date, why: 'unreadable: ' + String((e && e.message) || e).slice(0, 80) }); }
   }
   const cands = Object.keys(byMonth).sort().map((m) => byMonth[m]);
   if (!cands.length) {
@@ -218,5 +220,6 @@ const isFundName = (n) => /^thndr/i.test(n || '');
   const used = new Set(rows.map((t) => t.a).filter(Boolean));
   W('assets_update.json', { items: Object.fromEntries(Object.entries(items).filter(([n]) => used.has(n) && JSON.stringify(assets0[n]) !== JSON.stringify(items[n]))) });
   Object.keys(imports).forEach((m) => W(`import_${m}.json`, imports[m]));
-  console.log(JSON.stringify({ ok: true, month: M0, to: to0, first: M0, last: ML, lastTo: toL, months: cands.length, holdings: holdings0, adjustments: adjTotal, adjustedMonths: adjMonths, gaps, code: first.own.code || null, candidates: cands.length }));
+  console.log(JSON.stringify({ ok: true, month: M0, to: to0, first: M0, last: ML, lastTo: toL, months: cands.length, holdings: holdings0, adjustments: adjTotal, adjustedMonths: adjMonths, gaps, code: first.own.code || null, candidates: cands.length, skipped,
+    fundsOnSnapshot: cands.filter((c) => c.st.snapshot.holdings.some((h) => h.kind === 'fund')).map((c) => c.st.month), fundStatement: cands.filter((c) => c.st.mf).map((c) => c.st.month) }));
 })().catch((e) => { console.log(JSON.stringify({ ok: false, error: String((e && e.message) || e) })); process.exit(1); });
