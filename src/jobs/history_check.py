@@ -78,7 +78,7 @@ def main(argv=None):
         r = subprocess.run(["node", os.path.join(ctx.code, "src", "tools", "history_seed.js"), "--data", data, "--inbox", inbox_m, "--out", seed_out],
                            capture_output=True, text=True, timeout=1200)
         seed = json.loads((r.stdout or "{}").strip().splitlines()[-1] if (r.stdout or "").strip() else "{}")
-        out = {"ok": True, "monthlyStatementsFound": cm.get("kept"), "seed": {k: seed.get(k) for k in ("ok", "first", "last", "lastTo", "months", "holdings", "adjustments", "adjustedMonths", "gaps", "skipped", "fundsOnSnapshot", "fundStatement", "error")}}
+        out = {"ok": True, "monthlyStatementsFound": cm.get("kept"), "seed": {k: seed.get(k) for k in ("ok", "first", "last", "lastTo", "months", "holdings", "adjustments", "adjustedMonths", "gaps", "skipped", "openingFunds", "fundsOnSnapshot", "fundStatement", "error")}}
         if not seed.get("ok"):
             print(json.dumps(out))
             return 0
@@ -107,6 +107,8 @@ def main(argv=None):
         mb = ((built.get("portfolio/marks") or {}).get("months") or {})
         both = [m for m in sorted(mb) if (mb[m] or {}).get("source") == "statement" and (mr.get(m) or {}).get("source") in ("statement", "reconstructed")]
         mm = [m for m in both if abs((mr[m].get("cash") or 0) - (mb[m].get("cash") or 0)) < 1 and abs((mr[m].get("securities") or 0) - (mb[m].get("securities") or 0)) < 1]
+        # how big a month-end difference is, as a share of the real figure (never the amount)
+        size = lambda r, b: (lambda d: "under 0.01%" if d < 1e-4 else "under 0.1%" if d < 1e-3 else "under 1%" if d < 1e-2 else "1% or more")(abs((r or 0) - (b or 0)) / max(abs(r or 0), 1))
         sb = built.get("portfolio/settings") or {}
         held = [e for e in summary.get("log") or [] if e.get("status") == "hold"]
         out.update({
@@ -116,7 +118,7 @@ def main(argv=None):
             "holdings": {"match": len(keys) - len(differ), "of": len(keys), "differ": {k: side(k) for k in differ}, "builtRows": trail},
             "adjustmentRows": [f"{t['d']} {t['t']} {t.get('a') or 'cash'}" for t in brows if t.get("src") == "history-adjust"],
             "cash": {"sameDate": sb.get("cashDate") == s.get("cashDate"), "match": abs((sb.get("cash") or 0) - (s.get("cash") or 0)) < 1},
-            "marks": {"match": len(mm), "of": len(both), "differ": {m: [f"{x} {'higher' if (mb[m].get(x) or 0) > (mr[m].get(x) or 0) else 'lower'} in the built one" for x in ("cash", "securities") if abs((mr[m].get(x) or 0) - (mb[m].get(x) or 0)) >= 1] + [f"real source {mr[m].get('source')}"] for m in both if m not in mm}},
+            "marks": {"match": len(mm), "of": len(both), "differ": {m: [f"{x} {'higher' if (mb[m].get(x) or 0) > (mr[m].get(x) or 0) else 'lower'} in the built one by {size(mr[m].get(x), mb[m].get(x))}" for x in ("cash", "securities") if abs((mr[m].get(x) or 0) - (mb[m].get(x) or 0)) >= 1] + [f"real source {mr[m].get('source')}"] for m in both if m not in mm}},
         })
         print(json.dumps(out))
         return 0

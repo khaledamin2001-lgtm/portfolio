@@ -6,6 +6,11 @@
   Aug-26  opens with more cash than Jun-26 closed with; buys the same stock under its trade-line NAME: one asset (the
           readable name, the snapshot's ticker), no share adjustment, one labelled cash adjustment on Aug 1
   Sep-26  buys another stock; the snapshot no longer lists the first: its shares are taken out and the cash matched
+and a second portfolio, with the shared market data (company names, daily closes):
+  Jan-26  the starting point: two stocks of 1 share each under their ISINs, and fund units the snapshot does not list
+  Feb-26  both stocks sold under their company names (the same share count: the names and prices tell them apart) and
+          the fund sold (its statement): the stocks are tied to their tickers and the fund units are held from the start,
+          so no adjustment at all
 
     python3 src/tests/test_history_seed.py <tools dir with history_seed.js, statement.js and node_modules/pdfjs-dist>
 exit 0 = all pass."""
@@ -32,9 +37,31 @@ def statement(tmp, month, *extra):
     m["To"] = "someone@example.com"
     m["Subject"] = "Your monthly E-statement"
     m.set_content("Your monthly statement is attached.")
-    for f in ("account-statement.pdf", "position-snapshot.pdf"):
+    for f in sorted(os.listdir(d)):
         m.add_attachment(open(os.path.join(d, f), "rb").read(), maintype="application", subtype="pdf", filename=f)
     return base64.urlsafe_b64encode(m.as_bytes()).decode()
+
+
+def run_seed(tmp, mails, market=None):
+    inbox = os.path.join(tmp, "inbox"); os.makedirs(inbox)
+    man = []
+    for i, (date, raw) in mails.items():
+        json.dump({"id": i, "raw": raw, "internalDate": date}, open(os.path.join(inbox, i + ".json"), "w"))
+        man.append({"id": i, "subject": "Your monthly E-statement", "date": date})
+    json.dump(man, open(os.path.join(inbox, "manifest.json"), "w"))
+    data = os.path.join(tmp, "data")
+    os.makedirs(os.path.join(data, "portfolio"))
+    json.dump({"data": {"name": "Seed Test", "inception": "2026-09", "cash": 0, "account": {"holder": "Test Friend", "unifiedCode": ""}, "historyImport": {"status": "pending"}}},   # private-scan: synthetic
+              open(os.path.join(data, "portfolio", "settings.json"), "w"))
+    for f, v in (market or {}).items():
+        os.makedirs(os.path.dirname(os.path.join(data, f)), exist_ok=True)
+        json.dump(v, open(os.path.join(data, f), "w"))
+    out = os.path.join(tmp, "out")
+    r = subprocess.run(["node", os.path.join(TOOLS, "history_seed.js"), "--data", data, "--inbox", inbox, "--out", out, "--now", "2026-09-30T12:00:00Z"], capture_output=True, text=True, timeout=300)
+    res = json.loads(r.stdout.strip().splitlines()[-1])
+    L = lambda f: json.load(open(os.path.join(out, f)))
+    rows = [t for f in sorted(os.listdir(out)) if f.startswith("ledger_") for t in L(f)["rows"]]
+    return res, rows, L("assets_update.json")["items"], L("marks.json")["months"], L("settings.json"), out
 
 
 def main():
@@ -46,23 +73,9 @@ def main():
             "m-aug": ("1785000000000", statement(tmp, "2026-08", "--start", "9500", "--deposit", "1000", "--qty", "5", "--price", "90", "--close", "91", "--hold", "15", "--snapname", isin)),   # private-scan: synthetic
             "m-sep": ("1788000000000", statement(tmp, "2026-09", "--start", "10050", "--deposit", "500", "--symbol", "HRHO", "--company", "EFG Holding", "--qty", "30", "--price", "20", "--close", "21")),   # private-scan: synthetic
         }
-        inbox = os.path.join(tmp, "inbox"); os.makedirs(inbox)
-        man = []
-        for i, (date, raw) in mails.items():
-            json.dump({"id": i, "raw": raw, "internalDate": date}, open(os.path.join(inbox, i + ".json"), "w"))
-            man.append({"id": i, "subject": "Your monthly E-statement", "date": date})
-        json.dump(man, open(os.path.join(inbox, "manifest.json"), "w"))
-        data = os.path.join(tmp, "data")
-        os.makedirs(os.path.join(data, "portfolio"))
-        json.dump({"data": {"name": "Seed Test", "inception": "2026-09", "cash": 0, "account": {"holder": "Test Friend", "unifiedCode": ""}, "historyImport": {"status": "pending"}}},   # private-scan: synthetic
-                  open(os.path.join(data, "portfolio", "settings.json"), "w"))
-        out = os.path.join(tmp, "out")
-        r = subprocess.run(["node", os.path.join(TOOLS, "history_seed.js"), "--data", data, "--inbox", inbox, "--out", out, "--now", "2026-09-30T12:00:00Z"], capture_output=True, text=True, timeout=300)
-        res = json.loads(r.stdout.strip().splitlines()[-1])
+        res, rows, items, marks, st, out = run_seed(tmp, mails)
         check("three monthly statements used, Jun-26 to Sep-26, Jul-26 is a gap",
               res.get("ok") and res["first"] == "2026-06" and res["last"] == "2026-09" and res["lastTo"] == "2026-09-30" and res["months"] == 3 and res["gaps"] == ["2026-07"], json.dumps(res))
-        rows = json.load(open(os.path.join(out, "ledger_y2026.json")))["rows"]
-        items = json.load(open(os.path.join(out, "assets_update.json")))["items"]
         adj = [r for r in rows if r.get("src") == "history-adjust"]
         check("the same stock under its ISIN (snapshot) and its name (trade line) is one asset, with the readable name and the ticker",
               sorted(items) == ["Commercial International Bank", "EFG Holding"] and items["Commercial International Bank"].get("symbol") == "COMI"
@@ -76,12 +89,35 @@ def main():
             if r["t"] in ("Buy", "Sell"):
                 sh[r["a"]] = sh.get(r["a"], 0) + (1 if r["t"] == "Buy" else -1) * r["q"]
         check("the ledger ends exactly on Sep-26's statement: cash 9,950 and 30 EFG Holding", cash == 9950 and {k: v for k, v in sh.items() if v} == {"EFG Holding": 30}, json.dumps([cash, sh]))
-        marks = json.load(open(os.path.join(out, "marks.json")))["months"]
-        st = json.load(open(os.path.join(out, "settings.json")))
         check("each month's mark is its statement's; settings track from Sep-26's last day",
               sorted(marks) == ["2026-06", "2026-08", "2026-09"] and all(m["source"] == "statement" for m in marks.values()) and marks["2026-09"]["securities"] == 630
               and st["inception"] == "2026-06" and st["trackFrom"] == "2026-09-30" and st["cash"] == 9950 and st["historyImport"]["status"] == "done", json.dumps([marks, st.get("historyImport")]))
         check("one import per month, posted by the history import", sorted(f for f in os.listdir(out) if f.startswith("import_")) == ["import_2026-06.json", "import_2026-08.json", "import_2026-09.json"])
+
+        # the second portfolio: names and fund units the snapshots do not give
+        tmp2 = os.path.join(tmp, "b"); os.makedirs(tmp2)
+        isin2 = "EGS38191C010"   # private-scan: synthetic
+        mails = {
+            "b-jan": ("1767300000000", statement(tmp2, "2026-01", "--snap", f"ABUK|{isin}|1|48", "--snap", f"OCDI|{isin2}|1|18")),   # private-scan: synthetic
+            "b-feb": ("1770000000000", statement(tmp2, "2026-02", "--start", "9145", "--deposit", "1000", "--qty", "5", "--price", "90", "--close", "91", "--hold", "15",   # private-scan: synthetic
+                                                 "--row", "5|Sell Abu Qir Fertilizers ( 1 @ 49.02 )|49.02", "--row", "5|Sell SODIC ( 1 @ 17.32 )|17.32",
+                                                 "--row", "10|Transfer From Mutual Funds Account|1550", "--mfrow", "9|Sell CCB ( 100 @ 15.50 EGP )|1550")),
+        }
+        market = {"market/latest.json": {"quotes": {"ABUK": {"name": "Abou Kir Fertilizers & Chemical Industries Co.", "price": 50}, "OCDI": {"name": "Six of October Development & Investment (SODIC)", "price": 18},
+                                                    "COMI": {"name": "Commercial International Bank (Egypt)", "price": 90}, "ORAS": {"name": "Orascom Construction Plc", "price": 300}}},
+                  "history/2026-02.json": {"month": "2026-02", "days": {"2026-02-05": {"ABUK": 49.1, "OCDI": 17.2, "COMI": 90, "ORAS": 300}}}}
+        res, rows, items, marks, st, out = run_seed(tmp2, mails, market)
+        check("names: both stocks sold under their company names are tied to their tickers (one asset each, the readable name)",
+              res.get("ok") and {n: a.get("symbol") for n, a in items.items() if not a.get("fund")} == {"Commercial International Bank": "COMI", "Abu Qir Fertilizers": "ABUK", "SODIC": "OCDI"}, json.dumps([res, items]))
+        check("funds: the units sold in Feb-26 are held from the start (not on the Jan-26 snapshot), priced at that sale's NAV",
+              res["openingFunds"] == ["CCB"] and [(r["a"], r["q"], r["p"]) for r in rows if r.get("opening") and r.get("acc") == "MF"] == [("CCB", 100, 15.5)], json.dumps([r for r in rows if r.get("opening")]))
+        check("no adjustment at all: every month ends on Thndr's holdings and cash from the statements' own rows", res["adjustments"] == 0 and not [r for r in rows if r.get("src") == "history-adjust"], json.dumps([r for r in rows if r.get("src") == "history-adjust"]))
+        sh = {}
+        for r in rows:
+            if r["t"] in ("Buy", "Sell"):
+                sh[r["a"]] = sh.get(r["a"], 0) + (1 if r["t"] == "Buy" else -1) * r["q"]
+        check("the ledger ends on Feb-26's statement: 15 COMI, nothing else, cash 11,311.34", {k: v for k, v in sh.items() if abs(v) > 1e-9} == {"Commercial International Bank": 15} and round(sum(r["amt"] for r in rows), 2) == 11311.34, json.dumps([sh, sum(r["amt"] for r in rows)]))   # private-scan: synthetic
+        check("Jan-26's month-end includes the fund units the snapshot left out (926 stocks + 1,550 fund)", marks["2026-01"]["securities"] == 2476, json.dumps(marks))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("ALL PASS" if not fails else f"{fails} FAILED")

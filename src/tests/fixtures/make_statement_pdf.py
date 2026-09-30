@@ -5,6 +5,9 @@
         [--company "Commercial International Bank"] [--qty 10] [--price 85.50] [--close 86.00] [--deposit 10000]
         [--start 0] [--hold N] [--snapname LABEL]   (opening cash; shares on the snapshot, default --qty; the snapshot's
         label for the stock, default --company: an ISIN such as EGS60121C018 is printed the way Thndr prints one)   # private-scan: synthetic
+        [--row "DAY|DESCRIPTION|VALUE"]...   more cash-account rows (a trade as "Sell X ( 1 @ 49.02 )")
+        [--snap "TICKER|LABEL|QTY|PRICE"]... more stock holdings on the snapshot; [--fund ...] the same under "Mutual funds holdings"
+        [--mfrow "DAY|DESCRIPTION|VALUE"]... rows of a mutual-fund account statement (mf-statement.pdf, only when given)
 
 Writes <out dir>/account-statement.pdf (the brokerage cash account: header with the holder name and Unified Code, the
 period "From d/m/yyyy To d/m/yyyy", Start/End Balance and two rows: a deposit on the 1st and a buy on the 2nd) and
@@ -52,32 +55,45 @@ def main():
     ap.add_argument("--start", type=float, default=0)
     ap.add_argument("--hold", type=float, default=None)
     ap.add_argument("--snapname", default=None)
+    ap.add_argument("--row", action="append", default=[])
+    ap.add_argument("--snap", action="append", default=[])
+    ap.add_argument("--fund", action="append", default=[])
+    ap.add_argument("--mfrow", action="append", default=[])
     a = ap.parse_args()
     y, m = int(a.month[:4]), int(a.month[5:])
     last = calendar.monthrange(y, m)[1]
     f = lambda x: f"{x:,.2f}"
+    n = lambda x: int(x) if x == int(x) else x
     cost = round(a.qty * a.price, 2)
-    end = round(a.start + a.deposit - cost, 2)
     hold = a.qty if a.hold is None else a.hold
-    q = int(a.qty) if a.qty == int(a.qty) else a.qty
-    hq = int(hold) if hold == int(hold) else hold
-    acct = ["Thndr Securities Brokerage", "Account Statement", f"Client Name {a.name} Unified Code {a.code}",
-            f"From 1/{m}/{y} To {last}/{m}/{y}", f"Start Balance {f(a.start)}", "Date Description Value Balance",
-            f"1/{m}/{y} Deposit {f(a.deposit)} {f(a.start + a.deposit)}",
-            f"2/{m}/{y} Buy {a.company} ( {q} @ {a.price:.2f} ) -{f(cost)} {f(end)}",
-            f"End Balance {f(end)}"]
+    split = lambda r: (lambda p: (int(p[0]), p[1], float(p[2])))(r.split("|"))
+    rows = [(1, "Deposit", a.deposit), (2, f"Buy {a.company} ( {n(a.qty)} @ {a.price:.2f} )", -cost)] + [split(r) for r in a.row]
+    def account(start, recs, head):
+        bal, out = start, []
+        for d, desc, v in sorted(recs, key=lambda r: r[0]):
+            bal = round(bal + v, 2)
+            out.append(f"{d}/{m}/{y} {desc} {f(v)} {f(bal)}")
+        return ["Thndr Securities Brokerage", head, f"Client Name {a.name} Unified Code {a.code}",
+                f"From 1/{m}/{y} To {last}/{m}/{y}", f"Start Balance {f(start)}", "Date Description Value Balance"] + out + [f"End Balance {f(bal)}"], bal
+    acct, end = account(a.start, rows, "Account Statement")
+    hl = lambda t, lab, q, px: f"{t} {lab} EGP {n(q)} {px:.2f} {f(round(q * px, 2))}"
+    extra = [(lambda p: (p[0], p[1], float(p[2]), float(p[3])))(x.split("|")) for x in a.snap]
+    funds = [(lambda p: (p[0], p[1], float(p[2]), float(p[3])))(x.split("|")) for x in a.fund]
     snap = ["Thndr Securities Brokerage", f"Client Name {a.name} Unified Code {a.code}",
             f"Position Snapshot as of {calendar.month_name[m]} {last}, {y}", "Stocks holdings",
-            "Ticker Name Quantity Price Value",
-            f"{a.symbol} {a.snapname or a.company} EGP {hq} {a.close:.2f} {f(round(hold * a.close, 2))}"]
+            "Ticker Name Quantity Price Value", hl(a.symbol, a.snapname or a.company, hold, a.close)] + [hl(*h) for h in extra]
+    if funds:
+        snap += ["Mutual funds holdings", "Ticker Name Quantity Price Value"] + [hl(*h) for h in funds]
+    files = [("account-statement.pdf", acct), ("position-snapshot.pdf", snap)]
+    if a.mfrow:
+        files.append(("mf-statement.pdf", account(0, [split(r) for r in a.mfrow], "Mutual Funds Account Statement")[0]))
     os.makedirs(a.out, exist_ok=True)
-    for name, lines in (("account-statement.pdf", acct), ("position-snapshot.pdf", snap)):
+    for name, lines in files:
         with open(os.path.join(a.out, name), "wb") as fh:
             fh.write(pdf(lines))
-    print(json.dumps({"ok": True, "files": ["account-statement.pdf", "position-snapshot.pdf"], "code": a.code, "month": a.month,
+    print(json.dumps({"ok": True, "files": [x[0] for x in files], "code": a.code, "month": a.month,
                       "deposit": a.deposit, "buy": {"symbol": a.symbol, "qty": a.qty, "price": a.price, "cost": cost}, "cashEnd": end,
-                      "securities": round(hold * a.close, 2)}))
-
+                      "securities": round(hold * a.close + sum(h[2] * h[3] for h in extra + funds), 2)}))
 
 if __name__ == "__main__":
     main()
