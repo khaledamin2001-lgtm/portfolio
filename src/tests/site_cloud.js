@@ -448,7 +448,10 @@ print(r.seal_json(json.load(open(${JSON.stringify(path.join(TMP, 'snap.json'))})
     const tokG0 = identity('signInWithPassword', { email: OWNER_EMAIL, password: 'owner pass 777' })[1].idToken;
     check('before verifying the email, the owner cannot list accounts', firestore('GET', FSU + 'status', { authorization: 'Bearer ' + tokG0 })[0] === 403);
     check('an ordinary account can never list accounts', firestore('GET', FSU + 'status', { authorization: 'Bearer ' + tokB })[0] === 403);
-    await G.$t('account-menu').click(); await G.$t('account-admin').click();
+    await G.$t('account-menu').click();
+    await G.page.waitForTimeout(300);
+    check("the owner's account menu hides Thndr emails and Email updates (the main portfolio does those)", !(await G.$t('account-gmail').isVisible()) && !(await G.$t('account-email').isVisible()) && await G.$t('account-owner-note').isVisible());
+    await G.$t('account-admin').click();
     await G.$t('admin-verify-send').waitFor();
     check('the admin screen asks the owner to verify the email first', await G.$t('admin-verify-done').isVisible());
     await G.$t('admin-verify-send').click(); await G.page.waitForTimeout(300); await G.$t('admin-verify-done').click();

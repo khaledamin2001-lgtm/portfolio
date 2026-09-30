@@ -1115,12 +1115,15 @@
       <button class="lk-btn ghost" id="lk-ac-code" data-testid="account-new-code">Make a new recovery code</button>
       <button class="lk-btn ghost" id="lk-ac-out" data-testid="account-signout">Sign out on this device</button>
       <button class="lk-btn ghost" id="lk-ac-admin" data-testid="account-admin" ${isOwner() ? '' : 'hidden'}>Admin: your friends' accounts</button>
+      <p class="lk-hint" id="lk-ac-owner" data-testid="account-owner-note" hidden>This is your sign-in for Admin and Friends. Your main portfolio already reads your Thndr emails and sends your emails, so nothing else is needed here.</p>
       <div class="lk-links"><button type="button" class="lk-link" id="lk-ac-back" data-testid="account-back">Back</button><button type="button" class="lk-link" id="lk-ac-del" data-testid="account-delete">Delete my account</button></div>`);
     $l('#lk-ac-friends').onclick = () => friendsScreen();
     listFriends().then(() => { const b = $l('#lk-ac-friends'); if (b) b.textContent = 'Friends' + (incoming() ? ` · ${incoming()} new` : ''); }).catch(() => {});
     $l('#lk-ac-del').onclick = () => deleteScreen();
     $l('#lk-ac-admin').onclick = () => adminScreen();
-    checkOwner().then((y) => { const b = $l('#lk-ac-admin'); if (b) b.hidden = !y; }).catch(() => {});
+    // the owner's own account is just the sign-in for admin and friends: the main portfolio does the Thndr emails and emails
+    const ownerView = (y) => { const b = $l('#lk-ac-admin'); if (b) b.hidden = !y; ['#lk-ac-gmail', '#lk-ac-mail'].forEach((id) => { const x = $l(id); if (x) x.hidden = y; }); const n = $l('#lk-ac-owner'); if (n) n.hidden = !y; };
+    ownerView(isOwner()); checkOwner().then(ownerView).catch(() => {});
     $l('#lk-ac-back').onclick = open;
     $l('#lk-ac-mail').onclick = () => mailScreen();
     $l('#lk-ac-gmail').onclick = () => gmailScreen(accountScreen);

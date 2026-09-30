@@ -463,6 +463,10 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
     state = dict((state_doc or {}).get("data") or {})
     sent = dict(state.get("alertsSent") or {})
     prefs = pkg.get("prefs") or {}
+    # the site owner's own account is only a sign-in for the admin screen and friends: the main portfolio already reads
+    # the owner's Thndr emails and sends the owner's emails, so this account gets no import and no emails of its own
+    if hashlib.sha256(str(token_claims(tok).get("email") or "").lower().encode()).hexdigest() == OWNER_HASH:
+        prefs = {"alerts": False, "weekly": False, "reports": False, "gmail": False, "shareMain": prefs.get("shareMain")}
     today = now.strftime("%Y-%m-%d")
     site = SITE
     work = tempfile.mkdtemp(prefix="acct-", dir=os.environ.get("RUNNER_TEMP") or None)

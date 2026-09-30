@@ -127,7 +127,7 @@ try:
     store.migrate(SYN, eng, os.path.join(code, "p", "khaled", "keys.json"))
     DB[f"users/{OUID}/docs/portfolio__settings"] = {"blob": store.encode_doc({"pub": base64.b64encode(oacct.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)).decode()}, "settings", 1, {"name": "Owner account"}, "2026-09-20T00:00:00Z").decode().strip(), "updateTime": stamp()}
     ram.OWNER_HASH = hashlib.sha256(b"owner@example.com").hexdigest()     # a stand-in owner
-    DB[f"mail/{OUID}"] = {"pkg": seal_mail({"uid": OUID, "email": "owner@example.com", "refresh": "RT3", "pk8": opk8, "prefs": {"alerts": False, "weekly": False, "reports": False, "shareMain": True}})}
+    DB[f"mail/{OUID}"] = {"pkg": seal_mail({"uid": OUID, "email": "owner@example.com", "refresh": "RT3", "pk8": opk8, "prefs": {"alerts": True, "weekly": True, "gmail": True, "shareMain": True}})}
     # account 1 asks for the main portfolio too: it is not the owner, so it must share its own
     DB[f"mail/{UID}"] = {"pkg": seal_mail({"uid": UID, "email": "friend@example.com", "refresh": "RT1", "pk8": pk8, "prefs": {"alerts": True, "weekly": True, "shareMain": True}})}
     CLAIMS = {UID: {"email": "friend@example.com", "email_verified": True}, GUID: {"email": "friend.gmail@example.com", "email_verified": True},
@@ -208,7 +208,8 @@ try:
     rc = ram.main(argv, http=FakeHttp(), send=send)
     check("the job succeeds", rc == 0)
     gsent = [m for m in sent if m["to"] == "friend2@example.com"]
-    check("nothing is emailed to the owner account (it only shares)", not [m for m in sent if m["to"] == "owner@example.com"])
+    check("the owner account (Gmail and emails switched on) gets no import and no email: it only shares",
+          not [m for m in sent if m["to"] == "owner@example.com"] and all(f["addr"] == "friend.gmail@example.com" for f in fetches), json.dumps([m["subject"] for m in sent if m["to"] == "owner@example.com"]))
     sent[:] = [m for m in sent if m["to"] == "friend@example.com"]
     check("account 1: new heads-up items, the weekly summary, then the friend request, to its own address",
           len(sent) == 3 and "heads-up" in sent[0]["subject"] and sent[1]["html"] and sent[2]["subject"] == "Zeyad's Portfolio wants to be friends on the portfolio site"
