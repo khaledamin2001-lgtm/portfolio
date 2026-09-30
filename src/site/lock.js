@@ -1711,6 +1711,97 @@
       editBar(); open(); toast('Signed out of the site account on this device. Your portfolio is unchanged.');
     };
   }
+  /* ---------- the friends hub (the top-left menu) ----------
+     You and your friends, ranked by this year's return, with this month and all-time: each row's figures are computed
+     here with the page's own engine (PE.run, PA) from the same documents the full view would show (a friend's copy plus
+     the shared market data), so tapping a row opens exactly those numbers. Your other portfolios on this device and
+     "Another portfolio" sit below. Friends' figures are kept in memory only, refreshed every 10 minutes. */
+  const HUB = { you: null, youAt: 0, friends: {}, market: null, marketAt: 0, busy: false };
+  function summarize(docs) {
+    const E = window.PE, A = window.PA, st0 = docs && docs['portfolio/settings'];
+    if (!E || !A || !st0 || !st0.inception) return null;
+    try {
+      const tx = Object.keys(docs).filter((k) => k.startsWith('ledger/')).sort().flatMap((k) => (docs[k] && docs[k].rows) || []);
+      const assets = (docs['portfolio/assets'] || {}).items || {}, marks0 = (docs['portfolio/marks'] || {}).months || {};
+      const history = {}; Object.keys(docs).forEach((k) => { if (k.startsWith('history/')) history[k.slice(8)] = docs[k]; });
+      const today = E.cairoToday(), led = E.runLedger(tx), pb = A.priceBook(history), pricer = A.makePricer(assets, led, pb);
+      const fallback = (name) => { const p = pricer(name, today); return p ? { p: p.p, d: pb.last } : null; };
+      let D = null; try { D = A.daily(st0, led, assets, pb, marks0, today); } catch (e) { D = null; }
+      let marks = marks0; try { if (Object.keys(history).length) marks = A.estimateMarks(st0, marks0, led, assets, pb, today); } catch (e) { marks = marks0; }
+      let market = docs['market/latest'] || null;
+      if (market && LIVE && Date.parse(LIVE.asOf) > Date.parse(market.asOf || 0)) market = Object.assign({}, market, LIVE);
+      const data = { settings: st0, marks, assets, tx, market, bench: docs['bench/egx30'] || null };
+      const run = (type) => { try { return E.run(data, { type }, { fallback, daily: D || undefined }); } catch (e) { return null; } };
+      const tw = (R) => (R && R.stats && R.stats.n ? (R.stats.headlineTwr != null ? R.stats.headlineTwr : R.stats.twr) : null);
+      const Ra = run('Since Inception');
+      return { name: st0.name || '', month: tw(run('Month')), ytd: tw(run('YTD')), all: tw(Ra), value: Ra ? (Ra.liveCash != null ? Ra.liveCash : Ra.settings.cash) + Ra.pos.mvTotal : null };
+    } catch (e) { console.warn('summary', e); return null; }
+  }
+  async function hubMarket() {
+    if (!HUB.market || Date.now() - HUB.marketAt > 600e3) { HUB.market = (await fetchMarket().catch(() => ({ docs: {} }))).docs || {}; HUB.marketAt = Date.now(); }
+    return HUB.market;
+  }
+  async function friendSummary(f) {
+    const j = await fsReq('GET', `shares/${f.uid}/to/${CLOUD.uid}`);
+    const snapObj = JSON.parse(await gunzip(await unseal(JSON.parse(fStr(j, 'pkg')), SHARE_LABEL, acctKey())));
+    const docs = Object.assign({}, snapObj.full ? {} : await hubMarket(), snapObj.docs || {});
+    macroMarks(docs);
+    return Object.assign(summarize(docs) || {}, { at: snapObj.at });
+  }
+  const pctH = (x) => (x == null || !isFinite(x) ? '—' : (x > 0 ? '+' : x < 0 ? '−' : '') + (Math.abs(x) * 100).toFixed(1) + '%');
+  const toneH = (x) => (x == null || Math.abs(x) < 0.0005 ? '' : x > 0 ? 'pos' : 'neg');
+  const egpH = (x) => (x == null || !isFinite(x) ? '' : new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(x) + ' EGP');
+  function hubHTML() {
+    const acct = !!(CLOUD && PK8 && (CUR.cloud || LINK)), you = HUB.you || {};
+    const rows = [{ uid: 'me', me: true, name: you.name || CUR.name, s: HUB.you }].concat(((acct && FRIENDS) || []).filter((f) => f.status === 'friends')
+      .map((f) => ({ uid: f.uid, name: f.name, s: (HUB.friends[f.uid] || {}).s, err: (HUB.friends[f.uid] || {}).err })));
+    rows.sort((a, b) => ((b.s && b.s.ytd != null ? b.s.ytd : -1e9) - (a.s && a.s.ytd != null ? a.s.ytd : -1e9)));
+    const viewing = VIEW ? VIEW.uid : 'me';
+    const row = (r, i) => `<button type="button" class="hub-row${r.uid === viewing ? ' cur' : ''}" data-hub="view" data-uid="${esc(r.uid)}" data-testid="hub-${r.me ? 'me' : 'friend'}">
+        <span class="hub-rank">${i + 1}</span>
+        <span class="hub-who"><b>${esc(r.name || '')}</b><small>${r.me ? 'You' + (viewing === 'me' ? ' · open now' : ' · back to yours') : r.uid === viewing ? 'Viewing now' : r.err ? esc(r.err) : r.s ? `Month ${pctH(r.s.month)} · All-time ${pctH(r.s.all)}` : 'Loading…'}</small>${r.me && r.s ? `<small>Month ${pctH(r.s.month)} · All-time ${pctH(r.s.all)}</small>` : ''}</span>
+        <span class="hub-num ${toneH(r.s && r.s.ytd)}">${pctH(r.s && r.s.ytd)}<small>this year</small></span></button>`;
+    const others = allPortfolios().filter((p) => p.id !== CUR.id && (p.cloud || !!ls.get('pd.dev.' + p.id)));
+    const inc = acct ? incoming() : 0;
+    return `<div class="hub-head"><span>Friends · this year</span>${acct ? '<button type="button" class="hub-add" data-hub="friends" data-testid="hub-add">+ Add friend</button>' : ''}</div>
+      ${inc ? `<button type="button" class="hub-note" data-hub="friends" data-testid="hub-requests">${inc} friend request${inc > 1 ? 's' : ''} waiting</button>` : ''}
+      ${rows.map(row).join('')}
+      ${!acct ? `<button type="button" class="hub-note" data-hub="link" data-testid="hub-signin">See your friends here<small>${CUR.cloud ? 'sign in again to load them' : 'sign in with your site account'}</small></button>`
+        : rows.length === 1 ? '<p class="hub-empty">Add friends to see their portfolios and compare returns.</p>' : ''}
+      ${others.length ? `<div class="hub-head"><span>Your other portfolios</span></div>${others.map((p) => `<button type="button" class="hub-other" data-pid="${esc(p.id)}" data-testid="switch-${esc(p.id)}">${esc(p.name)}</button>`).join('')}` : ''}
+      <button type="button" class="hub-other" data-testid="switch-other" onclick="pdSwitch()">Another portfolio<small>sign in, or open one with a setup key</small></button>`;
+  }
+  async function refreshHub(m) {
+    const draw = () => { if (m && !m.hidden) m.innerHTML = hubHTML(); };
+    if (!VIEW && (!HUB.you || Date.now() - HUB.youAt > 60e3 || HUB.youData !== DATA_AT)) { HUB.you = summarize(DOCS); HUB.youAt = Date.now(); HUB.youData = DATA_AT; }
+    m.innerHTML = hubHTML();   // drawn now; the page shows the menu right after this returns
+    if (HUB.busy || !(CLOUD && PK8 && (CUR.cloud || LINK))) return;
+    HUB.busy = true;
+    try {
+      await listFriends().catch(() => {}); draw();
+      for (const f of (FRIENDS || []).filter((x) => x.status === 'friends')) {
+        const h = HUB.friends[f.uid]; if (h && Date.now() - h.t < 600e3) continue;
+        try { HUB.friends[f.uid] = { s: await friendSummary(f), t: Date.now() }; }
+        catch (e) { HUB.friends[f.uid] = { err: e.code === 'not_found' ? 'not shared yet' : 'could not load', t: Date.now() }; }
+        draw();
+      }
+      // the owner (admin) drops this device's entries for accounts that no longer exist (reset or deleted)
+      if (isOwner()) for (const a of accounts()) { if (a.uid === CLOUD.uid) continue; try { await fsReq('GET', `users/${a.uid}`, null, 'mask.fieldPaths=name'); } catch (e) { if (e.code === 'not_found') { dropAccount(a.id); ls.del('pd.dev.' + a.id); draw(); } } }
+    } finally { HUB.busy = false; }
+  }
+  window.pdHub = (m) => { m.classList.add('pd-hub'); refreshHub(m); };
+  document.addEventListener('click', async (e) => {
+    const b = e.target.closest('#pf-menu [data-hub]'); if (!b) return;
+    const m = document.getElementById('pf-menu'); m.hidden = true; const t = document.getElementById('pf-name'); if (t) t.setAttribute('aria-expanded', 'false');
+    const what = b.dataset.hub;
+    if (what === 'friends') return friendsScreen();
+    if (what === 'link') return CUR.cloud ? lock(false) : linkScreen();
+    if (what === 'view') {
+      if (b.dataset.uid === 'me') { if (VIEW) await viewMine().catch((x) => toast('Could not reopen your portfolio: ' + (x.message || x), 'error')); return; }
+      const f = (FRIENDS || []).find((x) => x.uid === b.dataset.uid); if (!f || (VIEW && VIEW.uid === f.uid)) return;
+      try { await viewFriend(f); } catch (x) { toast(x.code === 'not_found' ? `${f.name} has not shared a copy yet. It appears after they next open the site.` : 'Could not open it: ' + (x.message || x), 'error'); }
+    }
+  });
   window.pdAccountMenu = () => { if (!CUR || !PK8) return; if (CUR.cloud) accountScreen(); else if (LINK) linkedScreen(); else linkScreen(); };
   window.pdPortfolioList = () => allPortfolios().filter((p) => (CUR && p.id === CUR.id) || !!ls.get('pd.dev.' + p.id)).map((p) => ({ id: p.id, name: p.name }));
   window.pdCurrentId = () => (CUR ? CUR.id : null);

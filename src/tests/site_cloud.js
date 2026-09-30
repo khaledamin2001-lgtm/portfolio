@@ -531,6 +531,16 @@ print(r.seal_json(json.load(open(${JSON.stringify(path.join(TMP, 'snap.json'))})
     check("from the main portfolio, a friend's portfolio opens under the banner", /Omar/.test(await G.page.locator('#pf-name-text').textContent()) && await G.$t('view-banner').isVisible());
     await G.$t('view-back').click(); await G.page.waitForTimeout(800);
     check('"Back to mine" returns to the main portfolio', /Demo Portfolio/.test(await G.page.locator('#pf-name-text').textContent()));
+    // the top-left menu is the friends hub: you and your friends ranked by this year's return, tap to view
+    await G.page.click('#pf-name'); await G.$t('hub-me').waitFor({ timeout: 10000 });
+    await G.page.waitForFunction(() => { const f = document.querySelector('[data-testid=hub-friend]'); return f && /Month/.test(f.textContent); }, null, { timeout: 30000 }).catch(() => {});
+    const hubText = await G.page.locator('#pf-menu').textContent();
+    check('the hub lists you and your friend, each with this year, this month and all-time returns', /Demo Portfolio/.test(hubText) && /Omar/.test(hubText) && /this year/.test(hubText) && /%/.test(await G.$t('hub-friend').textContent()) && /Month/.test(await G.$t('hub-me').textContent()), hubText.slice(0, 200));
+    await G.shot('hub');
+    await G.$t('hub-friend').click(); await G.page.waitForTimeout(800);
+    check("tapping a friend in the hub opens their portfolio", /Omar/.test(await G.page.locator('#pf-name-text').textContent()) && await G.$t('view-banner').isVisible());
+    await G.page.click('#pf-name'); await G.$t('hub-me').click(); await G.page.waitForTimeout(800);
+    check('tapping yourself in the hub returns to your portfolio', /Demo Portfolio/.test(await G.page.locator('#pf-name-text').textContent()) && !(await G.page.locator('#pd-view').isVisible()));
     await G.page.reload(); await G.$t('live-password').waitFor({ timeout: 30000 }); await G.$t('live-password').fill('main device 99'); await G.$t('live-password-submit').click();
     await G.lockHidden(60000).catch(() => {}); await G.page.waitForTimeout(600);
     await G.$t('account-menu').click(); await G.$t('account-admin').waitFor({ timeout: 15000 }).catch(() => {});

@@ -17,6 +17,8 @@ page = page.replace('readOnly:false,', 'get readOnly(){ return !(window.pdCanEdi
 # the Claude page's wording for a view-only reader, as it applies on the site
 for a, b in [("function currentPortfolioId(){ return", "function currentPortfolioId(){ if(window.pdCurrentId) return window.pdCurrentId(); return"),
              ("m.innerHTML = PORTFOLIOS.map(p=>{", "m.innerHTML = (window.pdPortfolioList ? window.pdPortfolioList() : PORTFOLIOS).map(p=>{"),
+             # the top-left menu is the friends hub on the site (lock.js pdHub): you and your friends, ranked, tap to view
+             ("function renderSwitch(){\n", "function renderSwitch(){ if(window.pdHub){ window.pdHub($('#pf-menu')); return; }\n"),
              ("}).join('');\n}\ndocument.addEventListener('click', e=>{\n  const menu = $('#pf-menu');", "}).join('') + (window.pdSwitch ? '<button type=\"button\" data-testid=\"switch-other\" onclick=\"pdSwitch()\">Another portfolio<small>sign in, or open one with a setup key</small></button>' : '');\n}\ndocument.addEventListener('click', e=>{\n  const menu = $('#pf-menu');"),
              ("toast('The watchlist is edited on the Claude page.','error')", "toast('Turn on editing at the bottom of the page to change the watchlist.','error')"),
              ("toast('Retrying is only possible on the Claude page.','error')", "toast('Turn on editing at the bottom of the page to retry held emails.','error')"),
