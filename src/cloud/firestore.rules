@@ -50,20 +50,29 @@ service cloud.firestore {
       allow write: if me(uid);
       allow delete: if isAdmin();
     }
-    // Find a friend by email: directory/{email} = {uid, name, pub}. Only the owner of that sign-in email writes it; any
-    // signed-in account can fetch one by its exact email, nobody can list them.
+    // Find a friend by email: directory/{email} = {uid, name, pub}. Only the owner of that sign-in email writes it, and
+    // only once Google has verified the email (so nobody can sign up with someone else's email and catch their friend
+    // requests); any signed-in account can fetch one by its exact email, nobody can list them.
+    function verified() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
     match /directory/{email} {
       allow get: if request.auth != null;
       allow list: if false;
-      allow write: if request.auth != null && request.auth.token.email == email && request.resource.data.uid == request.auth.uid;
+      allow write: if verified() && request.auth.token.email == email && request.resource.data.uid == request.auth.uid;
       allow delete: if (request.auth != null && request.auth.token.email == email) || isAdmin();
     }
     // Friends. links/{uid}/with/{other} is uid's side: {status: sent | received | friends, name, pub, email, at}.
     // Asking writes both sides (mine 'sent', theirs 'received'); only the one who received it can make both 'friends';
-    // either can delete both (decline, cancel, remove). Nothing else about a link can change.
+    // either can delete both (decline, cancel, remove). Nothing else about a link can change. The asker must have a
+    // verified email, and the 'received' side it writes must carry the asker's own email and the key of the asker's own
+    // directory entry, so a request cannot pose as someone else (the site checks the same before sharing anything).
     match /links/{uid}/with/{other} {
       allow read: if me(uid) || isAdmin();
-      allow create: if (me(uid) && request.resource.data.status == 'sent') || (me(other) && request.resource.data.status == 'received');
+      allow create: if (me(uid) && verified() && request.resource.data.status == 'sent')
+                    || (me(other) && verified() && request.resource.data.status == 'received'
+                        && request.resource.data.email == request.auth.token.email
+                        && request.resource.data.pub == get(/databases/$(database)/documents/directory/$(request.auth.token.email)).data.pub);
       allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'at'])
                     && request.resource.data.status == 'friends'
                     && ((me(other) && resource.data.status == 'sent') || (me(uid) && resource.data.status == 'received'));

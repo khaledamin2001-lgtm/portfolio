@@ -19,7 +19,7 @@ and the cash matched with labelled adjustments) is built on top; the Gmail impor
 latest month's report is emailed, with one summary email; an account with no monthly statement yet is told once and
 nothing in its portfolio changes.
     python3 src/tests/test_account_mail.py <synthetic export dir> <tools dir with node_modules/pdfjs-dist>   (exit 0 = all pass)"""
-import os, sys, json, gzip, base64, hashlib, shutil, tempfile, subprocess
+import os, sys, json, gzip, base64, hashlib, shutil, tempfile, subprocess, urllib.parse
 from email.message import EmailMessage
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "jobs"))
@@ -185,10 +185,16 @@ try:
         except Exception:
             return None
     gpub_ = gpub
+    opub_ = base64.b64encode(oacct.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)).decode()
     LINKS = {(UID, "Uzeyad"): {"status": "received", "name": "Zeyad's Portfolio", "pub": gpub_, "email": "zeyad@example.com"},
-             (UID, GUID): {"status": "friends", "name": "Friend Portfolio", "pub": gpub_}, (GUID, UID): {"status": "friends", "name": "Demo", "pub": apub},
-             (OUID, GUID): {"status": "friends", "name": "Friend Portfolio", "pub": gpub_},
-             (GUID, OUID): {"status": "friends", "name": "Owner", "pub": base64.b64encode(oacct.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)).decode()}}
+             (UID, GUID): {"status": "friends", "name": "Friend Portfolio", "pub": gpub_, "email": "friend2@example.com"},
+             (GUID, UID): {"status": "friends", "name": "Demo", "pub": apub, "email": "friend@example.com"},
+             (OUID, GUID): {"status": "friends", "name": "Friend Portfolio", "pub": gpub_, "email": "friend2@example.com"},
+             (GUID, OUID): {"status": "friends", "name": "Owner", "pub": opub_, "email": "owner@example.com"},
+             # someone posing as the friend account (their own key, the friend's email): must never get a copy
+             (UID, "Uimposter"): {"status": "friends", "name": "Friend Portfolio", "pub": opub_, "email": "friend2@example.com"}}
+    # directory/{email}: only the owner of that sign-in email writes it (the database rules), so it is the truth
+    DIRECTORY = {"friend@example.com": {"uid": UID, "pub": apub}, "friend2@example.com": {"uid": GUID, "pub": gpub_}, "owner@example.com": {"uid": OUID, "pub": opub_}}
     SHARES, STATUS, share_writes = {}, {}, []
     def open_share(priv, key):
         e = json.loads(SHARES[key]["pkg"]); b = base64.b64decode; epk = b(e["epk"])
@@ -238,6 +244,10 @@ try:
                 if uid_of(tok) != u or method != "PATCH": return deny
                 STATUS.setdefault(u, {}).update({k: v["stringValue"] for k, v in body["fields"].items()})
                 return 200, {}
+            if path.startswith("directory/"):
+                d = DIRECTORY.get(urllib.parse.unquote(path.split("/", 1)[1]))
+                if not tok or method != "GET": return deny
+                return (200, {"fields": {k: {"stringValue": v} for k, v in d.items()}}) if d else (404, {"error": {"status": "NOT_FOUND"}})
             if path.startswith("links/"):
                 u = path.split("/")[1]
                 if uid_of(tok) != u: return deny
@@ -271,7 +281,7 @@ try:
           and "?friends" in sent[2]["text"], json.dumps([m["subject"] for m in sent]))
     sent[:] = sent[:2]
     # friends
-    check("friends: a copy is written for every friend and nobody else", sorted(share_writes) == sorted([(UID, GUID), (GUID, UID), (GUID, OUID), (OUID, GUID)]), json.dumps(share_writes))
+    check("friends: a copy is written for every friend and nobody else (not for a link posing as a friend with another key)", sorted(share_writes) == sorted([(UID, GUID), (GUID, UID), (GUID, OUID), (OUID, GUID)]), json.dumps(share_writes))
     s1 = open_share(acct, (GUID, UID))
     check("friends: the Gmail account's copy opens with its friend's key and holds its portfolio (import included)",
           not s1["full"] and s1["name"] == "Friend Portfolio" and sorted(r["id"] for r in s1["docs"]["ledger/y2026"]["rows"]) == ["o1", "o2"] and "imports/2026-08" in s1["docs"], json.dumps(sorted(s1["docs"]))[:300])
@@ -283,8 +293,8 @@ try:
     check("friends: the owner's verified account shares the MAIN portfolio (engine documents with their market data, no sync)",
           s3["full"] and "market/latest" in s3["docs"] and "ledger/y2026" in s3["docs"] and not any(k.startswith("sync/") for k in s3["docs"]) and "account" not in s3["docs"]["portfolio/settings"], json.dumps(sorted(s3["docs"]))[:300])
     jg, j1 = json.loads(STATUS.get(GUID, {}).get("job", "{}")), json.loads(STATUS.get(UID, {}).get("job", "{}"))
-    check("admin status: the job writes each account's line (Gmail result, month-end report, friends), no figures",
-          jg.get("gmail", {}).get("ok") and jg.get("friends") == 2 and jg.get("report") == "Aug-26 sent 2026-09-24" and j1.get("friends") == 1 and not j1.get("gmail"), json.dumps([jg, j1]))
+    check("admin status: the job writes each account's line (Gmail result, month-end report, friends), no figures (account 1 lists 2 friend links: its friend and the impostor link)",
+          jg.get("gmail", {}).get("ok") and jg.get("friends") == 2 and jg.get("report") == "Aug-26 sent 2026-09-24" and j1.get("friends") == 2 and not j1.get("gmail"), json.dumps([jg, j1]))
     # the Gmail account
     check("gmail: its own Gmail login is used, searching from the day tracking started", fetches and fetches[0] == {"after": "2026/08/15", "addr": "friend.gmail@example.com", "pw": "abcdefghijklmnop", "query": "all"}, json.dumps(fetches))
     rows = (gdoc("ledger/y2026") or {}).get("rows") or []

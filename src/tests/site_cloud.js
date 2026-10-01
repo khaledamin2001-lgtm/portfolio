@@ -108,14 +108,15 @@ function allowed(a, method, p, cur, next) {
   if ((m = p.match(/^directory\/([^/]+)$/))) {
     if (method === 'GET') return !!uid;
     if (method === 'DELETE') return (!!a && a.email === m[1]) || admin;
-    return !!a && a.email === m[1] && sv(next, 'uid') === uid;
+    return !!a && a.verified && a.email === m[1] && sv(next, 'uid') === uid;
   }
   if ((m = p.match(/^links\/([^/]+)\/with$/))) return method === 'GET' && (me(m[1]) || admin);
   if ((m = p.match(/^links\/([^/]+)\/with\/([^/]+)$/))) {
     const [, u, o] = m;
     if (method === 'GET') return me(u) || admin;
     if (method === 'DELETE') return me(u) || me(o) || admin;
-    if (!cur) return (me(u) && sv(next, 'status') === 'sent') || (me(o) && sv(next, 'status') === 'received');
+    if (!cur) return (me(u) && a.verified && sv(next, 'status') === 'sent') || (me(o) && a.verified && sv(next, 'status') === 'received'
+      && sv(next, 'email') === a.email && sv(next, 'pub') === sv((FB.docs['directory/' + a.email] || {}).fields, 'pub'));
     const changed = Object.keys(Object.assign({}, cur, next)).filter((k) => JSON.stringify(cur[k]) !== JSON.stringify(next[k]));
     return changed.every((k) => k === 'status' || k === 'at') && sv(next, 'status') === 'friends' && ((me(o) && sv(cur, 'status') === 'sent') || (me(u) && sv(cur, 'status') === 'received'));
   }
@@ -394,10 +395,23 @@ print(json.dumps({"uid": p["uid"], "email": p["email"], "prefs": p["prefs"], "re
       await X.lockHidden(60000).catch(() => {}); if (await X.$t('live-bio-skip').count()) await X.$t('live-bio-skip').click(); await X.lockHidden();
     };
     const until = async (f, ms = 15000) => { for (let i = 0; i < ms / 100 && !f(); i++) await new Promise((r) => setTimeout(r, 100)); return f(); };
+    // Friends need a verified email: confirm it from the Friends screen (the fake Firebase "clicks" the link at once)
+    const verifyEmail = async (X) => {
+      await X.$t('account-menu').click(); await X.$t('account-friends').click(); await X.$t('friends-verify').click();
+      await X.$t('friends-verify-send').click(); await X.page.waitForTimeout(300); await X.$t('friends-verify-done').click();
+      await X.$t('friend-email').waitFor({ timeout: 15000 }); await X.$t('friends-back').click(); await X.$t('account-back').click();
+    };
     const F = await device('F');
     await signUp(F, 'Sara', EMAIL_B, PWB);
     const uidB = FB.byEmail[EMAIL_B].uid;
-    check('each account is findable by its sign-in email (directory, with its public key)', await until(() => FB.docs['directory/' + EMAIL] && FB.docs['directory/' + EMAIL_B]) && sv(FB.docs['directory/' + EMAIL_B].fields, 'uid') === uidB);
+    await F.$t('account-menu').click(); await F.$t('account-friends').click(); await F.$t('friends-unverified').waitFor({ timeout: 15000 });
+    check('until the email is verified, Friends asks to confirm it and the account is not findable', !(await F.$t('friend-email').count()) && !FB.docs['directory/' + EMAIL_B]);
+    const tokU = identity('signInWithPassword', { email: EMAIL_B, password: PWB })[1].idToken;
+    const squat = firestore('PATCH', `https://firestore.googleapis.com${FSB}directory/${EMAIL_B}`, { authorization: 'Bearer ' + tokU }, JSON.stringify({ fields: { uid: { stringValue: uidB }, pub: { stringValue: 'x' } } }));
+    check('the rules refuse a directory entry for an unverified email', squat[0] === 403);
+    await F.$t('friends-back').click(); await F.$t('account-back').click();
+    await verifyEmail(E); await verifyEmail(F);
+    check('each account is findable by its sign-in email once verified (directory, with its public key)', await until(() => FB.docs['directory/' + EMAIL] && FB.docs['directory/' + EMAIL_B]) && sv(FB.docs['directory/' + EMAIL_B].fields, 'uid') === uidB);
     check('the admin status line is written at sign-up (no figures)', !!FB.docs['status/' + uidB] && sv(FB.docs['status/' + uidB].fields, 'createdAt') && !/10,000|holding/i.test(JSON.stringify(FB.docs['status/' + uidB])));
     await F.$t('account-menu').click(); await F.$t('account-friends').click();
     await F.$t('friend-email').fill('nobody@example.com'); await F.$t('friend-add').click();
@@ -411,6 +425,8 @@ print(json.dumps({"uid": p["uid"], "email": p["email"], "prefs": p["prefs"], "re
     const forged = firestore('PATCH', FSU + `links/${uid}/with/${uidB}?updateMask.fieldPaths=status&updateMask.fieldPaths=at`, { authorization: 'Bearer ' + tokB }, JSON.stringify({ fields: { status: { stringValue: 'friends' }, at: { stringValue: 'x' } } }));
     const early = firestore('PATCH', FSU + `shares/${uidB}/to/${uid}`, { authorization: 'Bearer ' + tokB }, JSON.stringify({ fields: { pkg: { stringValue: '{}' } } }));
     check('the rules refuse accepting on the other side and a copy for someone who is not a friend yet', forged[0] === 403 && early[0] === 403);
+    const pose = firestore('PATCH', FSU + `links/Uvictim/with/${uidB}?currentDocument.exists=false`, { authorization: 'Bearer ' + tokB }, JSON.stringify({ fields: { status: { stringValue: 'received' }, name: { stringValue: 'Mom' }, email: { stringValue: 'mom@example.com' }, pub: { stringValue: sv(FB.docs['directory/' + EMAIL_B].fields, 'pub') } } }));
+    check('the rules refuse a friend request that poses as someone else (another email on the request)', pose[0] === 403);
     await E.$t('account-menu').click();
     await E.page.waitForFunction(() => /1 new/.test(document.querySelector('[data-testid=account-friends]').textContent), null, { timeout: 15000 }).catch(() => {});
     check('the Account menu shows the new request', /Friends · 1 new/.test(await E.$t('account-friends').textContent()));

@@ -450,14 +450,31 @@ def seal_json(obj, pub_b64, label):
     return json.dumps({"v": 1, "epk": b(epk), "iv": b(iv), "ct": b(AESGCM(key).encrypt(iv, plain, label))}, separators=(",", ":"))
 
 
+def confirmed_friend(http, tok, f):
+    """A link's name, email and key are written by the other person: seal to that key only when directory/{email} (which
+    only the owner of that sign-in email can write) names the same account and the same key."""
+    email = str(f.get("email") or "").lower()
+    if not email or not f.get("pub"):
+        return False
+    st, j = http.json("GET", f"{FS}/directory/{urllib.parse.quote(email, safe='')}", headers={"Authorization": "Bearer " + tok})
+    if st != 200:
+        return False
+    d = {k: (v or {}).get("stringValue") for k, v in ((j or {}).get("fields") or {}).items()}
+    return d.get("uid") == f["uid"] and d.get("pub") == f["pub"]
+
+
 def share_to_friends(http, tok, uid, friends, snap, state, now):
-    """Writes shares/{uid}/to/{friend} where the copy changed or is 20 hours old. Returns how many were written."""
+    """Writes shares/{uid}/to/{friend} where the copy changed or is 20 hours old, for friends whose link matches their
+    account (confirmed_friend). Returns how many were written."""
     import hashlib
     h = hashlib.sha256(json.dumps(snap["docs"], sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:32]
     done, n = dict(state.get("shares") or {}), 0
     for f in friends:
         o = done.get(f["uid"]) or {}
         if o.get("h") == h and o.get("at") and now - datetime.datetime.fromisoformat(o["at"]) < datetime.timedelta(hours=20):
+            continue
+        if not confirmed_friend(http, tok, f):
+            jc.log("friends: a link does not match its account; no copy written")
             continue
         env = seal_json(snap, f["pub"], SHARE_LABEL)
         st, _ = http.json("PATCH", f"{FS}/shares/{uid}/to/{f['uid']}", {"fields": {"pkg": {"stringValue": env}, "name": {"stringValue": snap["name"]}, "at": {"stringValue": snap["at"]}}},
