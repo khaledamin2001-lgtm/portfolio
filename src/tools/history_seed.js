@@ -73,7 +73,7 @@ const isFundName = (n) => /^thndr/i.test(n || '');
   const s0 = cands.findIndex((c) => c.st.snapshot);   // the first month whose holdings Thndr printed
   if (s0 < 0) {
     const holder = ((settings.account || {}).holder || '').trim();
-    console.log(JSON.stringify({ ok: false, error: refused ? `found ${refused} monthly statement${refused > 1 ? 's' : ''}, but not in the name "${holder}" (the name set as it appears in the Thndr app)` : (cands.length ? 'no monthly Thndr statement with your holdings (position snapshot) in this Gmail yet' : 'no monthly Thndr statement in this Gmail yet') }));
+    console.log(JSON.stringify({ ok: false, error: refused ? `found ${refused} monthly statement${refused > 1 ? 's' : ''}, but not in the name "${holder}" (the name set as it appears in the Thndr app)` : (cands.length ? 'none of the monthly Thndr statements in this Gmail lists your holdings (position snapshot)' : 'there is no monthly Thndr statement in this Gmail') }));
     return;
   }
   const now = args.now || new Date().toISOString();

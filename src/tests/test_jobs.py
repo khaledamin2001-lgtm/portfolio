@@ -71,6 +71,8 @@ try:
     check("market email: market figures in the body", fig in body and "CBE policy rate: 22.00% (since 2026-08)" in body
           and "History written: 2026-08, 2026-09" in body and "The live site is updated." in body)
     check("market email: nothing from the portfolio's own documents", "Alpha Co" not in body and "cash" not in body.lower())
+    o3 = dict(o2, fillErrors={"ZZA": "x"}, latest=dict(o2["latest"], missing=["ZZA", "ZZB"]))
+    check("market email: a symbol both unfilled and missing is listed once", "Fill errors or missing symbols: ZZA, ZZB\n" in run_market.success_email(o3, info, True)[1])
 finally:
     shutil.rmtree(tmp)
 

@@ -88,7 +88,7 @@ def success_email(out, info, published):
              f"CBE policy rate: {pct(pol.get('rate'))}" + (f" (since {pol['date']})" if pol.get("date") else ""),
              f"Index dividend yield: {pct(bench.get('divYield'))}",
              f"History written: {', '.join(info['historyMonths']) or 'none'} ({info['sessions']} sessions)",
-             f"Fill errors or missing symbols: {', '.join(fe + list(miss)) or 'none'}",
+             f"Fill errors or missing symbols: {', '.join(sorted(set(fe) | set(miss))) or 'none'}",
              f"New index members added: {info['newAssets'] or 'none'}",
              f"CPI / USD/EGP / CBE-rate months filled: {'; '.join(filled) or 'none'}",
              "The live site is updated." if published else "The live site data was already current."]

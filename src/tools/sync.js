@@ -207,7 +207,7 @@ function applyStatement(st, entry, msg) {
   if (!st.cash) { entry.reasons.push('no account statement among the PDFs'); return 'hold'; }
   const tf = settings.trackFrom, st2 = TS.fromTrackStart(st, tf);
   if (!st2) { entry.period = `${st.from} to ${st.to}`; entry.notes.push(`covers only days up to ${tf}, when tracking started (already in the starting holdings); nothing to do`); return 'skip'; }
-  if (st2 !== st) { entry.notes.push(`used from ${st2.from}: tracking started on ${tf} with the holdings and cash entered then`); st = st2; }
+  if (st2 !== st) { entry.notes.push(`only the days from ${st2.from} were used: the holdings and cash entered when tracking started (${tf}) already cover the days before`); st = st2; }
   const M = st.month, final = !!(st.fullMonth && st.snapshot);
   entry.period = `${st.from} to ${st.to}`; entry.final = final;
   if (imports[M] && imports[M].fullMonth) { entry.notes.push(`${lbl(M)} is already final from its monthly statement; nothing to do`); return 'skip'; }
@@ -324,7 +324,7 @@ function applyStatement(st, entry, msg) {
   entry.changes.push(...ops); entry.removedRows = removed;
   let cashMoved = false;
   if (st.cash.end != null && (!settings.cashDate || st.to >= settings.cashDate)) {
-    if (settings.cash !== st.cash.end || settings.cashDate !== st.to) { cashMoved = true; entry.changes.push(`broker cash set to ${fmt(st.cash.end)} on ${st.to} (was ${fmt(settings.cash)}${settings.cashDate ? ' on ' + settings.cashDate : ''})`); }
+    if (settings.cash !== st.cash.end || settings.cashDate !== st.to) { cashMoved = true; entry.changes.push(`cash at Thndr: ${fmt(st.cash.end)} EGP on ${st.to}${settings.cash === st.cash.end ? ' (unchanged)' : ` (was ${fmt(settings.cash)} EGP${settings.cashDate ? ' on ' + settings.cashDate : ''})`}`); }
     settings = { ...settings, cash: st.cash.end, cashDate: st.to, cashSource: `Thndr statement to ${st.to}` }; changed.settings = true;
   }
   if (final) {
@@ -333,7 +333,7 @@ function applyStatement(st, entry, msg) {
     delete mark.note;
     if (prev.cash != null && prev.source !== 'statement' && prev.source !== 'reconstructed') { mark.typedCash = prev.cash; mark.typedSecurities = prev.securities; }
     marks = { ...marks, [M]: mark }; changed.marks = true;
-    entry.changes.push(`${lbl(M)} month-end set from the statement: cash ${fmt(mp.cash)}, securities ${fmt(mp.securities)}${prev.securities != null ? ` (was ${fmt(prev.securities)})` : ''}`);
+    entry.changes.push(`${lbl(M)} month-end taken from the statement: cash ${fmt(mp.cash)} EGP, shares and funds ${fmt(mp.securities)} EGP${prev.securities != null && Math.abs(prev.securities - mp.securities) >= 0.005 ? ` (was ${fmt(prev.securities)} EGP)` : ''}`);
     changed.imports[M] = { month: M, messageId: msg.id, postedAt: new Date().toISOString(), added: ops.filter((o) => o.startsWith('added')).length, corrected: ops.filter((o) => !o.startsWith('added') && !o.startsWith('removed') && !o.startsWith('ticker ')).length,
       removed: removed.length, removedRows: removed, replaced: 0, marks: true, fullMonth: true, postedBy: 'automatic inbox sync', reportsPending: true };
     imports[M] = changed.imports[M];
@@ -424,7 +424,7 @@ async function run() {
     monthlyPosted, monthlyPending: monthlyPending(imports, monthlyPosted), alert, toolSha: state.toolSha,
     writes: fs.readdirSync(path.join(out, 'write')),
     email: applied.length || holds.length || alert || heads.length ? {
-      subject: holds.length ? `${who}: ${holds.length} Thndr email${holds.length > 1 ? 's' : ''} need${holds.length > 1 ? '' : 's'} your review` : applied.some((e) => e.monthly) ? `${who}: ${applied.filter((e) => e.monthly).map((e) => lbl(e.monthly)).join(', ')} statement posted` : alert && !applied.length ? `${who}: ${alert.map(lbl).join(', ')} Thndr statement${alert.length > 1 ? 's have' : ' has'} not arrived` : applied.length ? `${who}: updated from Thndr` : `${who}: heads-up — ${heads.length > 1 ? `${heads.length} things to look at` : heads[0].text}`,
+      subject: holds.length ? `${who}: ${holds.length} Thndr email${holds.length > 1 ? 's' : ''} need${holds.length > 1 ? '' : 's'} your review` : applied.some((e) => e.monthly) ? `${who}: ${applied.filter((e) => e.monthly).map((e) => lbl(e.monthly)).join(', ')} statement posted` : alert && !applied.length ? `${who}: ${alert.map(lbl).join(', ')} Thndr statement${alert.length > 1 ? 's have' : ' has'} not arrived` : applied.length ? `${who}: updated from Thndr` : `${who}: heads-up — ${heads.length > 1 ? `${heads.length} things to look at` : heads[0].text.split(' (')[0].split(';')[0]}`,
       text: lines.join('\n').replace(/\n+$/, '') + '\n\n' + [PAGE_URLS[settings.portfolioId], SITE_URL].filter(Boolean).join(' · '),
       notify: holds.length > 0 || !!alert || heads.length > 0 || applied.some((e) => e.monthly || e.kind !== 'invoice'),
     } : null,

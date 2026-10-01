@@ -192,9 +192,10 @@ def materialize(docs, shared, out):
 
 
 def alerts_email(name, items, site):
-    lines = [f"Heads-up for {name}:", ""] + [f"• {ALERT_KINDS.get(i['kind'], 'Note')}: {i['text']}" for i in items]
+    # each item's text already says what it is ("Ex-dividend on 28 Sep: …", "ETEL reached its target: …")
+    lines = [f"Heads-up for {name}:", ""] + [f"• {i['text']}" for i in items]
     lines += ["", f"Open your portfolio: {site}", "", "You get these because you switched on email updates in your account. Switch them off there any time."]
-    subj = f"{name}: heads-up — " + (items[0]["text"] if len(items) == 1 else f"{len(items)} new items")
+    subj = f"{name}: heads-up — " + (items[0]["text"].split(" (")[0].split(";")[0] if len(items) == 1 else f"{len(items)} new items")
     return subj[:180], "\n".join(lines) + "\n"
 
 
@@ -510,7 +511,7 @@ def history_email(name, seed, summary, site):
     lines = [f"{name} has been built from your Thndr emails.", "",
              (f"• Starting point: your {first} statement, when your account held nothing yet: every trade since is on your statements."
               if (seed.get("earlier") or {}).get("used") else
-              f"• Starting point: your {first} monthly statement, with your {seed.get('holdings', 0)} holdings and your cash as Thndr printed them on {seed['to']}."),
+              f"• Starting point: your {first} monthly statement, with your {seed.get('holdings', 0)} holding{'s' if seed.get('holdings', 0) != 1 else ''} and your cash as Thndr printed them on {seed['to']}."),
              (f"• Then {n - 1} more monthly statement{'s' if n - 1 != 1 else ''}, up to {last}: every deposit, trade, dividend and fee on them." if n > 1 else "• That is your only monthly statement so far.")]
     if adj:
         months = ", ".join(jc.short(m) for m in seed.get("adjustedMonths") or [])
@@ -651,11 +652,15 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                 raise jc.JobError("weekly", "weekly.js failed")
             else:
                 w = json.load(open(jsp))
-                if not dry:
-                    send(pkg["email"], w["subject"], open(txtp, encoding="utf-8").read(), open(htmlp, encoding="utf-8").read())
-                state["weeklySent"] = today
-                changed = True
-                notes.append("weekly sent")
+                wk = w.get("week") or {}
+                if not wk.get("valueEnd") and not wk.get("valueStart") and not w.get("trades") and not wk.get("flows"):
+                    notes.append("weekly skipped (nothing in the portfolio yet)")    # an all-zero summary says nothing
+                else:
+                    if not dry:
+                        send(pkg["email"], w["subject"], open(txtp, encoding="utf-8").read(), open(htmlp, encoding="utf-8").read())
+                    state["weeklySent"] = today
+                    changed = True
+                    notes.append("weekly sent")
         cur_docs = read_account(http, tok, pkg["uid"], priv) if (overlay and not dry) else docs    # after an import: what was saved
         if prefs.get("reports", True) and not dry:
             fresh = cur_docs

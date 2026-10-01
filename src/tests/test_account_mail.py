@@ -250,7 +250,12 @@ try:
                 return 200, {}
             return 404, {}
     sent = []
-    send = lambda to, subj, text, html, att=None: sent.append({"to": to, "subject": subj, "text": text, "html": bool(html), "att": att or []})
+    def send(to, subj, text, html, att=None):
+        sent.append({"to": to, "subject": subj, "text": text, "html": bool(html), "att": att or []})
+        if os.environ.get("DUMP_EMAILS"):      # every email this test sends, to read them as a person would
+            d = os.environ["DUMP_EMAILS"]; os.makedirs(d, exist_ok=True); n = len(os.listdir(d)) // 2 + 1
+            open(os.path.join(d, f"{n:02d}.txt"), "w").write(f"To: {to}\nSubject: {subj}\nAttachments: {[a[0] for a in (att or [])]}\n\n{text}")
+            open(os.path.join(d, f"{n:02d}.html"), "w").write(html or "")
     argv = ["--engine", eng, "--code", code, "--now", "2026-09-24T19:30:00Z"]     # Thursday 22:30 Cairo
     rc = ram.main(argv, http=FakeHttp(), send=send)
     check("the job succeeds", rc == 0)
@@ -334,7 +339,8 @@ try:
           and (adoc(WUID, wacct, "portfolio/settings") or {}).get("historyImport") == {"status": "pending"} and not [u for u, n in commits if u == WUID], json.dumps([m["subject"] for m in ws]))
     gm = (gdoc("sync/mail") or {}).get("gmail") or {}
     check("gmail: the result is recorded for the site (ok, 1 new, 1 applied)", gm.get("ok") and gm.get("new") == 1 and gm.get("applied") == 1, json.dumps(gm))
-    check("the heads-up email lists the synthetic ex-dividend and target items", "Ex-dividend" in sent[0]["text"] and "Target reached" in sent[0]["text"])
+    check("the heads-up email lists the synthetic ex-dividend and target items", "Ex-dividend on " in sent[0]["text"] and "reached its target" in sent[0]["text"]
+          and "Ex-dividend: Ex-dividend" not in sent[0]["text"] and "Target reached:" not in sent[0]["text"], sent[0]["text"])
     rec = DB.get(f"users/{UID}/docs/sync__mail")
     st = json.loads(store.unseal(acct, rec["blob"]).decode())["data"] if rec else {}
     check("what was sent is saved back to the account, encrypted to its key", len(st.get("alertsSent", {})) == 2 and st.get("weeklySent") == "2026-09-24")
