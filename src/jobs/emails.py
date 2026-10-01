@@ -124,8 +124,9 @@ def sync_email(subject, parts, account=False):
     return subject, text, html
 
 
-def monthend(name, M, sm, files, account=False):
-    """The month-end email: the headline figures (factsheet.js --summary) and the files attached."""
+def monthend(name, M, sm, files, account=False, guest=False):
+    """The month-end email: the headline figures (factsheet.js --summary) and the files attached. guest: a portfolio the
+    site owner runs for someone without an account (Yassin's): no site button, a line saying where it comes from."""
     S = f"{MON[int(M[5:7]) - 1]}-{M[2:4]}"
     blocks = []
     idx = lambda b: f"EGX30 Capped {pct(b, 1)}" if isnum(b) else None
@@ -147,11 +148,11 @@ def monthend(name, M, sm, files, account=False):
     if files:
         blocks.append(("box", "info", "Attached: " + " and ".join(files), ["The PDF is the full factsheet (returns vs the index, risk, sectors, attribution). The Excel workbook has every sheet: Summary, Monthly, Holdings, Ledger, Closed trades, Income, Attribution, Marks & inputs."]))
     else:
-        blocks.append(("p", "The full factsheet and the Excel workbook are on the site: Reports, then " + S + "."))
-    subj = f"{name} · month-end report {S}" if account else f"{name} · factsheet {S}"
-    text, html = email(name, f"{month_name(M)} report", blocks, subtitle="Month-end, from your Thndr statement",
-                       button=("Open your portfolio" if account else "Open Reports", SITE),
-                       foot=(ACCOUNT_FOOT if account else None),
+        blocks.append(("p", "The full factsheet and the Excel workbook are on the site: Reports, then " + S + "." if not guest else "The full factsheet could not be attached this time."))
+    subj = f"{name} · month-end report {S}" if account or guest else f"{name} · factsheet {S}"
+    text, html = email(name, f"{month_name(M)} report", blocks, subtitle="Month-end report" if guest else "Month-end, from your Thndr statement",
+                       button=None if guest else ("Open your portfolio" if account else "Open Reports", SITE),
+                       foot=(ACCOUNT_FOOT if account else "Your portfolio is tracked for you on a private portfolio site; this report comes once a month. Reply to this email with any question." if guest else None),
                        preheader=(f"Value {egp(sm.get('value'))} · {MON[int(M[5:7]) - 1]} {pct(sm.get('monthRet'), 1)}" if sm else None))
     return subj, text, html
 

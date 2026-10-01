@@ -139,7 +139,7 @@ try:
 except jc.JobError:
     check("mail: another recipient is refused", True)
 
-# ---- recipient: config.json "recipient" wins over settings.factsheetEmail (Yassin's emails go to Khaled)
+# ---- recipient: config.json "recipient" wins over settings.factsheetEmail; "failureRecipient" takes the FAILED notices
 class RCtx:
     def __init__(self, config, settings):
         self.config, self._s = config, settings
@@ -147,6 +147,13 @@ class RCtx:
         return self._s
 check("recipient: settings.factsheetEmail by default", jc.Ctx.recipient(RCtx({}, {"factsheetEmail": "a@example.com"})) == "a@example.com")
 check("recipient: config.json recipient overrides it", jc.Ctx.recipient(RCtx({"recipient": "owner@example.com"}, {"factsheetEmail": "b@example.com"})) == "owner@example.com")
+fc = RCtx({"recipient": "friend@example.com", "failureRecipient": "owner@example.com"}, {})
+fc.recipient = lambda: jc.Ctx.recipient(fc)
+check("recipient: a portfolio's emails to its own person, its FAILED notices to the platform owner",
+      jc.Ctx.recipient(fc) == "friend@example.com" and jc.Ctx.failure_recipient(fc) == "owner@example.com")
+fc2 = RCtx({"recipient": "friend@example.com"}, {})
+fc2.recipient = lambda: jc.Ctx.recipient(fc2)
+check("recipient: without failureRecipient, FAILED notices go to the recipient", jc.Ctx.failure_recipient(fc2) == "friend@example.com")
 try:
     jc.Ctx.recipient(RCtx({"recipient": "not an address"}, {}))
     check("recipient: an invalid address is refused", False)

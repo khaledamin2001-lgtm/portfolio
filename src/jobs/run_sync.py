@@ -190,7 +190,9 @@ def month_end(ctx, M, data, write_dir, summary, reports, exports_dir, work):
         files = (["the PDF factsheet"] if res["pdf"] else []) + ["the Excel workbook"]
         name = ctx.settings().get("name") or ctx.config.get("name") or "Portfolio"
         import mail_send, emails
-        subj, text, html = emails.monthend(name, M, sm, files)
+        # a portfolio run for someone else (its emails to "recipient", its failures to "failureRecipient"): a guest's email
+        guest = bool(ctx.config.get("recipient") and ctx.config.get("failureRecipient"))
+        subj, text, html = emails.monthend(name, M, sm, files, guest=guest)
         mail_send.send(ctx, subj, text, html, attachments=att)
         res["emailed"] = True
     except jc.JobError as e:

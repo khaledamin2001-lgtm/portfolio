@@ -156,12 +156,18 @@ class Ctx:
         return (d or {}).get("data") or {}
 
     def recipient(self):
-        """The one address any job may email: config.json "recipient" when set (a portfolio whose owner does not get the
-        emails himself, e.g. Yassin's: they go to Khaled), else portfolio/settings.factsheetEmail."""
+        """The one address a portfolio's emails may go to: config.json "recipient" when set (e.g. Yassin's own address),
+        else portfolio/settings.factsheetEmail."""
         to = str(self.config.get("recipient") or self.settings().get("factsheetEmail") or "").strip()
         if not re.match(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[A-Za-z]{2,}$", to):
             raise JobError("email", "portfolio/settings has no valid factsheetEmail")
         return to
+
+    def failure_recipient(self):
+        """Where a job's FAILED notice goes: config.json "failureRecipient" when set (the platform owner, for a portfolio
+        whose own emails go to someone else, e.g. Yassin's), else recipient()."""
+        to = str(self.config.get("failureRecipient") or "").strip()
+        return to if re.match(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[A-Za-z]{2,}$", to) else self.recipient()
 
     # ---- plan.js
     def plan(self, last_run=None):

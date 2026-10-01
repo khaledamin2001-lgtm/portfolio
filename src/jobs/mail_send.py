@@ -124,7 +124,7 @@ def send_failure(ctx, engine, code, subject, body, html=None):
     to = None
     if ctx is not None:
         try:
-            to = ctx.recipient()
+            to = ctx.failure_recipient()
         except Exception:
             to = None
     to = to or sender          # the owner's own mailbox: the one address that is always safe
