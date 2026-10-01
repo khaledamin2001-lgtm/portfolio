@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /* Render a monthly factsheet with the page's own code.
-   node factsheet.js --page <published page html> --data <ArtifactData export dir> [--overlay <plan dir>/write] --month YYYY-MM --out <file.html> [--pdf <file.pdf>]
+   node factsheet.js --page <published page html> --data <ArtifactData export dir> [--overlay <plan dir>/write] --month YYYY-MM --out <file.html> [--pdf <file.pdf>] [--summary <file.json>]
    The page runs headless with its database replaced by the exported documents (plus any planned writes).
    --out writes the email HTML; --pdf also prints that same HTML to an A4 PDF (Playwright page.pdf, backgrounds on,
-   12 mm margins). At least one of the two is required. */
+   12 mm margins). At least one of the two is required. --summary also writes the headline figures (value, month / year /
+   since-inception returns and the index's, top holdings, cash weight, the month's income) for the phone-sized email. */
 'use strict';
 const fs = require('fs'), path = require('path');
 const args = Object.fromEntries(process.argv.slice(2).reduce((a, x, i, arr) => (x.startsWith('--') ? a.concat([[x.slice(2), arr[i + 1]]]) : a), []));
@@ -29,7 +30,11 @@ const mock = `<script>window.claude={use:async(n)=>{ if(n!=='db') return null; c
 let page = fs.readFileSync(args.page, 'utf8');
 page = page.replace(/^<!doctype html><html><head>[\s\S]*?<\/head><body>/i, '');
 if (!page.includes('async function emailFactsheet(m, quiet){')) throw new Error('page layout changed: factsheet hook not found');
-page = page.replace('async function emailFactsheet(m, quiet){', 'window.__fs=(m)=>factsheetHTML(factsheetData(m));\nasync function emailFactsheet(m, quiet){');
+page = page.replace('async function emailFactsheet(m, quiet){', 'window.__fs=(m)=>factsheetHTML(factsheetData(m));\n' +
+  'window.__fsum=(m)=>{const F=factsheetData(m),st=F.st||{},c=(F.sectors||[]).find((x)=>x.s===\'Cash & Savings\');return {name:S.settings.name,month:m,live:!!F.live,inception:S.settings.inception,value:F.value,' +
+  'monthRet:F.row?F.row.ret:null,monthBench:F.row?F.row.bench:null,ytd:F.tr&&F.tr[3]?F.tr[3].p:null,ytdBench:F.tr&&F.tr[3]?F.tr[3].b:null,si:st.twr,siBench:st.benchTwr,annualized:st.annualized,' +
+  'top:(F.top||[]).slice(0,5).map((r)=>({symbol:r.symbol||null,name:r.name,w:r.w})),cashW:c?c.p:0,income:F.incM};};\n' +
+  'async function emailFactsheet(m, quiet){');
 if (!args.out && !args.pdf) throw new Error('give --out <file.html> and/or --pdf <file.pdf>');
 const tmp = path.join(path.dirname(args.out || args.pdf), '_factsheet_page.html');
 fs.writeFileSync(tmp, '<!doctype html><html><head><meta charset="utf-8"></head><body>' + mock + page + '</body></html>');
@@ -41,6 +46,7 @@ fs.writeFileSync(tmp, '<!doctype html><html><head><meta charset="utf-8"></head><
   if (errs.length) { await b.close(); throw new Error('page errors: ' + errs.join('; ')); }
   const doc = `<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:16px;background:#EDF2EF">${html}</body></html>`.replace(/>\s+</g, '><');
   const res = { ok: true };
+  if (args.summary) { fs.writeFileSync(args.summary, JSON.stringify(await p.evaluate((m) => window.__fsum(m), args.month))); res.summary = args.summary; }
   if (args.out) { fs.writeFileSync(args.out, doc); Object.assign(res, { out: args.out, bytes: doc.length }); }
   if (args.pdf) {
     // the same HTML, printed: the email's 16px page padding and grey page background are dropped (the PDF has its own

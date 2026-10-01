@@ -251,7 +251,7 @@ try:
             return 404, {}
     sent = []
     def send(to, subj, text, html, att=None):
-        sent.append({"to": to, "subject": subj, "text": text, "html": bool(html), "att": att or []})
+        sent.append({"to": to, "subject": subj, "text": text, "html": html or "", "att": att or []})
         if os.environ.get("DUMP_EMAILS"):      # every email this test sends, to read them as a person would
             d = os.environ["DUMP_EMAILS"]; os.makedirs(d, exist_ok=True); n = len([f for f in os.listdir(d) if f.endswith('.txt')]) + 1
             open(os.path.join(d, f"{n:02d}.txt"), "w").write(f"To: {to}\nSubject: {subj}\nAttachments: {[a[0] for a in (att or [])]}\n\n{text}")
@@ -302,15 +302,16 @@ try:
     if names:
         import io
         from openpyxl import load_workbook
-        wb = load_workbook(io.BytesIO(rep["att"][0][1]), data_only=True)
+        wb = load_workbook(io.BytesIO(next(a for a in rep["att"] if a[0].endswith(".xlsx"))[1]), data_only=True)
         check("month-end: the workbook opens and starts with the Summary sheet", wb.sheetnames[0] == "Summary", str(wb.sheetnames))
     if os.environ.get("KEEP_REPORT"):
         for a in rep["att"]:
             open(os.path.join(os.environ["KEEP_REPORT"], a[0]), "wb").write(a[1])
     has_pw = subprocess.run(["node", "-e", "require.resolve('playwright', {paths: [process.argv[1]]})", os.path.join(PDFJS_TOOLS, "node_modules")], capture_output=True).returncode == 0
     if has_pw or os.environ.get("REQUIRE_PDF") == "1":
-        check("month-end: the PDF factsheet is attached and the factsheet is the email's HTML", "FriendPortfolio-Aug-26.pdf" in names and rep["html"]
-              and next(a for a in rep["att"] if a[0].endswith(".pdf"))[1][:5] == b"%PDF-", json.dumps(names))
+        check("month-end: the PDF factsheet is attached and the email shows the headline figures (value, the month's return, top holding)",
+              "FriendPortfolio-Aug-26.pdf" in names and rep["html"] and next(a for a in rep["att"] if a[0].endswith(".pdf"))[1][:5] == b"%PDF-"
+              and "Value at month-end" in rep["text"] and "10,005 EGP" in rep["text"] and "Return in Aug" in rep["text"] and "COMI" in rep["text"], json.dumps(names) + rep["text"][:600])   # private-scan: synthetic
     else:
         print("SKIP month-end PDF: no Playwright next to the tools (CI step 5f checks it)")
     imp = gdoc("imports/2026-08") or {}
@@ -332,7 +333,7 @@ try:
           hset.get("inception") == "2026-08" and hset.get("trackFrom") == "2026-09-30" and (hset.get("historyImport") or {}).get("status") == "done" and (hset.get("historyImport") or {}).get("adjustments") == 2 and (hset.get("account") or {}).get("unifiedCode") == "1234567", json.dumps({k: hset.get(k) for k in ("inception", "trackFrom", "historyImport", "account")}))   # private-scan: synthetic
     check("history: both months' marks come from the statements", (hmk.get("2026-08") or {}).get("source") == "statement" and abs((hmk.get("2026-09") or {}).get("cash", 0) - 9695) < 0.01 and abs((hmk.get("2026-09") or {}).get("securities", 0) - 1456) < 0.01, json.dumps(hmk))
     check("history: one summary email, and only the latest month's report (Sep-26), not the old one",
-          [m["subject"] for m in hs] == ["History Portfolio: built from your Thndr emails", "History Portfolio · month-end report Sep-26"] and "Aug-26" in hs[0]["text"] and "1 more monthly statement, up to Sep-26" in hs[0]["text"] and "2 adjustments (Sep-26)" in hs[0]["text"]
+          [m["subject"] for m in hs] == ["History Portfolio: built from your Thndr emails", "History Portfolio · month-end report Sep-26"] and "Starting point: Aug-26 statement" in hs[0]["text"] and "Monthly statements used: 2 (up to Sep-26)" in hs[0]["text"] and "Adjustments: 2 (Sep-26)" in hs[0]["text"]
           and ((adoc(HUID, hacct, "imports/2026-08") or {}).get("reports") or {}).get("emailedAt") == "skipped (history import)", json.dumps([m["subject"] for m in hs]))
     ws = [m for m in hsent if m["to"] == "wait2@example.com"]
     wstate = adoc(WUID, wacct, "sync/mail") or {}

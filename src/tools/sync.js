@@ -38,7 +38,7 @@
    is stamped by the routine); sync_state.json carries toolSha = sha256 (12 hex) of the tool files that ran.
    summary.alert is null, or — when a month's monthly statement newly became overdue (once per month, from the 10th
    of the next month; state.alerts[M]) — every month still missing one, e.g. ['2026-06', '2026-09'] (missingStatements).
-   The email subject starts with settings.name and links the page for settings.portfolioId (PAGE_URLS) and the site.
+   The email subject starts with settings.name and links the site.
    Heads-up digest (digest()): after the emails, from the data dir as it stands after this run — (exdiv) a held stock
    whose market/latest quote goes ex-dividend within 7 days; (target/stop) a held stock whose latest price is at or past
    its asset target (≥) or stop (≤); (drawdown) the portfolio's return index (deposits and withdrawals excluded) more
@@ -74,7 +74,6 @@ const nextMonth = (m) => { const [y, mo] = m.split('-').map(Number); return mo =
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const lbl = (m) => `${MONTH_NAMES[+m.slice(5, 7) - 1]}-${m.slice(2, 4)}`;
 // the page each portfolio's summary email links to (settings.portfolioId)
-const PAGE_URLS = { khaled: 'https://claude.ai/artifact/PNjUN5wQkvgtZDcTML1HFe', yassin: 'https://claude.ai/artifact/6VL6yHnoUHkNqP1PdzRazc' };
 const SITE_URL = 'https://khaledamin2001-lgtm.github.io/portfolio/';
 
 // ---------- current state ----------
@@ -425,8 +424,15 @@ async function run() {
     writes: fs.readdirSync(path.join(out, 'write')),
     email: applied.length || holds.length || alert || heads.length ? {
       subject: holds.length ? `${who}: ${holds.length} Thndr email${holds.length > 1 ? 's' : ''} need${holds.length > 1 ? '' : 's'} your review` : applied.some((e) => e.monthly) ? `${who}: ${applied.filter((e) => e.monthly).map((e) => lbl(e.monthly)).join(', ')} statement posted` : alert && !applied.length ? `${who}: ${alert.map(lbl).join(', ')} Thndr statement${alert.length > 1 ? 's have' : ' has'} not arrived` : applied.length ? `${who}: updated from Thndr` : `${who}: heads-up — ${heads.length > 1 ? `${heads.length} things to look at` : heads[0].text.split(' (')[0].split(';')[0]}`,
-      text: lines.join('\n').replace(/\n+$/, '') + '\n\n' + [PAGE_URLS[settings.portfolioId], SITE_URL].filter(Boolean).join(' · '),
+      text: lines.join('\n').replace(/\n+$/, '') + '\n\n' + SITE_URL,
       notify: holds.length > 0 || !!alert || heads.length > 0 || applied.some((e) => e.monthly || e.kind !== 'invoice'),
+      // the same content in pieces, for the HTML email (src/jobs/emails.py sync_email)
+      parts: {
+        name: who, url: SITE_URL, heads: heads.map((it) => it.text),
+        applied: applied.map((e) => ({ title: e.subject, period: e.period || null, monthly: e.monthly ? lbl(e.monthly) : null, items: e.changes.concat(e.notes) })),
+        held: holds.map((e) => ({ title: e.subject, period: e.period || null, reasons: e.reasons, proposed: e.proposed || [] })),
+        missing: alert ? alert.map(lbl) : [], checked: today,
+      },
     } : null,
     digest: { items: dg.items, emailed: heads.map((it) => it.key), drawdown: dg.drawdown, errors: dg.errors },
     log: log.map(({ removedRows, ...e }) => e),

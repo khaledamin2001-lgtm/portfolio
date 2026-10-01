@@ -16,7 +16,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import jobs_common as jc  # noqa: E402
-import mail_send, run_market, run_sync, alarm_key  # noqa: E402
+import mail_send, run_market, run_sync, alarm_key, emails  # noqa: E402
 
 SITE = "https://khaledamin2001-lgtm.github.io/portfolio/"
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -24,17 +24,17 @@ XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 # (key, who gets it and when) in the order they are sent; the key is matched against the samples made below
 GUIDE = [
     ("market", "You · after each EGX close, Sun-Thu about 3:45 pm"),
-    ("posted", "You (and a friend with Thndr emails on, for their own portfolio) · at the 4:15 / 6:15 / 11 pm check, when a Thndr statement or invoice was added"),
-    ("review", "You (and friends, for their own) · at a check, when a Thndr email could not be used"),
-    ("missing", "You (and friends, for their own) · at a check from the 10th, when last month's statement has not arrived"),
-    ("weekly", "You (and friends who switched it on) · Thursday evening"),
-    ("factsheet", "You · when a monthly statement is posted (yours), or from the 3rd (Yassin's)"),
+    ("posted", "You · at the 4:15 / 6:15 / 11 pm check, when a Thndr statement or invoice was added (friends get the same for their own portfolio)"),
+    ("review", "You · at a check, when a Thndr email could not be used (friends: the same, for their own)"),
+    ("missing", "You · at a check from the 10th, when last month's statement has not arrived (friends: the same, for their own)"),
+    ("weekly", "You · Thursday evening (friends who switch it on get their own)"),
+    ("factsheet", "You · when your monthly statement is posted"),
     ("reminder", "You · on the 11th, if last month's statement is still not posted"),
     ("signup", "You · when someone new signs up on the site"),
     ("token", "You · 14 days before the site's publishing key expires"),
     ("alarmkey", "You · 14, 7, 3, 2 and 1 days before the on-time alarm key expires"),
     ("failed", "You · only when a job fails"),
-    ("alerts", "Friends (and your own site account, if its email updates are on) · after a market close, when there is a new heads-up"),
+    ("alerts", "Friends · after a market close, when there is a new heads-up on their portfolio"),
     ("monthend", "Friends · when their monthly statement is posted: the Excel workbook and PDF factsheet attached"),
     ("friend", "Friends · when someone sends them a friend request on the site"),
     ("built", "Friends · once, when \"Build it from my Thndr emails\" has built their portfolio"),
@@ -88,7 +88,10 @@ def sync_email(tools, syn, work, today, pdf_args=None, subject="Your monthly E-s
     json.dump(man, open(os.path.join(inbox, "manifest.json"), "w"))
     jc.run(["node", os.path.join(tools, "sync.js"), "--data", data, "--inbox", inbox, "--out", out, "--today", today], "samples: sync.js")
     e = json.load(open(os.path.join(out, "summary.json"))).get("email")
-    return {"subject": e["subject"], "text": e["text"], "html": None, "att": []} if e else None
+    if not e:
+        return None
+    subj, text, html = emails.sync_email(e["subject"], e["parts"])
+    return {"subject": subj, "text": text, "html": html, "att": []}
 
 
 class _Demo:
@@ -102,15 +105,15 @@ class _Demo:
 def owner_samples(tools, syn, work, acct):
     got = []
     real = (mail_send.send, mail_send.send_failure, urllib.request.urlopen)
-    mail_send.send = lambda ctx, subject, text, html=None, to=None: got.append({"subject": subject, "text": text, "html": html, "att": []}) or "kept"
-    mail_send.send_failure = lambda ctx, e, c, subject, body: got.append({"subject": subject, "text": body, "html": None, "att": []}) or "kept"
+    mail_send.send = lambda ctx, subject, text, html=None, to=None, attachments=None: got.append({"subject": subject, "text": text, "html": html, "att": attachments or []}) or "kept"
+    mail_send.send_failure = lambda ctx, e, c, subject, body, html=None: got.append({"subject": subject, "text": body, "html": html, "att": []}) or "kept"
     out = {}
     try:
         o = {"latest": {"asOf": "2026-09-30T15:12+03:00", "quotes": {f"S{i}": {} for i in range(296)}, "missing": ["ZZB"],
                         "index": {"EGX30CAPPED": {"close": 64525.40, "chg": -0.65, "date": "2026-09-30"}}, "rates": {"policy": {"rate": 0.19, "date": "2026-09"}}},   # private-scan: synthetic
              "fillErrors": {"ZZA": "x"}, "bench": {"divYield": 0.0372}}   # private-scan: synthetic
-        s, t = run_market.success_email(o, {"historyMonths": ["2026-09"], "sessions": 1, "newAssets": 0, "marksFilled": {}}, True)
-        out["market"] = {"subject": s, "text": t, "html": None, "att": []}
+        s, t, h = run_market.success_email(o, {"historyMonths": ["2026-09"], "sessions": 1, "newAssets": 0, "marksFilled": {}}, True)
+        out["market"] = {"subject": s, "text": t, "html": h, "att": []}
         out["missing"] = sync_email(tools, syn, work, "2026-10-11")
         out["review"] = sync_email(tools, syn, work, "2026-10-02", ["--name", "Someone Else", "--month", "2026-09"])
         mk = tempfile.mkdtemp(dir=work)
@@ -128,20 +131,26 @@ def owner_samples(tools, syn, work, acct):
         os.environ["SITE_TOKEN"] = "sample"
         got.clear(); run_sync.token_check(_Demo(), {"today": "2026-10-11"}, {}); out["token"] = got[0]
         os.environ.pop("SITE_TOKEN") if env is None else os.environ.__setitem__("SITE_TOKEN", env)
-        s, t = alarm_key.reminder(datetime.date(2026, 10, 18), datetime.date(2026, 10, 11))
-        out["alarmkey"] = {"subject": s, "text": t, "html": None, "att": []}
+        s, t, h = alarm_key.reminder(datetime.date(2026, 10, 18), datetime.date(2026, 10, 11))
+        out["alarmkey"] = {"subject": s, "text": t, "html": h, "att": []}
         mark = os.environ.get("JOBS_FAILURE_MARK")
         os.environ["JOBS_FAILURE_MARK"] = os.path.join(work, "failure-mark")
         got.clear(); jc.report_failure(_Demo(), "market", "fetch prices", "the EGX price source did not answer (HTTP 503)"); out["failed"] = got[0]
         os.environ.pop("JOBS_FAILURE_MARK") if mark is None else os.environ.__setitem__("JOBS_FAILURE_MARK", mark)
     finally:
         mail_send.send, mail_send.send_failure, urllib.request.urlopen = real
-    me = acct.get("monthend")
-    if me and me["html"]:   # the owner's factsheet email: the same factsheet HTML, with where to download the files
-        M = me["subject"].rsplit(" ", 1)[-1]
-        out["factsheet"] = {"subject": f"Demo Portfolio · factsheet {M}", "html": me["html"], "att": [], "text":
-                            f"Excel workbook and PDF factsheet for {M}: open {SITE}, pick Demo Portfolio, open the Reports tab, choose {M} and press "
-                            "Download Excel or Download PDF (Excel sheets: Summary, Monthly, Holdings, Ledger, Closed trades, Income, Attribution, Marks & inputs)."}
+    # the owner's month-end email: the demo portfolio's own factsheet (PDF + headline figures) and workbook
+    import run_account_mail
+    M, rp = "2026-08", os.path.join(work, "report")
+    os.makedirs(rp)
+    sm_p, pdf_p, xl_p, xlsx_p = (os.path.join(rp, f) for f in ("summary.json", "Demo-Portfolio-Aug-26.pdf", "xl.json", "Demo-Portfolio-Aug-26.xlsx"))
+    jc.run(["node", os.path.join(tools, "factsheet.js"), "--page", run_account_mail.report_page(CODE), "--data", syn, "--month", M,
+            "--out", os.path.join(rp, "f.html"), "--pdf", pdf_p, "--summary", sm_p], "samples: factsheet", timeout=600)
+    jc.run(["node", os.path.join(tools, "excel.js"), "--data", syn, "--month", M, "--out", xl_p], "samples: excel.js")
+    jc.run([sys.executable, os.path.join(tools, "excel.py"), xl_p, xlsx_p], "samples: excel.py")
+    s, t, h = emails.monthend("Demo Portfolio", M, json.load(open(sm_p)), ["the PDF factsheet", "the Excel workbook"])
+    out["factsheet"] = {"subject": s, "text": t, "html": h, "att": [(os.path.basename(pdf_p), open(pdf_p, "rb").read(), "application/pdf"),
+                                                                  (os.path.basename(xlsx_p), open(xlsx_p, "rb").read(), XLSX)]}
     return out
 
 
@@ -162,12 +171,16 @@ def main(argv=None):
         acct, syn = account_samples(CODE, tools, work)
         samples = {**acct, **owner_samples(tools, syn, work, acct)}
         order = [k for k, _ in GUIDE if samples.get(k)]
-        intro = ["One sample of every email the portfolio sends, made from a made-up \"Demo Portfolio\" (none of the figures are yours).",
-                 "Each one below starts with [Sample]; the number matches this list. Who gets it, and when:", ""]
-        intro += [f"{i + 1:>2}. {samples[k]['subject']}\n    {dict(GUIDE)[k]}" for i, k in enumerate(order)]
-        intro += ["", "Friends' emails go only to their own address, and only when they switch them on in their account.",
-                  "Real emails never start with [Sample].", "", SITE]
-        msgs = [("[Sample] 0 · every email the portfolio sends", "\n".join(intro) + "\n", None, [])]
+        from mail_html import email as mail
+        guide = dict(GUIDE)
+        mine = [f"{i + 1}. {samples[k]['subject']} — {guide[k].split(' · ', 1)[1]}" for i, k in enumerate(order) if guide[k].startswith("You")]
+        theirs = [f"{i + 1}. {samples[k]['subject']} — {guide[k].split(' · ', 1)[1]}" for i, k in enumerate(order) if not guide[k].startswith("You")]
+        it, ih = mail("Email samples", "Every email the portfolio sends", [
+            ("p", "One sample of each, made from a made-up \"Demo Portfolio\": none of the figures are yours. The number matches the [Sample] number in each subject."),
+            ("h", "Emails you get", "you run the platform; these are about your own portfolio and the jobs"), ("list", mine),
+            ("h", "Emails your friends get", "only to their own address, only when they switch them on in their account; never to you"), ("list", theirs),
+            ("box", "info", None, ["Real emails never start with [Sample]."])], button=("Open the site", SITE))
+        msgs = [("[Sample] 0 · every email the portfolio sends", it, ih, [])]
         msgs += [(f"[Sample] {i + 1} · {samples[k]['subject']}", samples[k]["text"], samples[k]["html"], samples[k]["att"]) for i, k in enumerate(order)]
         missing = [k for k, _ in GUIDE if not samples.get(k)]
         if a.dry_run:

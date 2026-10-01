@@ -72,29 +72,9 @@ def marks_patch(marks, out):
 
 
 def success_email(out, info, published):
-    """Step 6: (subject, plain-text body) of the market-updated email. Market figures only."""
-    L = out.get("latest") or {}
-    ix = (L.get("index") or {}).get("EGX30CAPPED") or {}
-    close_date = ix.get("date") or max((d for H in out.get("histories") or [] for d in (H.get("days") or {})), default=None) or (L.get("asOf") or "")[:10]
-    pol = (L.get("rates") or {}).get("policy") or {}
-    bench = out.get("bench") or {}
-    pct = lambda v: f"{v * 100:.2f}%" if isnum(v) else "n/a"
-    fe, miss = sorted(out.get("fillErrors") or {}), L.get("missing") or []
-    names = {"cpi": "CPI", "usdegp": "USD/EGP", "cashRate": "CBE rate"}
-    filled = [f"{names[k]} {', '.join(v)}" for k, v in info["marksFilled"].items() if v and k in names]
-    asof = str(L.get("asOf") or "")
-    asof = f"prices as of {asof[11:16]} Cairo time" + (f" on {asof[:10]}" if asof[:10] != close_date else "") if len(asof) >= 16 else f"as of {asof or 'n/a'}"
-    lines = [f"Close date: {close_date} ({asof})",
-             f"Quotes: {len(L.get('quotes') or {})}",
-             f"EGX30 Capped: {ix['close']:,.2f} ({ix.get('chg', 0):+.2f}% on the day)" if isnum(ix.get("close")) else "EGX30 Capped: n/a",
-             f"CBE policy rate: {pct(pol.get('rate'))}" + (f" (since {pol['date']})" if pol.get("date") else ""),
-             f"Index dividend yield: {pct(bench.get('divYield'))}",
-             f"History written: {', '.join(info['historyMonths']) or 'none'} ({info['sessions']} session{'' if info['sessions'] == 1 else 's'})",
-             f"Fill errors or missing symbols: {', '.join(sorted(set(fe) | set(miss))) or 'none'}",
-             f"New index members added: {info['newAssets'] or 'none'}",
-             f"CPI / USD/EGP / CBE-rate months filled: {'; '.join(filled) or 'none'}",
-             "The live site is updated." if published else "The live site data was already current."]
-    return f"Portfolio: market updated {close_date}", "\n".join(lines) + "\n"
+    """Step 6: (subject, text, html) of the market-updated email (src/jobs/emails.py). Market figures only."""
+    import emails
+    return emails.market(out, info, published)
 
 
 def build_writes(data_dir, out):
@@ -227,8 +207,8 @@ def main(argv=None):
         if slot != "manual" and ctx.config.get("marketEmail", True) is not False:
             try:
                 import mail_send
-                subj, body = success_email(out, info, bool(r and r["pushed"]))
-                jc.log("email: " + mail_send.send(ctx, subj, body))
+                subj, body, html = success_email(out, info, bool(r and r["pushed"]))
+                jc.log("email: " + mail_send.send(ctx, subj, body, html))
             except Exception as e:     # the update itself succeeded; a missing notice is not a failed job
                 jc.log(f"email: not sent ({type(e).__name__}: {jc.redact(str(e))[:200]})")
         step = "record"

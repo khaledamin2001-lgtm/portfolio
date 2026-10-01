@@ -145,7 +145,8 @@ def month_end(ctx, M, data, write_dir, summary, reports, exports_dir, work):
     try:
         ensure_playwright(ctx)
         page = desk_page(ctx, work)
-        fs = ["node", ctx.tool("factsheet.js"), "--page", page, "--data", data, "--overlay", write_dir, "--month", M, "--out", html_path]
+        fs = ["node", ctx.tool("factsheet.js"), "--page", page, "--data", data, "--overlay", write_dir, "--month", M, "--out", html_path,
+              "--summary", os.path.join(reports, f"summary-{M}.json")]
         try:
             jc.run(fs + ["--pdf", pdf_path], "month-end: factsheet", timeout=600)
             res["pdf"] = os.path.exists(pdf_path)
@@ -172,21 +173,25 @@ def month_end(ctx, M, data, write_dir, summary, reports, exports_dir, work):
         res["entry"] = entry
     except jc.JobError as e:
         errors.append(f"{e.step}: {e.detail}")
-    # d. the factsheet email (needs the factsheet HTML and the published workbook)
+    # d. the factsheet email: the headline figures, with the PDF and the workbook attached. A portfolio the owner only
+    #    runs for someone else (config "reportEmail": false) gets no email here: its reports are on the site.
+    if ctx.config.get("reportEmail", True) is False:
+        res["emailSkipped"] = True
+        if errors:
+            res["error"] = "; ".join(errors)
+        return res
     try:
         if errors or not res["workbook"] or not os.path.exists(html_path):
             raise jc.JobError("month-end: email", "not sent because an earlier month-end step failed")
-        with open(html_path, encoding="utf-8") as f:
-            html = f.read()
-        text = ((summary.get("email") or {}).get("text") or "").rstrip()
-        what = "Excel workbook and PDF factsheet" if res["pdf"] else "Excel workbook"
-        buttons = "Download Excel or Download PDF" if res["pdf"] else "Download Excel"
-        lines = (f"{what} for {S}: open {site_url(ctx)}, pick {portfolio_label(ctx)}, open the Reports tab, choose {S} and press "
-                 f"{buttons} (Excel sheets: Summary, Monthly, Holdings, Ledger, Closed trades, Income, Attribution, Marks & inputs).")
-        body = (text + "\n\n" if text else "") + lines
+        sp = os.path.join(reports, f"summary-{M}.json")
+        sm = json.load(open(sp)) if os.path.exists(sp) else None
+        att = [(base + ".pdf", open(pdf_path, "rb").read(), "application/pdf")] if res["pdf"] else []
+        att.append((base + ".xlsx", open(xlsx_path, "rb").read(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+        files = (["the PDF factsheet"] if res["pdf"] else []) + ["the Excel workbook"]
         name = ctx.settings().get("name") or ctx.config.get("name") or "Portfolio"
-        import mail_send
-        mail_send.send(ctx, f"{name} · factsheet {S}", body, html)
+        import mail_send, emails
+        subj, text, html = emails.monthend(name, M, sm, files)
+        mail_send.send(ctx, subj, text, html, attachments=att)
         res["emailed"] = True
     except jc.JobError as e:
         errors.append(f"{e.step}: {e.detail}")
@@ -213,13 +218,9 @@ def backstop(ctx, plan, data, write_dir, jobs):
     mk = (marks.get("months") or {}).get(P)
     state = ("not set yet" if not mk else "an estimate for now" if mk.get("provisional") else f"taken from {mk.get('source') or 'an unknown source'}")
     name = ctx.settings().get("name") or ctx.config.get("name") or "Portfolio"
-    mon = datetime.date(int(P[:4]), int(P[5:]), 1).strftime("%B")
-    text = (f"Your {jc.short(P)} Thndr monthly statement has not been posted to {name} yet.\n\n"
-            f"The inbox sync posts it by itself as soon as the email arrives in Gmail. If it is already in your inbox, it may be "
-            f"held for review (see the \"needs your review\" email), or it may not have arrived: request it in the Thndr app.\n\n"
-            f"{mon}'s month-end value is {state}; the statement replaces it with Thndr's own figures.\n\n{site_url(ctx)}")
-    import mail_send
-    return "reminder " + mail_send.send(ctx, f"{name}: {jc.short(P)} Thndr statement not posted yet", text)
+    import mail_send, emails
+    subj, text, html = emails.reminder(name, P, state)
+    return "reminder " + mail_send.send(ctx, subj, text, html)
 
 
 def token_check(ctx, plan, jobs):
@@ -246,13 +247,9 @@ def token_check(ctx, plan, jobs):
         return f"token valid until {d}"
     if sj.get("tokenWarned") == str(d):
         return f"token expires {d} (already warned)"
-    text = (f"The publishing token the portfolio jobs use (GitHub secret SITE_TOKEN) expires on {d}.\n\n"
-            "To renew it: GitHub -> Settings -> Developer settings -> Personal access tokens -> Fine-grained tokens -> "
-            "Generate new token; repository access: only the site repository; permissions: Contents read and write. "
-            "Then in the engine repository: Settings -> Secrets and variables -> Actions -> SITE_TOKEN -> Update, paste it, "
-            "and run the Setup check workflow once to confirm.")
-    import mail_send
-    mail_send.send(ctx, f"Portfolio: publishing token expires {d}", text)
+    import mail_send, emails
+    subj, text, html = emails.token(d, today)
+    mail_send.send(ctx, subj, text, html)
     sj["tokenWarned"] = str(d)
     return f"token expires {d}: reminder emailed"
 
@@ -331,7 +328,9 @@ def main(argv=None):
         step = "email"
         em = summary.get("email")
         if em and em.get("notify"):
-            jc.log("email: " + mail_send.send(ctx, em["subject"], em["text"]))
+            import emails
+            subj, text, html = emails.sync_email(em["subject"], em["parts"]) if em.get("parts") else (em["subject"], em["text"], None)
+            jc.log("email: " + mail_send.send(ctx, subj, text, html))
         else:
             jc.log("email: none due")
         # [9b] weekly email (Thursday late run)

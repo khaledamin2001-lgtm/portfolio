@@ -65,14 +65,15 @@ try:
     check("market plan: never a ledger/settings/imports/sync write", not any(x["collection"] in ("ledger", "imports", "sync") or x["doc_id"] == "settings" for x in w))
     o2 = dict(o, latest={"asOf": "2026-09-28T15:12+03:00", "quotes": {"ALPH": {"price": 1}}, "missing": [],
                          "index": {"EGX30CAPPED": {"close": 1234.5, "chg": -0.42, "date": "2026-09-28"}}, "rates": {"policy": {"rate": 0.22, "date": "2026-08"}}})   # private-scan: synthetic
-    subj, body = run_market.success_email(o2, info, True)
+    subj, body, html = run_market.success_email(o2, info, True)
     check("market email: subject names the close date", subj == "Portfolio: market updated 2026-09-28")
-    fig = "EGX30 Capped: 1,234.50 (-0.42% on the day)"   # private-scan: synthetic
-    check("market email: market figures in the body", fig in body and "CBE policy rate: 22.00% (since 2026-08)" in body
-          and "History written: 2026-08, 2026-09" in body and "The live site is updated." in body)
+    fig = "EGX30 Capped: 1,234.50 (−0.42% on the day)"   # private-scan: synthetic
+    check("market email: market figures in the body", fig in body and "CBE policy rate: 22.00% (since August 2026)" in body
+          and "Price history saved: August 2026, September 2026" in body and "The site is updated." in body)
+    check("market email: the same figures in the HTML", "1,234.50" in html and "22.00%" in html and "Open the site" in html and html.startswith("<!doctype html>"))   # private-scan: synthetic
     check("market email: nothing from the portfolio's own documents", "Alpha Co" not in body and "cash" not in body.lower())
     o3 = dict(o2, fillErrors={"ZZA": "x"}, latest=dict(o2["latest"], missing=["ZZA", "ZZB"]))
-    check("market email: a symbol both unfilled and missing is listed once", "Fill errors or missing symbols: ZZA, ZZB\n" in run_market.success_email(o3, info, True)[1])
+    check("market email: a symbol both unfilled and missing is listed once", "ZZA, ZZB — the last known price is kept." in run_market.success_email(o3, info, True)[1])
 finally:
     shutil.rmtree(tmp)
 
@@ -227,9 +228,9 @@ try:
     check("alarm key: 12 days before, no email", kna.key_check(at10, "k") == "alarm key: valid until 2026-10-20" and not [c for c in calls if c[0] == "POST"])
 finally:
     urllib.request.urlopen, kna.get = real_urlopen, real_get
-subj, body = alarm_key.reminder(datetime.date(2026, 10, 9), datetime.date(2026, 10, 8))
+subj, body, html = alarm_key.reminder(datetime.date(2026, 10, 9), datetime.date(2026, 10, 8))
 check("alarm key email: subject with the date, body says tomorrow and how to renew", subj == "Portfolio: on-time alarm key expires 9 Oct 2026"
-      and "expires tomorrow" in body and "cron-job.org" in body and "ENGINE_TOKEN" in body and "github_pat_" in body)
+      and "expires tomorrow" in body and "cron-job.org" in body and "ENGINE_TOKEN" in body and "github_pat_" in body and "ENGINE_TOKEN" in html)
 
 print(f"{'ALL PASS' if not fails else str(fails) + ' FAILED'}")
 sys.exit(1 if fails else 0)

@@ -48,6 +48,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import jobs_common as jc  # noqa: E402
+import emails  # noqa: E402
 import store  # noqa: E402
 
 JOB = "account emails"
@@ -59,7 +60,6 @@ SHARE_LABEL = b"portfolio-share-v1"
 SHARE_COLLS = ("portfolio", "ledger", "imports")
 OWNER_HASH = "467022c320757248bf70115c83d305a7e4d139c35e1be5f8117fb30d7f769347"     # SHA-256 of the site owner's sign-in email (the address is not published here)
 SITE = "https://khaledamin2001-lgtm.github.io/portfolio/"
-ALERT_KINDS = {"exdiv": "Ex-dividend", "target": "Target reached", "stop": "Stop reached", "drawdown": "Drawdown"}
 
 
 class Http:
@@ -192,11 +192,7 @@ def materialize(docs, shared, out):
 
 
 def alerts_email(name, items, site):
-    # each item's text already says what it is ("Ex-dividend on 28 Sep: …", "ETEL reached its target: …")
-    lines = [f"Heads-up for {name}:", ""] + [f"• {i['text']}" for i in items]
-    lines += ["", f"Open your portfolio: {site}", "", "You get these because you switched on email updates in your account. Switch them off there any time."]
-    subj = f"{name}: heads-up — " + (items[0]["text"].split(" (")[0].split(";")[0] if len(items) == 1 else f"{len(items)} new items")
-    return subj[:180], "\n".join(lines) + "\n"
+    return emails.alerts(name, items)
 
 
 # ---------------------------------------------------------------- Thndr emails from the account's own Gmail
@@ -392,27 +388,21 @@ def month_end(code, data, M, name, work):
     jc.run(["node", os.path.join(tools, "excel.js"), "--data", data, "--month", M, "--out", xl], "month-end: excel.js")
     jc.run([sys.executable, os.path.join(tools, "excel.py"), xl, xlsx], "month-end: excel.py")
     att = [(base + ".xlsx", open(xlsx, "rb").read(), XLSX)]
-    html, pdf_note = None, ""
+    sm_p = os.path.join(work, f"summary-{M}.json")
     try:
-        fs = ["node", os.path.join(tools, "factsheet.js"), "--page", report_page(code), "--data", data, "--month", M, "--out", html_p]
+        fs = ["node", os.path.join(tools, "factsheet.js"), "--page", report_page(code), "--data", data, "--month", M, "--out", html_p, "--summary", sm_p]
         try:
             jc.run(fs + ["--pdf", pdf_p], "month-end: factsheet", timeout=600)
         except jc.JobError:
             jc.run(fs, "month-end: factsheet", timeout=600)
-        html = open(html_p, encoding="utf-8").read()
         if os.path.exists(pdf_p):
-            att.append((base + ".pdf", open(pdf_p, "rb").read(), "application/pdf"))
-        else:
-            pdf_note = " (the PDF could not be made this time; the factsheet is in this email)"
+            att.insert(0, (base + ".pdf", open(pdf_p, "rb").read(), "application/pdf"))
     except jc.JobError as e:
         jc.log(f"month-end {M}: factsheet not made ({jc.mask(e.detail)[:120]}); sending the workbook")
-        pdf_note = " (the factsheet could not be made this time)"
-    what = "Excel workbook and PDF factsheet" if len(att) == 2 else "Excel workbook"
-    text = (
-        f"Your {S} month-end report is attached: {what}{pdf_note}. Excel sheets: Summary, Monthly, Holdings, Ledger, "
-        f"Closed trades, Income, Attribution, Marks & inputs.\n\nYou get this because email updates or Thndr emails are on "
-        f"in your account.\n")
-    return f"{name} · month-end report {S}", text, html, att
+    sm = json.load(open(sm_p)) if os.path.exists(sm_p) else None
+    files = (["the PDF factsheet"] if len(att) == 2 else []) + ["the Excel workbook"]
+    subj, text, html = emails.monthend(name, M, sm, files, account=True)
+    return subj, text, html, att
 
 
 # ---------------------------------------------------------------- friends and the admin status line
@@ -481,18 +471,11 @@ def share_to_friends(http, tok, uid, friends, snap, state, now):
 
 
 def friend_email(name, who, site):
-    text = (f"{who} sent you a friend request on the portfolio site.\n\nIf you accept, you both see each other's portfolio "
-            f"(read-only: holdings, returns and activity). Either of you can remove it any time.\n\n"
-            f"To answer: open {site}?friends and sign in; the request is under Account, then Friends.\n\n"
-            f"You get this because email updates are on for {name}.\n")
-    return f"{who} wants to be friends on the portfolio site", text
+    return emails.friend(name, who)
 
 
 def signup_email(rows, site):
-    names = [r.get("name") or "(no name)" for r in rows]
-    lines = [f"• {r.get('name') or '(no name)'} ({r.get('email') or 'no email'})" for r in rows]
-    text = ("New on your portfolio site:\n\n" + "\n".join(lines) + f"\n\nSee everyone on {site}: Account, then Admin.\n")
-    return ("New on your portfolio site: " + (names[0] if len(names) == 1 else f"{len(names)} people"))[:180], text
+    return emails.signup(rows)
 
 
 def write_status_job(http, tok, uid, job):
@@ -505,45 +488,15 @@ def write_status_job(http, tok, uid, job):
 
 
 def history_email(name, seed, summary, site):
-    held = [e for e in summary.get("log") or [] if e.get("status") == "hold"]
-    n, adj = seed.get("months") or 1, seed.get("adjustments") or 0
-    first, last = jc.short(seed.get("first") or seed["month"]), jc.short(seed.get("last") or seed["month"])
-    lines = [f"{name} has been built from your Thndr emails.", "",
-             (f"• Starting point: your {first} statement, when your account held nothing yet: every trade since is on your statements."
-              if (seed.get("earlier") or {}).get("used") else
-              f"• Starting point: your {first} monthly statement, with your {seed.get('holdings', 0)} holding{'s' if seed.get('holdings', 0) != 1 else ''} and your cash as Thndr printed them on {seed['to']}."),
-             (f"• Then {n - 1} more monthly statement{'s' if n - 1 != 1 else ''}, up to {last}: every deposit, trade, dividend and fee on them." if n > 1 else "• That is your only monthly statement so far.")]
-    if adj:
-        months = ", ".join(jc.short(m) for m in seed.get("adjustedMonths") or [])
-        lines += [f"• {adj} adjustment{'s' if adj != 1 else ''} ({months}) so each month ends exactly on Thndr's holdings and cash; they are labelled \"Adjustment\" in your ledger."]
-    else:
-        lines += ["• Every month ends exactly on Thndr's holdings and cash."]
-    if seed.get("gaps"):
-        lines += ["", "Monthly statements not in your Gmail: " + ", ".join(jc.short(m) for m in seed["gaps"]) + ". The month after each is matched to Thndr's figures."]
-    other = summary.get("applied") or 0
-    if other:
-        lines += [f"• Since {last}: {other} newer Thndr email{'s' if other != 1 else ''} added."]
-    if held:
-        lines += ["", f"{len(held)} newer email{'s' if len(held) > 1 else ''} could not be applied (nothing from {'them' if len(held) > 1 else 'it'} was used):"]
-        lines += [f"  - {e.get('subject')}{(' (' + e['period'] + ')') if e.get('period') else ''}: {(e.get('reasons') or ['see the site'])[0]}" for e in held[:8]]
-    lines += ["", f"Open it: {site}", "From now on, new Thndr emails are added three times a day (4:15 pm, 6:15 pm and 11 pm Cairo time).", ""]
-    return f"{name}: built from your Thndr emails", "\n".join(lines)
+    return emails.built(name, seed, summary, jc.short)
 
 
 def history_wait_email(name, reason, site):
-    text = (f"{name} could not be built from your Thndr emails yet: {reason}.\n\n"
-            "Thndr emails a statement at the start of every month (subject \"Your monthly E-statement\"). As soon as one is in "
-            "your Gmail, your portfolio is built by itself: nothing else to do. You can also request statements in the Thndr app.\n\n"
-            f"{site}\n")
-    return f"{name}: waiting for a monthly Thndr statement", text
+    return emails.waiting(name, reason)
 
 
 def gmail_error_email(name, err, site):
-    text = (f"The site could not read the Thndr emails in your Gmail for {name}:\n\n  {err}\n\n"
-            "Usually the app password was deleted or changed. To fix it: open the site, tap Account, then Thndr emails, "
-            "then Change app password, and follow the steps.\n\n"
-            f"Nothing in your portfolio was changed. {site}\n")
-    return f"{name}: Thndr emails could not be read", text
+    return emails.gmail_error(name, err)
 
 
 def run_one(http, pkg, shared, code, now, weekly_due, dry, send, main_docs=None):
@@ -591,14 +544,15 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                 em = summary.get("email") or {}
                 imported = summary.get("held") or summary.get("alert") or any(e.get("kind") != "invoice" and e.get("status") == "applied" for e in summary.get("log") or [])
                 if summary.get("_history"):
-                    subj, body = history_email(name, summary["_history"], summary, site)
+                    subj, body, html = history_email(name, summary["_history"], summary, site)
                     if not dry:
-                        send(pkg["email"], subj, body, None)
+                        send(pkg["email"], subj, body, html)
                     state["history"] = {"status": "done", "from": summary["_history"]["month"], "at": jc.now_iso()}
                     notes.append("history import done")
                 elif em.get("notify") and (prefs.get("alerts", True) or imported):
                     if not dry:
-                        send(pkg["email"], em["subject"], em["text"], None)
+                        es, et, eh = emails.sync_email(em["subject"], em["parts"], account=True) if em.get("parts") else (em["subject"], em["text"], None)
+                        send(pkg["email"], es, et, eh)
                     notes.append("import email sent")
                 for k in (summary.get("digest") or {}).get("emailed") or []:
                     sent[k] = today
@@ -609,9 +563,9 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                 reason = str(e.detail)[:200]
                 state["gmail"] = {"ok": True, "at": jc.now_iso(), "found": 0, "new": 0, "applied": 0, "held": 0}
                 if (state.get("history") or {}).get("reason") != reason:
-                    subj, body = history_wait_email(name, reason, site)
+                    subj, body, html = history_wait_email(name, reason, site)
                     if not dry:
-                        send(pkg["email"], subj, body, None)
+                        send(pkg["email"], subj, body, html)
                 state["history"] = {"status": "waiting", "reason": reason, "at": jc.now_iso()}
                 notes.append("history import waiting for a monthly statement")
                 overlay = None
@@ -620,9 +574,9 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                 err = jc.mask(str(getattr(e, "detail", e)))[:200]
                 state["gmail"] = {"ok": False, "at": jc.now_iso(), "error": err, "errorSent": prev.get("errorSent")}
                 if prev.get("errorSent") != err:
-                    subj, body = gmail_error_email(name, err, site)
+                    subj, body, html = gmail_error_email(name, err, site)
                     if not dry:
-                        send(pkg["email"], subj, body, None)
+                        send(pkg["email"], subj, body, html)
                     state["gmail"]["errorSent"] = err
                 notes.append(f"gmail not done ({getattr(e, 'step', type(e).__name__)})")
                 overlay = None
@@ -635,9 +589,9 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                 raise jc.JobError("alerts", out.get("error") or "account_alerts.js failed")
             new = [i for i in out.get("items") or [] if i.get("key") and i["key"] not in sent]
             if new:
-                subj, body = alerts_email(name, new, site)
+                subj, body, html = alerts_email(name, new, site)
                 if not dry:
-                    send(pkg["email"], subj, body, None)
+                    send(pkg["email"], subj, body, html)
                 for i in new:
                     sent[i["key"]] = today
                 changed = True
@@ -691,8 +645,8 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                 fm = {k: v for k, v in (state.get("friendMailed") or {}).items() if any(f["uid"] == k and f.get("status") == "received" for f in links)}
                 for f in links:
                     if f.get("status") == "received" and f["uid"] not in fm:
-                        subj, body = friend_email(name, f.get("name") or "Someone", site)
-                        send(pkg["email"], subj, body, None)
+                        subj, body, html = friend_email(name, f.get("name") or "Someone", site)
+                        send(pkg["email"], subj, body, html)
                         fm[f["uid"]] = today
                         notes.append("friend request emailed")
                 if fm != (state.get("friendMailed") or {}):
@@ -725,8 +679,8 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                     known = state.get("knownAccounts")
                     new = [u for u in sorted(rows) if u != pkg["uid"] and known is not None and u not in known]
                     if new:
-                        subj, body = signup_email([rows[u] for u in new], site)
-                        send(pkg["email"], subj, body, None)
+                        subj, body, html = signup_email([rows[u] for u in new], site)
+                        send(pkg["email"], subj, body, html)
                         notes.append(f"{len(new)} new account(s) emailed")
                     if known is None or sorted(known) != sorted(rows):
                         state["knownAccounts"] = sorted(rows)

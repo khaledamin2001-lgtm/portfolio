@@ -2,8 +2,8 @@
 """Send one email through Gmail SMTP (smtp.gmail.com:465, SSL) from GMAIL_ADDRESS with GMAIL_APP_PASSWORD.
 
 The only allowed recipient is the portfolio's own portfolio/settings.factsheetEmail (decrypted from the engine repo);
-any other address is refused. Plain text body plus an optional HTML alternative; never attachments here (build() takes
-attachments only for run_account_mail.py: a site account's own month-end files, to that account's own address).
+any other address is refused. Plain text body plus an optional HTML alternative; attachments only for the portfolio's
+own month-end files (workbook and PDF factsheet). run_account_mail.py uses build() for a site account's own address.
 
     python3 mail_send.py --engine DIR [--code DIR] --subject S --text FILE [--html FILE] [--to ADDR]
     python3 mail_send.py --failure JOB --engine DIR [--code DIR] [--step S] [--error E]
@@ -94,7 +94,7 @@ def _outbox(ctx, to, subject, text, html):
     return f"outbox/{day}/{name}.enc.json"
 
 
-def send(ctx, subject, text, html=None, to=None):
+def send(ctx, subject, text, html=None, to=None, attachments=None):
     """Send to settings.factsheetEmail. `to`, when given, must be that same address. Returns a short status string
     ('sent', or 'shadow: outbox/...'); the caller commits outbox files in shadow mode (jobs collect them)."""
     allowed = ctx.recipient()
@@ -107,11 +107,11 @@ def send(ctx, subject, text, html=None, to=None):
         ctx.__dict__.setdefault("outbox_files", []).append(path)
         return "shadow: saved to " + path
     sender, pw = _sender()
-    smtp_send(build(sender, allowed, subject, text, html), sender, pw, allowed)
+    smtp_send(build(sender, allowed, subject, text, html, attachments), sender, pw, allowed)
     return "sent"
 
 
-def send_failure(ctx, engine, code, subject, body):
+def send_failure(ctx, engine, code, subject, body, html=None):
     """FAILED notice. Uses settings.factsheetEmail when the settings can be read, else the sender's own address."""
     if ctx is None and engine:
         try:
@@ -128,7 +128,7 @@ def send_failure(ctx, engine, code, subject, body):
         except Exception:
             to = None
     to = to or sender          # the owner's own mailbox: the one address that is always safe
-    smtp_send(build(sender, to, subject, body), sender, pw, to)
+    smtp_send(build(sender, to, subject, body, html), sender, pw, to)
     return "sent"
 
 
@@ -155,8 +155,10 @@ def main(argv=None):
             except Exception:
                 pass
             date = ctx.today() if ctx else jc.cairo_today()
-            body = f"The {a.failure} job failed on {date}.\n\nStep: {a.step}\nError: {a.error}\n\n{jc.run_url()}\n"
-            jc.log("failure email: " + send_failure(ctx, a.engine, a.code, f"Portfolio: {a.failure} FAILED {date}", body))
+            import emails
+            u = jc.run_url()
+            subj, body, html = emails.failure(a.failure, date, a.step, a.error, u[len("Run log: "):] if u.startswith("Run log: http") else None)
+            jc.log("failure email: " + send_failure(ctx, a.engine, a.code, subj, body, html))
             return 0
         if not a.subject or not a.text:
             ap.error("--subject and --text are required")

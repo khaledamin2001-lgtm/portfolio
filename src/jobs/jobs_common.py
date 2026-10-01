@@ -387,10 +387,11 @@ def report_failure(ctx_or_none, job, step, detail, engine=None, code=None):
     FAILED line, and leave a marker so the workflow's own failure step does not email twice."""
     import mail_send
     date = ctx_or_none.today() if ctx_or_none else cairo_today()
-    body = (f"The {job} job failed on {date}.\n\nStep: {step}\nError: {detail}\n\n"
-            f"{run_url()}\nNothing after this step was done; the next scheduled run tries again.")
+    import emails
+    u = run_url()
+    subj, body, html = emails.failure(job, date, step, detail, u[len("Run log: "):] if u.startswith("Run log: http") else None)
     try:
-        sent = mail_send.send_failure(ctx_or_none, engine, code, f"Portfolio: {job} FAILED {date}", body)
+        sent = mail_send.send_failure(ctx_or_none, engine, code, subj, body, html)
         log(f"failure email: {sent}")
     except Exception as e:
         log(f"failure email could not be sent: {mask(e)}")
