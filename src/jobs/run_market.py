@@ -204,13 +204,6 @@ def main(argv=None):
             r = publish.publish(ctx, f"Daily data update {plan['today']}", push=ctx.live, remote=a.site_remote, force=a.force_publish)
             jc.log(f"publish: {'pushed' if r['pushed'] else 'committed locally (shadow)' if r['committed'] else 'nothing to publish'}"
                    f"{', data unchanged' if r['dataUnchanged'] else ''}, head {r['head']}, {len(r['files'])} files")
-        if slot != "manual" and ctx.config.get("marketEmail", True) is not False:
-            try:
-                import mail_send
-                subj, body, html = success_email(out, info, bool(r and r["pushed"]))
-                jc.log("email: " + mail_send.send(ctx, subj, body, html))
-            except Exception as e:     # the update itself succeeded; a missing notice is not a failed job
-                jc.log(f"email: not sent ({type(e).__name__}: {jc.redact(str(e))[:200]})")
         step = "record"
         state = jc.jobs_state(ctx)
         ms = state.setdefault("market", {})
@@ -227,6 +220,17 @@ def main(argv=None):
                 state = jc.jobs_state(ctx)
                 state.setdefault("market", {}).update(ms)
                 jc.save_jobs_state(ctx, state)
+        else:
+            raise jc.JobError("record", "the engine repository kept changing; the update itself is published")
+        # the email goes out only once this run is recorded, so a late backup run never repeats it
+        step = "email"
+        if slot != "manual" and ctx.config.get("marketEmail", True) is not False:
+            try:
+                import mail_send
+                subj, body, html = success_email(out, info, bool(r and r["pushed"]))
+                jc.log("email: " + mail_send.send(ctx, subj, body, html))
+            except Exception as e:     # the update itself succeeded; a missing notice is not a failed job
+                jc.log(f"email: not sent ({type(e).__name__}: {jc.redact(str(e))[:200]})")
         jc.log("market: done")
         return 0
     except jc.JobError as e:

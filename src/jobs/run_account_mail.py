@@ -552,163 +552,177 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
         data = os.path.join(work, "data")
         materialize(docs, shared, data)
         changed = False
-        overlay = None
-        if prefs.get("gmail"):
-            prev = state.get("gmail") or {}
-            try:
-                summary, overlay, data, c = gmail_import(http, tok, pkg, keys, docs, shared, code, work, now, dry,
-                                                         lambda: read_account(http, tok, pkg["uid"], priv))
-                em = summary.get("email") or {}
-                imported = summary.get("held") or summary.get("alert") or any(e.get("kind") != "invoice" and e.get("status") == "applied" for e in summary.get("log") or [])
-                if summary.get("_history"):
-                    subj, body, html = history_email(name, summary["_history"], summary, site)
-                    if not dry:
-                        send(pkg["email"], subj, body, html)
-                    state["history"] = {"status": "done", "from": summary["_history"]["month"], "at": jc.now_iso()}
-                    notes.append("history import done")
-                elif em.get("notify") and (prefs.get("alerts", True) or imported):
-                    if not dry:
-                        es, et, eh = emails.sync_email(em["subject"], em["parts"], account=True) if em.get("parts") else (em["subject"], em["text"], None)
-                        send(pkg["email"], es, et, eh)
-                    notes.append("import email sent")
-                for k in (summary.get("digest") or {}).get("emailed") or []:
-                    sent[k] = today
-                state["gmail"] = {"ok": True, "at": jc.now_iso(), "found": c.get("found", 0), "new": c.get("kept", 0),
-                                  "applied": summary.get("applied", 0), "held": summary.get("held", 0)}
-                notes.append(f"gmail {c.get('kept', 0)} new, {summary.get('applied', 0)} applied, {summary.get('held', 0)} held")
-            except HistoryWait as e:
-                reason = str(e.detail)[:200]
-                state["gmail"] = {"ok": True, "at": jc.now_iso(), "found": 0, "new": 0, "applied": 0, "held": 0}
-                if (state.get("history") or {}).get("reason") != reason:
-                    subj, body, html = history_wait_email(name, reason, site)
-                    if not dry:
-                        send(pkg["email"], subj, body, html)
-                state["history"] = {"status": "waiting", "reason": reason, "at": jc.now_iso()}
-                notes.append("history import waiting for a monthly statement")
-                overlay = None
-                data = os.path.join(work, "data")
-            except Exception as e:
-                err = jc.mask(str(getattr(e, "detail", e)))[:200]
-                state["gmail"] = {"ok": False, "at": jc.now_iso(), "error": err, "errorSent": prev.get("errorSent")}
-                if prev.get("errorSent") != err:
-                    subj, body, html = gmail_error_email(name, err, site)
-                    if not dry:
-                        send(pkg["email"], subj, body, html)
-                    state["gmail"]["errorSent"] = err
-                notes.append(f"gmail not done ({getattr(e, 'step', type(e).__name__)})")
-                overlay = None
-                data = os.path.join(work, "data")
-            changed = True
-        if prefs.get("alerts", True) and overlay is None:
-            r = subprocess.run(["node", os.path.join(code, "src", "jobs", "account_alerts.js"), "--data", data, "--today", today], capture_output=True, text=True, timeout=300)
-            out = json.loads((r.stdout or "{}").strip().splitlines()[-1] if r.stdout.strip() else "{}")
-            if not out.get("ok"):
-                raise jc.JobError("alerts", out.get("error") or "account_alerts.js failed")
-            new = [i for i in out.get("items") or [] if i.get("key") and i["key"] not in sent]
-            if new:
-                subj, body, html = alerts_email(name, new, site)
-                if not dry:
-                    send(pkg["email"], subj, body, html)
-                for i in new:
-                    sent[i["key"]] = today
-                changed = True
-            notes.append(f"alerts {len(new)} new of {len(out.get('items') or [])}")
-        if prefs.get("weekly", True) and weekly_due and state.get("weeklySent") != today:
-            htmlp, txtp, jsp = (os.path.join(work, f) for f in ("weekly.html", "weekly.txt", "weekly.json"))
-            r = subprocess.run(["node", os.path.join(code, "src", "tools", "weekly.js"), "--data", data, "--week-ending", today, "--today", today,
-                                "--out", htmlp, "--text", txtp, "--json", jsp] + (["--overlay", overlay] if overlay else []), capture_output=True, text=True, timeout=300)
-            if r.returncode == 2:
-                notes.append("weekly skipped (no closes this week)")
-            elif r.returncode != 0:
-                raise jc.JobError("weekly", "weekly.js failed")
-            else:
-                w = json.load(open(jsp))
-                wk = w.get("week") or {}
-                if not wk.get("valueEnd") and not wk.get("valueStart") and not w.get("trades") and not wk.get("flows"):
-                    notes.append("weekly skipped (nothing in the portfolio yet)")    # an all-zero summary says nothing
-                else:
-                    if not dry:
-                        send(pkg["email"], w["subject"], open(txtp, encoding="utf-8").read(), open(htmlp, encoding="utf-8").read())
-                    state["weeklySent"] = today
-                    changed = True
-                    notes.append("weekly sent")
-        cur_docs = read_account(http, tok, pkg["uid"], priv) if (overlay and not dry) else docs    # after an import: what was saved
-        if prefs.get("reports", True) and not dry:
-            fresh = cur_docs
-            months = pending_reports(fresh)
-            if months:
-                rdata = os.path.join(work, "rdata")
-                materialize(fresh, shared, rdata)
-                for M in months:
-                    subj, text, html, att = month_end(code, rdata, M, name, work)
-                    send(pkg["email"], subj, text, html, att)
-                    for attempt in range(2):
-                        try:
-                            commit_writes(http, tok, pkg["uid"], keys, fresh, [{"op": "update", "collection": "imports", "doc_id": M,
-                                          "data": {"reports": {"emailedAt": jc.now_iso(), "factsheetSentAt": jc.now_iso()}, "reportsPending": {"__delete__": True}}}], jc.now_iso())
-                            break
-                        except Conflict:
-                            fresh = read_account(http, tok, pkg["uid"], priv)
-                    else:
-                        raise jc.JobError("month-end", f"{M} was emailed but could not be marked as sent (the portfolio kept changing)")
-                    notes.append(f"month-end {M} sent ({len(att)} files)")
-                    state["lastReport"] = f"{jc.short(M)} sent {today}"
-                    changed = True
-                cur_docs = read_account(http, tok, pkg["uid"], priv)     # with the months marked as sent
-        friends_n = None
-        if not dry:
-            try:
-                links = list_links(http, tok, pkg["uid"])
-                fm = {k: v for k, v in (state.get("friendMailed") or {}).items() if any(f["uid"] == k and f.get("status") == "received" for f in links)}
-                for f in links:
-                    if f.get("status") == "received" and f["uid"] not in fm:
-                        subj, body, html = friend_email(name, f.get("name") or "Someone", site)
-                        send(pkg["email"], subj, body, html)
-                        fm[f["uid"]] = today
-                        notes.append("friend request emailed")
-                if fm != (state.get("friendMailed") or {}):
-                    state["friendMailed"] = fm
-                    changed = True
-                friends = [f for f in links if f.get("status") == "friends" and f.get("pub")]
-                friends_n = len(friends)
-                if friends:
-                    cl = token_claims(tok)
-                    owner = hashlib.sha256(str(cl.get("email") or "").lower().encode()).hexdigest() == OWNER_HASH
-                    if prefs.get("shareMain") and main_docs and owner and cl.get("email_verified"):
-                        md = main_docs()
-                        snap = share_snapshot(md, ((md.get("portfolio/settings") or {}).get("data") or {}).get("name") or "Main portfolio", True, jc.now_iso())
-                    else:
-                        snap = share_snapshot(cur_docs, name, False, jc.now_iso())
-                    before = json.dumps(state.get("shares") or {}, sort_keys=True)
-                    n = share_to_friends(http, tok, pkg["uid"], friends, snap, state, now)
-                    if n or json.dumps(state.get("shares") or {}, sort_keys=True) != before:
-                        changed = True
-                    if n:
-                        notes.append(f"{n} friend cop{'y' if n == 1 else 'ies'} refreshed{' (main portfolio)' if snap['full'] else ''}")
-            except Exception as e:      # friends never stop the rest
-                notes.append(f"friends not done ({getattr(e, 'step', type(e).__name__)})")
-        # the owner hears about every new account (the admin list, read with the owner's verified sign-in)
-        if owner_acct and not dry:
-            try:
-                st, j = http.json("GET", f"{FS}/status?pageSize=300", headers={"Authorization": "Bearer " + tok})
-                if st == 200:
-                    rows = {d["name"].rsplit("/", 1)[-1]: {k: v.get("stringValue") for k, v in (d.get("fields") or {}).items()} for d in j.get("documents") or []}
-                    known = state.get("knownAccounts")
-                    new = [u for u in sorted(rows) if u != pkg["uid"] and known is not None and u not in known]
-                    if new:
-                        subj, body, html = signup_email([rows[u] for u in new], site)
-                        send(pkg["email"], subj, body, html)
-                        notes.append(f"{len(new)} new account(s) emailed")
-                    if known is None or sorted(known) != sorted(rows):
-                        state["knownAccounts"] = sorted(rows)
-                        changed = True
-            except Exception as e:
-                notes.append(f"new accounts not checked ({type(e).__name__})")
-        if changed and not dry:
+
+        def save_state():
             cutoff = (now - datetime.timedelta(days=400)).strftime("%Y-%m-%d")
             state["alertsSent"] = {k: v for k, v in sent.items() if not (isinstance(v, str) and v < cutoff)}
             state["at"] = jc.now_iso()
             write_state(http, tok, pkg["uid"], keys, state_doc, state, jc.now_iso())
+
+        # Every email sent below is recorded in `state` right after it goes out; when a later step fails, what was already
+        # sent is still saved before the error is raised, so the next run never sends it again.
+        try:
+            overlay = None
+            if prefs.get("gmail"):
+                prev = state.get("gmail") or {}
+                outgoing = []   # sent after the import, so a mail-server error is not mistaken for a Gmail problem
+                try:
+                    summary, overlay, data, c = gmail_import(http, tok, pkg, keys, docs, shared, code, work, now, dry,
+                                                             lambda: read_account(http, tok, pkg["uid"], priv))
+                    em = summary.get("email") or {}
+                    imported = summary.get("held") or summary.get("alert") or any(e.get("kind") != "invoice" and e.get("status") == "applied" for e in summary.get("log") or [])
+                    if summary.get("_history"):
+                        outgoing.append(history_email(name, summary["_history"], summary, site))
+                        state["history"] = {"status": "done", "from": summary["_history"]["month"], "at": jc.now_iso()}
+                        notes.append("history import done")
+                    elif em.get("notify") and (prefs.get("alerts", True) or imported):
+                        outgoing.append(emails.sync_email(em["subject"], em["parts"], account=True) if em.get("parts") else (em["subject"], em["text"], None))
+                        notes.append("import email sent")
+                    for k in (summary.get("digest") or {}).get("emailed") or []:
+                        sent[k] = today
+                    state["gmail"] = {"ok": True, "at": jc.now_iso(), "found": c.get("found", 0), "new": c.get("kept", 0),
+                                      "applied": summary.get("applied", 0), "held": summary.get("held", 0)}
+                    notes.append(f"gmail {c.get('kept', 0)} new, {summary.get('applied', 0)} applied, {summary.get('held', 0)} held")
+                except HistoryWait as e:
+                    reason = str(e.detail)[:200]
+                    state["gmail"] = {"ok": True, "at": jc.now_iso(), "found": 0, "new": 0, "applied": 0, "held": 0}
+                    if (state.get("history") or {}).get("reason") != reason:
+                        subj, body, html = history_wait_email(name, reason, site)
+                        if not dry:
+                            send(pkg["email"], subj, body, html)
+                    state["history"] = {"status": "waiting", "reason": reason, "at": jc.now_iso()}
+                    notes.append("history import waiting for a monthly statement")
+                    overlay = None
+                    data = os.path.join(work, "data")
+                except Exception as e:
+                    err = jc.mask(str(getattr(e, "detail", e)))[:200]
+                    state["gmail"] = {"ok": False, "at": jc.now_iso(), "error": err, "errorSent": prev.get("errorSent")}
+                    if prev.get("errorSent") != err:
+                        subj, body, html = gmail_error_email(name, err, site)
+                        if not dry:
+                            send(pkg["email"], subj, body, html)
+                        state["gmail"]["errorSent"] = err
+                    notes.append(f"gmail not done ({getattr(e, 'step', type(e).__name__)})")
+                    overlay = None
+                    data = os.path.join(work, "data")
+                changed = True
+                for subj, body, html in outgoing:
+                    if not dry:
+                        send(pkg["email"], subj, body, html)
+            if prefs.get("alerts", True) and overlay is None:
+                r = subprocess.run(["node", os.path.join(code, "src", "jobs", "account_alerts.js"), "--data", data, "--today", today], capture_output=True, text=True, timeout=300)
+                out = json.loads((r.stdout or "{}").strip().splitlines()[-1] if r.stdout.strip() else "{}")
+                if not out.get("ok"):
+                    raise jc.JobError("alerts", out.get("error") or "account_alerts.js failed")
+                new = [i for i in out.get("items") or [] if i.get("key") and i["key"] not in sent]
+                if new:
+                    subj, body, html = alerts_email(name, new, site)
+                    if not dry:
+                        send(pkg["email"], subj, body, html)
+                    for i in new:
+                        sent[i["key"]] = today
+                    changed = True
+                notes.append(f"alerts {len(new)} new of {len(out.get('items') or [])}")
+            if prefs.get("weekly", True) and weekly_due and state.get("weeklySent") != today:
+                htmlp, txtp, jsp = (os.path.join(work, f) for f in ("weekly.html", "weekly.txt", "weekly.json"))
+                r = subprocess.run(["node", os.path.join(code, "src", "tools", "weekly.js"), "--data", data, "--week-ending", today, "--today", today,
+                                    "--out", htmlp, "--text", txtp, "--json", jsp] + (["--overlay", overlay] if overlay else []), capture_output=True, text=True, timeout=300)
+                if r.returncode == 2:
+                    notes.append("weekly skipped (no closes this week)")
+                elif r.returncode != 0:
+                    raise jc.JobError("weekly", "weekly.js failed")
+                else:
+                    w = json.load(open(jsp))
+                    wk = w.get("week") or {}
+                    if not wk.get("valueEnd") and not wk.get("valueStart") and not w.get("trades") and not wk.get("flows"):
+                        notes.append("weekly skipped (nothing in the portfolio yet)")    # an all-zero summary says nothing
+                    else:
+                        if not dry:
+                            send(pkg["email"], w["subject"], open(txtp, encoding="utf-8").read(), open(htmlp, encoding="utf-8").read())
+                        state["weeklySent"] = today
+                        changed = True
+                        notes.append("weekly sent")
+            cur_docs = read_account(http, tok, pkg["uid"], priv) if (overlay and not dry) else docs    # after an import: what was saved
+            if prefs.get("reports", True) and not dry:
+                fresh = cur_docs
+                months = pending_reports(fresh)
+                if months:
+                    rdata = os.path.join(work, "rdata")
+                    materialize(fresh, shared, rdata)
+                    for M in months:
+                        subj, text, html, att = month_end(code, rdata, M, name, work)
+                        send(pkg["email"], subj, text, html, att)
+                        for attempt in range(2):
+                            try:
+                                commit_writes(http, tok, pkg["uid"], keys, fresh, [{"op": "update", "collection": "imports", "doc_id": M,
+                                              "data": {"reports": {"emailedAt": jc.now_iso(), "factsheetSentAt": jc.now_iso()}, "reportsPending": {"__delete__": True}}}], jc.now_iso())
+                                break
+                            except Conflict:
+                                fresh = read_account(http, tok, pkg["uid"], priv)
+                        else:
+                            raise jc.JobError("month-end", f"{M} was emailed but could not be marked as sent (the portfolio kept changing)")
+                        notes.append(f"month-end {M} sent ({len(att)} files)")
+                        state["lastReport"] = f"{jc.short(M)} sent {today}"
+                        changed = True
+                    cur_docs = read_account(http, tok, pkg["uid"], priv)     # with the months marked as sent
+            friends_n = None
+            if not dry:
+                try:
+                    links = list_links(http, tok, pkg["uid"])
+                    fm = {k: v for k, v in (state.get("friendMailed") or {}).items() if any(f["uid"] == k and f.get("status") == "received" for f in links)}
+                    for f in links:
+                        if f.get("status") == "received" and f["uid"] not in fm:
+                            subj, body, html = friend_email(name, f.get("name") or "Someone", site)
+                            send(pkg["email"], subj, body, html)
+                            fm[f["uid"]] = today
+                            notes.append("friend request emailed")
+                    if fm != (state.get("friendMailed") or {}):
+                        state["friendMailed"] = fm
+                        changed = True
+                    friends = [f for f in links if f.get("status") == "friends" and f.get("pub")]
+                    friends_n = len(friends)
+                    if friends:
+                        cl = token_claims(tok)
+                        owner = hashlib.sha256(str(cl.get("email") or "").lower().encode()).hexdigest() == OWNER_HASH
+                        if prefs.get("shareMain") and main_docs and owner and cl.get("email_verified"):
+                            md = main_docs()
+                            snap = share_snapshot(md, ((md.get("portfolio/settings") or {}).get("data") or {}).get("name") or "Main portfolio", True, jc.now_iso())
+                        else:
+                            snap = share_snapshot(cur_docs, name, False, jc.now_iso())
+                        before = json.dumps(state.get("shares") or {}, sort_keys=True)
+                        n = share_to_friends(http, tok, pkg["uid"], friends, snap, state, now)
+                        if n or json.dumps(state.get("shares") or {}, sort_keys=True) != before:
+                            changed = True
+                        if n:
+                            notes.append(f"{n} friend cop{'y' if n == 1 else 'ies'} refreshed{' (main portfolio)' if snap['full'] else ''}")
+                except Exception as e:      # friends never stop the rest
+                    notes.append(f"friends not done ({getattr(e, 'step', type(e).__name__)})")
+            # the owner hears about every new account (the admin list, read with the owner's verified sign-in)
+            if owner_acct and not dry:
+                try:
+                    st, j = http.json("GET", f"{FS}/status?pageSize=300", headers={"Authorization": "Bearer " + tok})
+                    if st == 200:
+                        rows = {d["name"].rsplit("/", 1)[-1]: {k: v.get("stringValue") for k, v in (d.get("fields") or {}).items()} for d in j.get("documents") or []}
+                        known = state.get("knownAccounts")
+                        new = [u for u in sorted(rows) if u != pkg["uid"] and known is not None and u not in known]
+                        if new:
+                            subj, body, html = signup_email([rows[u] for u in new], site)
+                            send(pkg["email"], subj, body, html)
+                            notes.append(f"{len(new)} new account(s) emailed")
+                        if known is None or sorted(known) != sorted(rows):
+                            state["knownAccounts"] = sorted(rows)
+                            changed = True
+                except Exception as e:
+                    notes.append(f"new accounts not checked ({type(e).__name__})")
+        except Exception:
+            if changed and not dry:
+                try:
+                    save_state()
+                except Exception as e2:      # the original error is the one to report
+                    jc.log(f"account state not saved after a failure ({type(e2).__name__})")
+            raise
+        if changed and not dry:
+            save_state()
         if not dry:
             g = state.get("gmail") if prefs.get("gmail") else None
             write_status_job(http, tok, pkg["uid"], {"at": jc.now_iso(), "gmail": {k: v for k, v in (g or {}).items() if k != "errorSent"} or None,

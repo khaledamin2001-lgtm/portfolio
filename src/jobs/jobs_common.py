@@ -369,6 +369,27 @@ def save_jobs_state(ctx, st):
         f.write("\n")
 
 
+def record_job(ctx, section, updates, message):
+    """Merge `updates` into jobs.json[section] and push it at once (redone on a moved origin). For marks that must survive
+    a later failure in the same run, e.g. "this month-end report was emailed" before the site publish."""
+    for attempt in range(3):
+        st = jobs_state(ctx)
+        st.setdefault(section, {}).update(updates)
+        save_jobs_state(ctx, st)
+        try:
+            engine_commit(ctx, ["jobs.json"], message)
+            return
+        except PushRejected:
+            engine_refresh(ctx)
+    raise JobError("record", "the engine repository kept changing")
+
+
+def mailed_months(section_state, keep=12):
+    """jobs.json[section]["monthEndEmailed"]: {month: Cairo date emailed}, the latest `keep` months."""
+    m = dict((section_state or {}).get("monthEndEmailed") or {})
+    return {k: m[k] for k in sorted(m)[-keep:]}
+
+
 # ---------------------------------------------------------------- time gate
 def gate(plan, windows, done, manual):
     """windows: [(slot, from_minute, to_minute)] in Cairo local time; done: {slot: 'YYYY-MM-DD'} of runs already made.

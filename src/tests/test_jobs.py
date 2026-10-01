@@ -205,6 +205,31 @@ finally:
 m = jc.mask("value 1,234,567.89 and 98765.43 at line 12")   # private-scan: synthetic
 check("mask: figures hidden in logs, small numbers kept", "1,234" not in m and "98765" not in m and "12" in m)
 
+# ---- an inbox email that could not be sent is kept (sync/outbox, encrypted like any document) and sent by the next run
+tmp = tempfile.mkdtemp()
+try:
+    os.makedirs(os.path.join(tmp, "sync"))
+    commits_, sends_ = [], []
+    real_apply, real_send = jc.apply_and_commit, mail_send.send
+    jc.apply_and_commit = lambda ctx, writes, msg: commits_.append(writes) or ({"changed": [], "results": []}, None)
+    def failing_send(ctx, s, t, h=None, to=None, attachments=None):
+        raise OSError("smtp down")
+    run_sync.keep_unsent(None, tmp, "Subj", "Text", "<b>Html</b>", OSError("smtp down"))
+    kept = commits_[-1][0] if commits_ else {}
+    check("unsent email: kept as sync/outbox, created only if absent", kept.get("op") == "set" and kept.get("collection") == "sync" and kept.get("doc_id") == "outbox"
+          and kept.get("if_version") == 0 and kept["data"]["subject"] == "Subj" and kept["data"]["html"] == "<b>Html</b>")
+    json.dump({"data": kept["data"], "version": 1}, open(os.path.join(tmp, "sync", "outbox.json"), "w"))
+    mail_send.send = failing_send; commits_.clear()
+    run_sync.resend_outbox(None, tmp)
+    check("unsent email: still failing, it stays (nothing deleted)", not commits_ and os.path.exists(os.path.join(tmp, "sync", "outbox.json")))
+    mail_send.send = lambda ctx, s, t, h=None, to=None, attachments=None: sends_.append((s, t, h)) or "sent"
+    run_sync.resend_outbox(None, tmp)
+    check("unsent email: the next run sends it and then deletes it", sends_ == [("Subj", "Text", "<b>Html</b>")] and commits_ and commits_[-1][0]["op"] == "delete"
+          and not os.path.exists(os.path.join(tmp, "sync", "outbox.json")))
+finally:
+    jc.apply_and_commit, mail_send.send = real_apply, real_send
+    shutil.rmtree(tmp)
+
 # ---- the on-time alarm key: the watcher's daily expiry check and the reminder email
 import datetime, urllib.request, kick_new_accounts as kna, alarm_key   # noqa: E402
 calls = []
@@ -223,7 +248,7 @@ real_urlopen, real_get = urllib.request.urlopen, kna.get
 try:
     at10 = datetime.datetime(2026, 10, 8, 7, 0, tzinfo=datetime.timezone.utc)      # 10:00 Cairo (summer time)
     _fake("2026-10-15 00:00:00 UTC"); calls.clear()
-    check("alarm key: outside 10:00-10:04 Cairo nothing is checked", kna.key_check(at10 + datetime.timedelta(minutes=5), "k") is None and not calls)
+    check("alarm key: before 10:00 Cairo nothing is checked", kna.key_check(at10 - datetime.timedelta(minutes=5), "k") is None and not calls)
     check("alarm key: no key, nothing checked", kna.key_check(at10, "") is None and not calls)
     out = kna.key_check(at10, "k")
     post = [c for c in calls if c[0] == "POST"]
@@ -233,6 +258,20 @@ try:
     check("alarm key: only once a day", kna.key_check(at10, "k") == "alarm key: expires 2026-10-15; reminder already sent today" and not [c for c in calls if c[0] == "POST"])
     _fake("2026-10-20 00:00:00 UTC"); calls.clear()
     check("alarm key: 12 days before, no email", kna.key_check(at10, "k") == "alarm key: valid until 2026-10-20" and not [c for c in calls if c[0] == "POST"])
+    # a new account while the scheduled email run is going: wait (both would email the same account), start it after
+    import io, contextlib
+    os.environ["ENGINE_TOKEN"] = "k"
+    acct = {"name": "x/mail/U1", "createTime": "2026-10-08T05:58:00Z", "updateTime": "2026-10-08T05:58:00Z"}
+    def runs_get(busy):
+        return lambda url, headers=None: ({"documents": [acct]} if "firestore" in url else
+                                          {"workflow_runs": [{"created_at": "2026-10-08T05:59:00Z", "status": "in_progress"}] if (busy and "email-run" in url) else []})
+    for busy, want in ((True, "checking again next time"), (False, "started now")):
+        _fake(None); kna.get = runs_get(busy); calls.clear(); buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            kna.main(["--now", "2026-10-08T06:00:00Z"])
+        posts = [c for c in calls if c[0] == "POST" and c[1].endswith("/account-mail.yml/dispatches")]
+        check(f"new account, email run {'going' if busy else 'idle'}: {'waits' if busy else 'starts the account job'}", want in buf.getvalue() and len(posts) == (0 if busy else 1))
+    os.environ.pop("ENGINE_TOKEN", None)
 finally:
     urllib.request.urlopen, kna.get = real_urlopen, real_get
 subj, body, html = alarm_key.reminder(datetime.date(2026, 10, 9), datetime.date(2026, 10, 8))

@@ -131,8 +131,9 @@ def ensure_playwright(ctx):
     ctx._pw = True
 
 
-def month_end(ctx, M, data, write_dir, summary, reports, exports_dir, work):
-    """Returns a dict: {month, emailed, workbook, pdf, error?, entry?}."""
+def month_end(ctx, M, data, write_dir, summary, reports, exports_dir, work, email=True):
+    """Returns a dict: {month, emailed, workbook, pdf, error?, entry?}. email=False: the report for M was already emailed
+    by an earlier run (whose publish then failed), so only the files are made again; `emailed` stays True."""
     S = jc.short(M)
     base = f"{prefix(ctx)}-Portfolio-{S}"
     res = {"month": M, "emailed": False, "workbook": False, "pdf": False}
@@ -175,6 +176,11 @@ def month_end(ctx, M, data, write_dir, summary, reports, exports_dir, work):
         errors.append(f"{e.step}: {e.detail}")
     # d. the factsheet email: the headline figures, with the PDF and the workbook attached. A portfolio the owner only
     #    runs for someone else (config "reportEmail": false) gets no email here: its reports are on the site.
+    if not email:
+        res["emailed"] = True          # sent by an earlier run (jobs.json monthEndEmailed)
+        if errors:
+            res["error"] = "; ".join(errors)
+        return res
     if ctx.config.get("reportEmail", True) is False:
         res["emailSkipped"] = True
         if errors:
@@ -200,6 +206,41 @@ def month_end(ctx, M, data, write_dir, summary, reports, exports_dir, work):
     if errors:
         res["error"] = "; ".join(errors)
     return res
+
+
+# ---------------------------------------------------------------- an email that could not be sent
+# The inbox email is sent after the sync state is saved (the Thndr emails are then marked as seen), so a failed send would
+# lose it. Instead it is kept in the portfolio's own database as sync/outbox (encrypted like every document) and sent by
+# the next run.
+def keep_unsent(ctx, data, subject, text, html, why):
+    v = jc.versions_of(data).get("sync/outbox", 0)
+    w = [{"op": "set", "collection": "sync", "doc_id": "outbox", "if_version": v,
+          "data": {"subject": subject, "text": text, "html": html, "at": jc.now_iso()}}]
+    try:
+        jc.apply_and_commit(ctx, w, "Unsent email kept for the next run")
+        jc.log(f"email: not sent ({type(why).__name__}); kept for the next run")
+    except Exception as e:     # nothing more can be done: say so in the log
+        jc.log(f"email: not sent ({type(why).__name__}) and could not be kept ({type(e).__name__})")
+
+
+def resend_outbox(ctx, data):
+    p = os.path.join(data, "sync", "outbox.json")
+    ob = jc.load_data(p, None) if os.path.exists(p) else None
+    if not ob or not ob.get("subject"):
+        return
+    import mail_send
+    try:
+        mail_send.send(ctx, ob["subject"], ob.get("text") or "", ob.get("html"))
+    except Exception as e:
+        jc.log(f"unsent email: still not sent ({type(e).__name__}); kept")
+        return
+    try:
+        jc.apply_and_commit(ctx, [{"op": "delete", "collection": "sync", "doc_id": "outbox", "if_version": jc.versions_of(data).get("sync/outbox", 0)}],
+                            "Unsent email sent")
+        os.remove(p)
+    except Exception as e:
+        jc.log(f"unsent email: sent, but not removed ({type(e).__name__})")
+    jc.log("unsent email from an earlier run: sent")
 
 
 # ---------------------------------------------------------------- backstop and token check
@@ -292,6 +333,8 @@ def main(argv=None):
         # [1,2] documents and PLAN
         step = "decrypt"
         ctx.materialize(data)
+        step = "unsent email"
+        resend_outbox(ctx, data)
         st = jc.load_data(os.path.join(data, "sync", "state.json"), {}) or {}
         step = "plan"
         plan = ctx.plan(st.get("lastRun"))
@@ -332,7 +375,11 @@ def main(argv=None):
         if em and em.get("notify"):
             import emails
             subj, text, html = emails.sync_email(em["subject"], em["parts"]) if em.get("parts") else (em["subject"], em["text"], None)
-            jc.log("email: " + mail_send.send(ctx, subj, text, html))
+            try:
+                jc.log("email: " + mail_send.send(ctx, subj, text, html))
+            except Exception as e:
+                keep_unsent(ctx, data, subj, text, html, e)
+                notes.append("the inbox email could not be sent: it goes out with the next run")
         else:
             jc.log("email: none due")
         # [9b] weekly email (Thursday late run)
@@ -365,8 +412,15 @@ def main(argv=None):
         os.makedirs(exports_dir, exist_ok=True)
         os.makedirs(reports, exist_ok=True)
         results = []
+        mailed = jc.mailed_months(sj)
         for M in pending:
-            r = month_end(ctx, M, data, write_dir, summary, reports, exports_dir, work)
+            r = month_end(ctx, M, data, write_dir, summary, reports, exports_dir, work, email=M not in mailed)
+            if r["emailed"] and M not in mailed:
+                # recorded before the publish: if the publish fails, the next run makes the files again but does not
+                # email the report a second time
+                mailed[M] = plan["today"]
+                sj["monthEndEmailed"] = dict(mailed)
+                jc.record_job(ctx, "sync", {"monthEndEmailed": dict(mailed)}, f"jobs: month-end {M} emailed")
             if r.get("entry"):
                 r["entry"]["publishedAt"] = plan["today"]
             results.append(r)

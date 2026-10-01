@@ -196,6 +196,7 @@ def main(argv=None):
     ctx = None
     try:
         ctx = jc.Ctx(a.engine, a.code, a.now)
+        jc.engine_refresh(ctx)      # publish the newest data, not the checkout as it was when this workflow started
         plan = ctx.plan()
         idx = json.load(open(a.index)) if a.index else None
         push = not a.no_push and ctx.live

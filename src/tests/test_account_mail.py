@@ -383,6 +383,21 @@ try:
           first_err == ["Friend Portfolio: Thndr emails could not be read"] and not [m for m in sent if m["to"] == "friend2@example.com"] and gm.get("ok") is False and "refused" in gm.get("error", ""), json.dumps([first_err, gm]))
     check("gmail: nothing in the portfolio changed", before == {k: v["updateTime"] for k, v in DB.items() if k.startswith(f"users/{GUID}/docs/") and not k.endswith("sync__mail")})
     DB[f"users/{GUID}/docs/sync__gmail"] = login
+    # a step failing after an email went out: what was sent is still recorded, so the next run does not send it again
+    DB.pop(f"users/{UID}/docs/sync__mail", None)     # account 1 starts over: its heads-up items are new again
+    real_run = ram.subprocess.run
+    def failing_weekly(cmd, *a, **k):
+        if any(str(x).endswith("weekly.js") for x in cmd):
+            return subprocess.CompletedProcess(cmd, 1, "", "weekly.js broke")
+        return real_run(cmd, *a, **k)
+    ram.subprocess.run = failing_weekly
+    try:
+        sent.clear(); ram.main(argv, http=FakeHttp(), send=send); first = [m["subject"] for m in sent if m["to"] == "friend@example.com"]
+        sent.clear(); ram.main(argv, http=FakeHttp(), send=send); again = [m["subject"] for m in sent if m["to"] == "friend@example.com"]
+    finally:
+        ram.subprocess.run = real_run
+    check("a step failing after the heads-up email went out (the weekly here): the email is recorded, the next run does not repeat it",
+          any("heads-up" in x for x in first) and not any("heads-up" in x for x in again), json.dumps([first, again]))
     DB[f"mail/{UID}"]["pkg"] = seal_mail({"uid": "Usomeoneelse", "email": "x@example.com", "refresh": "RT1", "pk8": pk8})
     sent.clear()
     ram.main(argv, http=FakeHttp(), send=send)

@@ -65,7 +65,13 @@ def main(argv=None):
         write_dir, exports_dir, reports = (os.path.join(work, x) for x in ("nowrite", "exports", "reports"))
         for d in (write_dir, exports_dir, reports):
             os.makedirs(d, exist_ok=True)
-        r = run_sync.month_end(ctx, M, data, write_dir, {}, reports, exports_dir, work)
+        rs = jc.jobs_state(ctx).get("reports") or {}
+        mailed = jc.mailed_months(rs)
+        r = run_sync.month_end(ctx, M, data, write_dir, {}, reports, exports_dir, work, email=M not in mailed)
+        if r["emailed"] and M not in mailed:
+            # recorded before the publish: a failed publish makes the files again next run, without a second email
+            mailed[M] = plan["today"]
+            jc.record_job(ctx, "reports", {"monthEndEmailed": mailed}, f"jobs: reports {M} emailed")
         jc.log(f"month-end {M}: workbook {'ok' if r['workbook'] else 'no'}, PDF {'ok' if r['pdf'] else 'no'}, "
                f"email {'sent' if r['emailed'] else 'no'}{', error ' + jc.mask(r['error']) if r.get('error') else ''}"
                f"{', PDF error ' + jc.mask(r['pdfError']) if r.get('pdfError') else ''}")

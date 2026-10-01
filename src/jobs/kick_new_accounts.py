@@ -8,7 +8,7 @@ anyone list these, nobody open them). When one of those was CREATED in the last 
 repo's "Account emails" workflow has not started since it was last written, that workflow is started now (so a new
 friend's portfolio is built within minutes instead of at the next check). Nothing about an account is printed:
 only how many are new and what was done.
-Once a day (the firing between 10:00 and 10:04 Cairo time) it also reads when ENGINE_TOKEN expires - the same key the
+Once a day (from 10:00 Cairo time; the reminder's own runs show whether today's went out) it also reads when ENGINE_TOKEN expires - the same key the
 on-time alarms at cron-job.org use - and 14, 7, 3, 2 and 1 days before, starts the private repo's "Alarm key reminder"
 workflow, which emails Khaled how to renew it (once that key has expired it can start nothing, so the warning comes first). Env ENGINE_TOKEN: a fine-grained GitHub token for the private repo with
 "Actions: Read and write" (a repository secret); without it the script says so and exits 0.
@@ -18,6 +18,7 @@ import os, sys, json, argparse, datetime, urllib.request, urllib.error
 FS = "https://firestore.googleapis.com/v1/projects/portfolio-desk-4d14a/databases/(default)/documents/mail"
 ENGINE = "https://api.github.com/repos/khaledamin2001-lgtm/portfolio-engine"
 GH = ENGINE + "/actions/workflows/account-mail.yml"
+EMAIL_RUN = ENGINE + "/actions/workflows/email-run.yml"
 KEY_WF = ENGINE + "/actions/workflows/alarm-key.yml"
 WARN_DAYS = (14, 7, 3, 2, 1)
 
@@ -42,7 +43,7 @@ def key_check(now, token, dry=False):
     """The daily alarm-key check (see the docstring). Returns a log line, or None outside the daily window."""
     from zoneinfo import ZoneInfo
     cairo = now.astimezone(ZoneInfo("Africa/Cairo"))
-    if not token or not (cairo.hour == 10 and cairo.minute < 5):
+    if not token or cairo.hour < 10:
         return None
     hdr = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
     try:
@@ -107,11 +108,17 @@ def main(argv=None):
     latest = max(when(x["updateTime"]) for x in new)
     try:
         runs = get(f"{GH}/runs?per_page=5", hdr).get("workflow_runs") or []
+        email_runs = get(f"{EMAIL_RUN}/runs?per_page=5", hdr).get("workflow_runs") or []
     except (urllib.error.URLError, ValueError) as e:
         print(f"could not read the account job's runs ({type(e).__name__}: {getattr(e, 'code', '')})")
         return 1
     if any(when(r["created_at"]) >= latest for r in runs):
         print(f"{len(new)} new account(s), already handled by a run started since")
+        return 0
+    # never alongside the scheduled email run or another account run (both would email the same account): wait for them
+    # to finish; the next check (5 minutes) starts it if it is still needed (a second run finds nothing new to send)
+    if any(r.get("status") in ("queued", "in_progress", "waiting", "requested", "pending") for r in runs + email_runs):
+        print(f"{len(new)} new account(s): an email or account run is going; checking again next time")
         return 0
     if a.dry_run:
         print(f"{len(new)} new account(s): would start the account job now (dry run)")
