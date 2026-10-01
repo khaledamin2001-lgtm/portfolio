@@ -1,4 +1,23 @@
-/* Live-site lock, one page for several portfolios — device store v3.
+/* site/lock.js: everything specific to the live site, wrapped around the page (app.html) by build_site.py.
+
+   Contents (search for the "---------- name" line):
+     portfolios ........ portfolios.json, the current portfolio
+     device storage .... the per-device key store (IndexedDB) and its bookkeeping (localStorage)
+     keys / data ....... unwrapping a portfolio's private key; downloading and decrypting its data
+     the page's database  window.pdHost: the documents the page reads, and saves when editing is on
+     editing from the site  GitHub token, encrypted commits to the engine repository, job buttons
+     live prices ....... TradingView's scanner, straight from the browser
+     WebAuthn with PRF . Face ID / Touch ID / fingerprint that really unwraps the key
+     screens ........... the lock screens: choose, setup key, password, unlock, forget
+     accounts .......... Firebase sign-up / sign-in, the account's encrypted documents, onboarding, email updates, Gmail
+     friends ........... friend requests (checked against directory/{email}), shared copies, status, reset / delete
+     admin ............. the site owner's account list
+     linked account .... a setup-key portfolio linked to a site account
+     the friends hub ... the top-left menu and the Overview cards, ranked over the page's period
+     installable app ... the service worker and "Install app"
+     boot .............. start-up
+
+   How the setup-key portfolios are protected (device store v3):
    Each portfolio lives under p/<id>/: its figures are published encrypted (data.enc.json) to that portfolio's public key; the
    matching private key is published only wrapped by the portfolio's one-time setup key (keys.json — v3 files carry no
    password hash; the device password never leaves the device, and a v2 file's `pw` field is ignored).
