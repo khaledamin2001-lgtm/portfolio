@@ -268,12 +268,12 @@
     // match against existing ledger rows (the ledger may come from the app export, so allow small date/amount differences).
     // Opening rows (t.opening: the holdings and cash typed at sign-up) stand for everything before tracking started; they
     // are never matched, corrected or removed by a statement, only counted in the holdings and cash checks.
-    // A row just outside this statement's dates is only a candidate while no other statement has confirmed it (a deposit on
-    // 29 Aug that the August statement posted is never "this September's 2 Sep deposit").
+    // A row from before this statement's dates is only a candidate while no earlier statement has posted it (a deposit on
+    // 29 Aug that the August statement posted is never "this September's 2 Sep deposit"); invoice rows stay candidates.
     const used = new Set();
     const inside = (d) => d >= from && d <= to;
     const pool = tx.filter((t) => !t.opening && t.d >= addDays(from, -6) && t.d <= addDays(to, 6)
-      && (inside(t.d) || !/^(stmt-|history-|invoice-)/.test(t.src || '')));
+      && (t.d >= from || !/^(stmt-|history-)/.test(t.src || '')));
     const same = (t, r) => {
       if (t.t !== r.t || used.has(t)) return false;
       const dd = days(t.d, r.d);
