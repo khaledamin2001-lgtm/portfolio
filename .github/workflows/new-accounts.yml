@@ -1,8 +1,9 @@
 # A brand-new site account gets its first update (e.g. "Build it from my Thndr emails") within minutes instead of at
-# the next hourly run: every 5 minutes, src/jobs/kick_new_accounts.py looks for accounts created in the last hour and
+# the next check: every 5 minutes, src/jobs/kick_new_accounts.py looks for accounts created in the last hour and
 # starts the private repo's "Account emails" workflow once for them. Public repo: these runs cost no Actions minutes;
 # the logs show only counts. Needs the repository secret ENGINE_TOKEN (fine-grained token, portfolio-engine only,
-# Actions: Read and write); without it nothing is started.
+# Actions: Read and write); without it nothing is started. Once a day it also warns, through the private repo's
+# "Alarm key reminder" workflow, 14, 7, 3, 2 and 1 days before that key (also the cron-job.org alarms' key) expires.
 name: New accounts
 on:
   schedule:

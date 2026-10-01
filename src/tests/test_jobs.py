@@ -197,5 +197,39 @@ finally:
 m = jc.mask("value 1,234,567.89 and 98765.43 at line 12")   # private-scan: synthetic
 check("mask: figures hidden in logs, small numbers kept", "1,234" not in m and "98765" not in m and "12" in m)
 
+# ---- the on-time alarm key: the watcher's daily expiry check and the reminder email
+import datetime, urllib.request, kick_new_accounts as kna, alarm_key   # noqa: E402
+calls = []
+class _R:
+    def __init__(self, exp): self.headers = {"github-authentication-token-expiration": exp} if exp else {}
+    def __enter__(self): return self
+    def __exit__(self, *a): pass
+    def read(self): return b""
+def _fake(exp, runs=()):
+    def urlopen(req, timeout=None):
+        calls.append((req.get_method(), req.full_url, req.data))
+        return _R(exp)
+    urllib.request.urlopen = urlopen
+    kna.get = lambda url, headers=None: {"workflow_runs": [{"created_at": r} for r in runs]}
+real_urlopen, real_get = urllib.request.urlopen, kna.get
+try:
+    at10 = datetime.datetime(2026, 10, 8, 7, 0, tzinfo=datetime.timezone.utc)      # 10:00 Cairo (summer time)
+    _fake("2026-10-15 00:00:00 UTC"); calls.clear()
+    check("alarm key: outside 10:00-10:04 Cairo nothing is checked", kna.key_check(at10 + datetime.timedelta(minutes=5), "k") is None and not calls)
+    check("alarm key: no key, nothing checked", kna.key_check(at10, "") is None and not calls)
+    out = kna.key_check(at10, "k")
+    post = [c for c in calls if c[0] == "POST"]
+    check("alarm key: 7 days before, the reminder workflow is started with the date", out == "alarm key: expires 2026-10-15; reminder started"
+          and len(post) == 1 and post[0][1].endswith("/actions/workflows/alarm-key.yml/dispatches") and json.loads(post[0][2])["inputs"] == {"expires": "2026-10-15"})
+    _fake("2026-10-15 00:00:00 UTC", ["2026-10-08T07:00:30Z"]); calls.clear()
+    check("alarm key: only once a day", kna.key_check(at10, "k") == "alarm key: expires 2026-10-15; reminder already sent today" and not [c for c in calls if c[0] == "POST"])
+    _fake("2026-10-20 00:00:00 UTC"); calls.clear()
+    check("alarm key: 12 days before, no email", kna.key_check(at10, "k") == "alarm key: valid until 2026-10-20" and not [c for c in calls if c[0] == "POST"])
+finally:
+    urllib.request.urlopen, kna.get = real_urlopen, real_get
+subj, body = alarm_key.reminder(datetime.date(2026, 10, 9), datetime.date(2026, 10, 8))
+check("alarm key email: subject with the date, body says tomorrow and how to renew", subj == "Portfolio: on-time alarm key expires 9 Oct 2026"
+      and "expires tomorrow" in body and "cron-job.org" in body and "ENGINE_TOKEN" in body and "github_pat_" in body)
+
 print(f"{'ALL PASS' if not fails else str(fails) + ' FAILED'}")
 sys.exit(1 if fails else 0)

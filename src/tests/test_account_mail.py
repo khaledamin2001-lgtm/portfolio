@@ -253,9 +253,11 @@ try:
     def send(to, subj, text, html, att=None):
         sent.append({"to": to, "subject": subj, "text": text, "html": bool(html), "att": att or []})
         if os.environ.get("DUMP_EMAILS"):      # every email this test sends, to read them as a person would
-            d = os.environ["DUMP_EMAILS"]; os.makedirs(d, exist_ok=True); n = len(os.listdir(d)) // 2 + 1
+            d = os.environ["DUMP_EMAILS"]; os.makedirs(d, exist_ok=True); n = len([f for f in os.listdir(d) if f.endswith('.txt')]) + 1
             open(os.path.join(d, f"{n:02d}.txt"), "w").write(f"To: {to}\nSubject: {subj}\nAttachments: {[a[0] for a in (att or [])]}\n\n{text}")
             open(os.path.join(d, f"{n:02d}.html"), "w").write(html or "")
+            for a in att or []:
+                open(os.path.join(d, f"{n:02d}-{a[0]}"), "wb").write(a[1])
     argv = ["--engine", eng, "--code", code, "--now", "2026-09-24T19:30:00Z"]     # Thursday 22:30 Cairo
     rc = ram.main(argv, http=FakeHttp(), send=send)
     check("the job succeeds", rc == 0)

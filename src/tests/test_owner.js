@@ -17,5 +17,8 @@ check('a different first name is refused', !!own(stmt, 'Other Friend').error);
 check('the words in the wrong order are refused', !!own(stmt, 'Friend Test').error);
 check('words far apart are refused', !!own(doc('Unified Code 1234567 Test a b c d e f g h Friend'), 'Test Friend').error);   // private-scan: synthetic
 check('the Unified Code, when set, decides', !own(stmt, 'Nobody Here', '1234567').error && !!own(stmt, 'Test Friend', '7654321').error);   // private-scan: synthetic
+check('a refused statement names the holder Thndr printed', own(stmt, 'Other Friend').error === 'is not in the name of Other Friend (it is in the name of Test Samir Adel Friend)', own(stmt, 'Other Friend').error);
+check('a refused invoice names the holder Thndr printed', /\(it is in the name of Test Samir Adel Friend Abdelaziz Friend\)$/.test(own(inv, 'Other Friend').error), own(inv, 'Other Friend').error);
+check('an unknown header layout is quoted instead', /\(its header reads "Unified Code 1234567 Test a b/.test(own(doc('Unified Code 1234567 Test a b c d e f g h Friend'), 'Test Friend').error));   // private-scan: synthetic
 console.log(fail ? `${fail} FAILED` : 'ALL PASS');
 process.exit(fail ? 1 : 0);

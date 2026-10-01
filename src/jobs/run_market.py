@@ -82,12 +82,14 @@ def success_email(out, info, published):
     fe, miss = sorted(out.get("fillErrors") or {}), L.get("missing") or []
     names = {"cpi": "CPI", "usdegp": "USD/EGP", "cashRate": "CBE rate"}
     filled = [f"{names[k]} {', '.join(v)}" for k, v in info["marksFilled"].items() if v and k in names]
-    lines = [f"Close date: {close_date} (as of {L.get('asOf')})",
+    asof = str(L.get("asOf") or "")
+    asof = f"prices as of {asof[11:16]} Cairo time" + (f" on {asof[:10]}" if asof[:10] != close_date else "") if len(asof) >= 16 else f"as of {asof or 'n/a'}"
+    lines = [f"Close date: {close_date} ({asof})",
              f"Quotes: {len(L.get('quotes') or {})}",
              f"EGX30 Capped: {ix['close']:,.2f} ({ix.get('chg', 0):+.2f}% on the day)" if isnum(ix.get("close")) else "EGX30 Capped: n/a",
              f"CBE policy rate: {pct(pol.get('rate'))}" + (f" (since {pol['date']})" if pol.get("date") else ""),
              f"Index dividend yield: {pct(bench.get('divYield'))}",
-             f"History written: {', '.join(info['historyMonths']) or 'none'} ({info['sessions']} sessions)",
+             f"History written: {', '.join(info['historyMonths']) or 'none'} ({info['sessions']} session{'' if info['sessions'] == 1 else 's'})",
              f"Fill errors or missing symbols: {', '.join(sorted(set(fe) | set(miss))) or 'none'}",
              f"New index members added: {info['newAssets'] or 'none'}",
              f"CPI / USD/EGP / CBE-rate months filled: {'; '.join(filled) or 'none'}",

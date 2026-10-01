@@ -399,7 +399,14 @@
     if (!code && !holder) r.error = 'cannot be used: this portfolio has no Thndr account holder set (Inputs → Settings → Thndr account)';
     else if (a.codes.length > 1) r.error = `mixes Thndr accounts ${a.codes.join(' and ')}`;
     else if (code && a.code) { if (a.code !== code) r.error = `belongs to Thndr account ${a.code}, not this portfolio's account ${code}`; }
-    else if (holder) { if (!a.holderSeen) r.error = `is not in the name of ${holder} (its header reads "${a.head.slice(0, 100)}")`; }
+    else if (holder) {
+      if (!a.holderSeen) {
+        // the name Thndr printed: "... Currency EGP <name> Start Balance" (statement), "Invoice <name> Custodian:" (invoice)
+        const other = [/Currency\s+[A-Z]{3}\s+(.+?)\s+Start Balance/i, /Invoice\s+(.+?)\s+Custodian/i, /Client Name\s+(.+?)\s+Unified Code/i]
+          .map((re) => (a.head.match(re) || [])[1]).find(Boolean);
+        r.error = `is not in the name of ${holder}` + (other && other.length <= 60 ? ` (it is in the name of ${other.trim()})` : ` (its header reads "${a.head.slice(0, 100)}")`);
+      }
+    }
     else r.error = 'has no Unified Code in its header, so the account could not be confirmed';
     return r;
   }

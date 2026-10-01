@@ -211,13 +211,13 @@ def backstop(ctx, plan, data, write_dir, jobs):
     mp = os.path.join(write_dir, "marks.json")
     marks = jc.load_data(mp if os.path.exists(mp) else os.path.join(data, "portfolio", "marks.json"), {}) or {}
     mk = (marks.get("months") or {}).get(P)
-    state = ("missing" if not mk else "provisional" if mk.get("provisional") else f"from {mk.get('source') or 'an unknown source'}")
+    state = ("not set yet" if not mk else "an estimate for now" if mk.get("provisional") else f"taken from {mk.get('source') or 'an unknown source'}")
     name = ctx.settings().get("name") or ctx.config.get("name") or "Portfolio"
     mon = datetime.date(int(P[:4]), int(P[5:]), 1).strftime("%B")
     text = (f"Your {jc.short(P)} Thndr monthly statement has not been posted to {name} yet.\n\n"
             f"The inbox sync posts it by itself as soon as the email arrives in Gmail. If it is already in your inbox, it may be "
-            f"held for review - see the sync emails - or it may not have arrived: request it in the Thndr app.\n\n"
-            f"{mon}'s month-end marks are currently {state}; the statement replaces them with Thndr's own figures.\n\n{site_url(ctx)}")
+            f"held for review (see the \"needs your review\" email), or it may not have arrived: request it in the Thndr app.\n\n"
+            f"{mon}'s month-end value is {state}; the statement replaces it with Thndr's own figures.\n\n{site_url(ctx)}")
     import mail_send
     return "reminder " + mail_send.send(ctx, f"{name}: {jc.short(P)} Thndr statement not posted yet", text)
 
