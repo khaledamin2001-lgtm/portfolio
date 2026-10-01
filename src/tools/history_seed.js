@@ -360,7 +360,7 @@ const isFundName = (n) => /^thndr/i.test(n || '');
 
   // ---- write ----
   const last = cands[cands.length - 1], ML = last.st.month, toL = last.st.to;
-  const acct = Object.assign({}, settings.account || {}, first.own.code ? { unifiedCode: first.own.code } : {});
+  const acct = Object.assign({}, settings.account || {}, (mine || first.own.code) ? { unifiedCode: mine || first.own.code } : {});
   const P = prevMonth(M0), num = (x) => typeof x === 'number' && isFinite(x);
   // an empty start's opening cash is dated the day before the inception month, which the returns do not count: it is the
   // portfolio's value at inception (openingValue), not a gain in the first month. A snapshot start's opening rows are

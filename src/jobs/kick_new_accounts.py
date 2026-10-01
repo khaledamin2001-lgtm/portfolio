@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Start the account job right away for a brand-new account, once (.github/workflows/new-accounts.yml, every 5 minutes).
+"""Start the account job within minutes for an account that just switched something on (.github/workflows/new-accounts.yml,
+every 5 minutes): a brand-new account, or one that just connected its Gmail or changed its email updates.
 
     python3 kick_new_accounts.py [--window-min 60] [--dry-run]
 
 A site account that turns on email updates or connects its Gmail writes mail/{uid} (its sealed package; the rules let
-anyone list these, nobody open them). When one of those was CREATED in the last --window-min minutes and the private
-repo's "Account emails" workflow has not started since it was last written, that workflow is started now (so a new
-friend's portfolio is built within minutes instead of at the next check). Nothing about an account is printed:
+anyone list these, nobody open them). The site rewrites it only when the account changes its email settings or
+connects its Gmail (and on a new sign-in), never on an ordinary visit. When one was WRITTEN in the last --window-min
+minutes and the private repo's "Account emails" workflow has not started since, that workflow is started now: a new
+friend's portfolio is built within about 10 minutes instead of at the next of the three daily checks. Nothing about an account is printed:
 only how many are new and what was done.
 Once a day (from 10:00 Cairo time; the reminder's own runs show whether today's went out) it also reads when ENGINE_TOKEN expires - the same key the
 on-time alarms at cron-job.org use - and 14, 7, 3, 2 and 1 days before, starts the private repo's "Alarm key reminder"
@@ -96,13 +98,13 @@ def main(argv=None):
     except (urllib.error.URLError, ValueError) as e:
         print(f"could not list the accounts ({type(e).__name__})")
         return 1
-    new = [x for x in docs if now - when(x["createTime"]) <= datetime.timedelta(minutes=a.window_min)]
+    new = [x for x in docs if now - when(x["updateTime"]) <= datetime.timedelta(minutes=a.window_min)]
     if not new:
         print(f"{len(docs)} accounts, none new")
         return 0
     token = os.environ.get("ENGINE_TOKEN", "").strip()
     if not token:
-        print(f"{len(new)} new account(s), but ENGINE_TOKEN is not set: they wait for the next check")
+        print(f"{len(new)} new or changed account(s), but ENGINE_TOKEN is not set: they wait for the next check")
         return 0
     hdr = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
     latest = max(when(x["updateTime"]) for x in new)
@@ -113,15 +115,15 @@ def main(argv=None):
         print(f"could not read the account job's runs ({type(e).__name__}: {getattr(e, 'code', '')})")
         return 1
     if any(when(r["created_at"]) >= latest for r in runs):
-        print(f"{len(new)} new account(s), already handled by a run started since")
+        print(f"{len(new)} new or changed account(s), already handled by a run started since")
         return 0
     # never alongside the scheduled email run or another account run (both would email the same account): wait for them
     # to finish; the next check (5 minutes) starts it if it is still needed (a second run finds nothing new to send)
     if any(r.get("status") in ("queued", "in_progress", "waiting", "requested", "pending") for r in runs + email_runs):
-        print(f"{len(new)} new account(s): an email or account run is going; checking again next time")
+        print(f"{len(new)} new or changed account(s): an email or account run is going; checking again next time")
         return 0
     if a.dry_run:
-        print(f"{len(new)} new account(s): would start the account job now (dry run)")
+        print(f"{len(new)} new or changed account(s): would start the account job now (dry run)")
         return 0
     req = urllib.request.Request(f"{GH}/dispatches", data=json.dumps({"ref": "main"}).encode(), headers={**hdr, "Content-Type": "application/json"}, method="POST")
     try:
@@ -130,7 +132,7 @@ def main(argv=None):
     except urllib.error.URLError as e:
         print(f"could not start the account job ({type(e).__name__}: {getattr(e, 'code', '')})")
         return 1
-    print(f"{len(new)} new account(s): the account job was started now")
+    print(f"{len(new)} new or changed account(s): the account job was started now")
     return 0
 
 

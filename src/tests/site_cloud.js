@@ -83,7 +83,7 @@ const err = (status, message) => [status, { error: { code: status, message, stat
 function identity(ep, b) {
   if (ep === 'signUp') { if (FB.byEmail[b.email]) return err(400, 'EMAIL_EXISTS'); const u = { uid: 'U' + crypto.randomBytes(6).toString('hex'), email: b.email, pw: b.password }; FB.users[u.uid] = u; FB.byEmail[b.email] = u; return [200, authOut(u)]; }
   if (ep === 'signInWithPassword') { const u = FB.byEmail[b.email]; if (!u || u.pw !== b.password) return err(400, 'INVALID_LOGIN_CREDENTIALS'); return [200, authOut(u)]; }
-  if (ep === 'sendOobCode' && b.requestType === 'VERIFY_EMAIL') { const uid = FB.tokens[b.idToken]; if (!uid) return err(400, 'INVALID_ID_TOKEN'); FB.users[uid].verified = true; return [200, { email: FB.users[uid].email }]; }   // the link is clicked at once
+  if (ep === 'sendOobCode' && b.requestType === 'VERIFY_EMAIL') { const uid = FB.tokens[b.idToken]; if (!uid) return err(400, 'INVALID_ID_TOKEN'); FB.users[uid].verifySent = (FB.users[uid].verifySent || 0) + 1; return [200, { email: FB.users[uid].email }]; }   // the test "clicks" the link: FB.users[uid].verified = true   // the link is clicked at once
   if (ep === 'sendOobCode') { FB.resetAsked = b.email; return [200, { email: b.email }]; }
   if (ep === 'delete') { const uid = FB.tokens[b.idToken]; if (!uid || !FB.users[uid]) return err(400, 'INVALID_ID_TOKEN'); delete FB.byEmail[FB.users[uid].email]; delete FB.users[uid]; return [200, {}]; }
   if (ep === 'update') { const uid = FB.tokens[b.idToken]; if (!uid) return err(400, 'INVALID_ID_TOKEN'); if (b.password) FB.users[uid].pw = b.password; return [200, authOut(FB.users[uid])]; }
@@ -163,7 +163,7 @@ const up = (url) => new Promise((res) => { http.get(url, (r) => { r.resume(); re
   const problems = [];
   const CORS = { 'access-control-allow-origin': '*', 'access-control-allow-headers': 'authorization, content-type', 'access-control-allow-methods': 'GET, POST, PATCH, DELETE, OPTIONS' };
   async function device(name) {
-    const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, serviceWorkers: 'block' });
+    const ctx = await browser.newContext({ viewport: process.env.PHONE ? { width: 390, height: 844 } : { width: 1280, height: 900 }, serviceWorkers: 'block' });   // PHONE=1: screenshots at phone size
     const page = await ctx.newPage();
     page.on('console', (m) => { if (m.type() === 'error') problems.push(`[${name}] console: ` + m.text()); });
     page.on('pageerror', (e) => problems.push(`[${name}] pageerror: ` + e.message));
@@ -183,7 +183,7 @@ const up = (url) => new Promise((res) => { http.get(url, (r) => { r.resume(); re
       problems.push(`[${name}] request left the site: ` + url); return route.abort();
     });
     const $t = (id) => page.locator(`[data-testid="${id}"]`);
-    const shot = async (n) => { if (OUT) { fs.mkdirSync(OUT, { recursive: true }); await page.screenshot({ path: path.join(OUT, n + '.png'), fullPage: false }); } };
+    const shot = async (n) => { if (OUT) { fs.mkdirSync(OUT, { recursive: true }); await page.screenshot({ path: path.join(OUT, n + '.png'), fullPage: !!process.env.PHONE }); } };
     const lockHidden = (ms = 30000) => page.waitForFunction(() => document.getElementById('lock').hidden, null, { timeout: ms });
     const lockErr = () => page.locator('#lock .lk-err').textContent();
     return { ctx, page, $t, shot, lockHidden, lockErr };
@@ -213,7 +213,9 @@ const up = (url) => new Promise((res) => { http.get(url, (r) => { r.resume(); re
     await $t('recovery-saved').check(); await $t('recovery-continue').click();
 
     // ---- 2. onboarding with shared prices ----
-    await $t('onboard-cash').fill('1000'); await $t('onboard-holdings').fill(`${SYM} 10`);
+    check('sign-up sent the "confirm your email" link by itself', (FB.users[Object.keys(FB.users)[0]].verifySent || 0) >= 1);
+    check('the choice screen leads with "Build it from my Thndr emails"; typing holdings is tucked away', await $t('onboard-history').isVisible() && !(await $t('onboard-cash').isVisible()));
+    await $t('onboard-manual').click(); await $t('onboard-cash').fill('1000'); await $t('onboard-holdings').fill(`${SYM} 10`);
     await A.shot('onboard');
     await $t('onboard-submit').click();
     // ---- 2b. the optional Gmail steps, explained one at a time ----
@@ -223,18 +225,16 @@ const up = (url) => new Promise((res) => { http.get(url, (r) => { r.resume(); re
     await $t('gmail-start').click();
     await $t('gmail-connect').waitFor();
     check('one screen: numbered steps with a direct button to each Google page', (await $t('gmail-2sv-link').getAttribute('href')).startsWith('https://myaccount.google.com/signinoptions/twosv') && (await $t('gmail-apppw-link').getAttribute('href')).startsWith('https://myaccount.google.com/apppasswords') && (await $t('gmail-2sv-link').getAttribute('target')) === '_blank' && /EGX Tracker/.test(await page.locator('#lock').textContent()));
-    check('it asks for the Gmail, the app password and the name as in Thndr (prefilled)', (await $t('gmail-holder').inputValue()) === 'Omar' && await $t('gmail-app-password').isVisible());
+    check('it asks only for the Gmail and the app password (no Thndr name: the first statement sets the account)', !(await $t('gmail-holder').count()) && await $t('gmail-app-password').isVisible());
     await $t('gmail-address').fill('friend.test@example.com');
     check("the Google buttons open the Google account typed in step 1", (await $t('gmail-apppw-link').getAttribute('href')) === 'https://myaccount.google.com/apppasswords?authuser=friend.test%40example.com');
     await $t('gmail-app-password').fill('abc');
     await $t('gmail-connect').click();
     check('an app password that is not 16 letters is refused with a hint', /16 letters/.test(await A.lockErr()));
-    await $t('gmail-app-password').fill('abcd efgh ijkl mnop'); await $t('gmail-connect').click();
-    check('a one-word name is refused (Thndr prints the full name)', /full name/.test(await A.lockErr()));
-    await $t('gmail-holder').fill('Omar Test'); await A.shot('gmail-step3');
+    await $t('gmail-app-password').fill('abcd efgh ijkl mnop'); await A.shot('gmail-step3');
     await $t('gmail-connect').click();
     await $t('gmail-done').waitFor({ timeout: 30000 }).catch(() => {});
-    check('connected: what happens next is explained', /three times a day/.test(await page.locator('#lock').textContent()));
+    check('connected: what happens next is explained (first check within about 10 minutes, then three times a day)', /about 10 minutes/.test(await page.locator('#lock').textContent()) && /three times a day/.test(await page.locator('#lock').textContent()));
     await A.shot('gmail-done');
     await $t('gmail-done').click();
     await A.lockHidden(60000).catch(() => {});
@@ -256,7 +256,7 @@ const up = (url) => new Promise((res) => { http.get(url, (r) => { r.resume(); re
     const blobs = Object.entries(FB.docs).filter(([k]) => k.startsWith(`users/${uid}/docs/`)).map(([, v]) => v.fields.blob.stringValue);
     check('every stored document is an encrypted envelope with nothing in the clear', blobs.length === 5 && blobs.every((b) => { const e = JSON.parse(b); return e.v === 1 && e.epk && e.iv && e.ct && !b.includes(SYM) && !b.includes('Omar') && !b.includes('abcdefgh'); }));
     await page.click('#tab-settings'); await page.waitForTimeout(300);
-    check('the Thndr name from the Gmail step is on the settings', (await page.inputValue('#st-holder')) === 'Omar Test');
+    check('no Thndr name was asked: the settings hold none (the first statement sets the account)', (await page.inputValue('#st-holder')) === '');
     const other = identity('signUp', { email: 'other@example.com', password: 'x'.repeat(10), returnSecureToken: true })[1];
     const denied = firestore('GET', `https://firestore.googleapis.com${FSB}users/${uid}/docs/portfolio__settings`, { authorization: 'Bearer ' + other.idToken });
     check("another account's token is refused on this account's documents", denied[0] === 403);
@@ -395,10 +395,10 @@ print(json.dumps({"uid": p["uid"], "email": p["email"], "prefs": p["prefs"], "re
       await X.lockHidden(60000).catch(() => {}); if (await X.$t('live-bio-skip').count()) await X.$t('live-bio-skip').click(); await X.lockHidden();
     };
     const until = async (f, ms = 15000) => { for (let i = 0; i < ms / 100 && !f(); i++) await new Promise((r) => setTimeout(r, 100)); return f(); };
-    // Friends need a verified email: confirm it from the Friends screen (the fake Firebase "clicks" the link at once)
-    const verifyEmail = async (X) => {
-      await X.$t('account-menu').click(); await X.$t('account-friends').click(); await X.$t('friends-verify').click();
-      await X.$t('friends-verify-send').click(); await X.page.waitForTimeout(300); await X.$t('friends-verify-done').click();
+    // Friends need a verified email: the link went out at sign-up; the test "clicks" it, then taps "I tapped the link"
+    const verifyEmail = async (X, email) => {
+      FB.byEmail[email].verified = true;
+      await X.$t('account-menu').click(); await X.$t('account-friends').click(); await X.$t('friends-verify-done').click();
       await X.$t('friend-email').waitFor({ timeout: 15000 }); await X.$t('friends-back').click(); await X.$t('account-back').click();
     };
     const F = await device('F');
@@ -410,7 +410,7 @@ print(json.dumps({"uid": p["uid"], "email": p["email"], "prefs": p["prefs"], "re
     const squat = firestore('PATCH', `https://firestore.googleapis.com${FSB}directory/${EMAIL_B}`, { authorization: 'Bearer ' + tokU }, JSON.stringify({ fields: { uid: { stringValue: uidB }, pub: { stringValue: 'x' } } }));
     check('the rules refuse a directory entry for an unverified email', squat[0] === 403);
     await F.$t('friends-back').click(); await F.$t('account-back').click();
-    await verifyEmail(E); await verifyEmail(F);
+    await verifyEmail(E, EMAIL); await verifyEmail(F, EMAIL_B);
     check('each account is findable by its sign-in email once verified (directory, with its public key)', await until(() => FB.docs['directory/' + EMAIL] && FB.docs['directory/' + EMAIL_B]) && sv(FB.docs['directory/' + EMAIL_B].fields, 'uid') === uidB);
     check('the admin status line is written at sign-up (no figures)', !!FB.docs['status/' + uidB] && sv(FB.docs['status/' + uidB].fields, 'createdAt') && !/10,000|holding/i.test(JSON.stringify(FB.docs['status/' + uidB])));
     await F.$t('account-menu').click(); await F.$t('account-friends').click();
@@ -479,7 +479,7 @@ print(r.seal_json(json.load(open(${JSON.stringify(path.join(TMP, 'snap.json'))})
     await G.$t('admin-verify-send').waitFor();
     check('the admin screen asks the owner to verify the email first', await G.$t('admin-verify-done').isVisible());
     const omarStatus = FB.docs['status/' + uid]; delete FB.docs['status/' + uid];   // an account that has not opened the site since the admin page started
-    await G.$t('admin-verify-send').click(); await G.page.waitForTimeout(300); await G.$t('admin-verify-done').click();
+    await G.$t('admin-verify-send').click(); await G.page.waitForTimeout(300); FB.byEmail[OWNER_EMAIL].verified = true; await G.$t('admin-verify-done').click();
     await G.$t('admin-row').first().waitFor({ timeout: 20000 }).catch(() => {});
     const adminText = await G.page.locator('#lock').textContent();
     check('the admin list shows everyone who signed up (also one who has not opened the site since), with names and emails, no figures', (await G.$t('admin-row').count()) === 3 && /Sara/.test(adminText) && /Omar/.test(adminText) && /sara@example\.com/.test(adminText) && /3 people have signed up/.test(adminText) && !/10,000/.test(adminText), `${await G.$t('admin-row').count()} rows`);
@@ -595,20 +595,20 @@ print(r.seal_json(json.load(open(${JSON.stringify(path.join(TMP, 'snap.json'))})
     await K.$t('signup-submit').click(); await K.$t('recovery-code').waitFor({ timeout: 60000 }); await K.$t('recovery-saved').check(); await K.$t('recovery-continue').click();
     await K.$t('onboard-history').waitFor(); await K.shot('onboard-history');
     await K.$t('onboard-history').click(); await K.$t('gmail-connect').waitFor({ timeout: 60000 });
-    check('"Build it from my Thndr emails" goes straight to connecting Gmail, and says what will happen', /first monthly Thndr statement/.test(await K.page.locator('#lock').textContent()));
-    await K.$t('gmail-address').fill('nour.test@example.com'); await K.$t('gmail-app-password').fill('abcd efgh ijkl mnop'); await K.$t('gmail-holder').fill('Nour Test');
+    check('"Build it from my Thndr emails" goes straight to connecting Gmail, and says what will happen', /builds your portfolio from them/.test(await K.page.locator('#lock').textContent()));
+    await K.$t('gmail-address').fill('nour.test@example.com'); await K.$t('gmail-app-password').fill('abcd efgh ijkl mnop');
     await K.$t('gmail-connect').click(); await K.$t('gmail-done').waitFor({ timeout: 30000 }).catch(() => {});
-    check('connected: it says the portfolio is built at the next check, from the first monthly statement', /at the next check/.test(await K.page.locator('#lock').textContent()));
+    check('connected: it says the portfolio is being built now, in about 10 minutes, with an email when ready', /about 10 minutes/.test(await K.page.locator('#lock').textContent()) && /email you when it is ready/.test(await K.page.locator('#lock').textContent()));
     await K.$t('gmail-done').click(); await K.lockHidden(60000).catch(() => {}); if (await K.$t('live-bio-skip').count()) await K.$t('live-bio-skip').click();
     await K.page.click('#tab-overview'); await K.$t('history-pending').waitFor({ timeout: 15000 }).catch(() => {});
-    check('until it is built, the Overview says so (and shows the friends section)', await K.$t('history-pending').isVisible() && await K.$t('friends-panel').isVisible());
+    check('until it is built, the Overview says so (and shows the friends section, without the period pickers)', await K.$t('history-pending').isVisible() && await K.$t('friends-panel').isVisible() && (await K.page.innerHTML('#period')).trim() === '');
     await K.shot('history-pending');
     const nuid = FB.byEmail['nour@example.com'].uid, npk = FB.docs['mail/' + nuid] && FB.docs['mail/' + nuid].fields.pkg.stringValue;
     const nset = npk ? JSON.parse(sh('python3', ['-c', `import sys, json; sys.path.insert(0, ${JSON.stringify(path.join(ROOT, 'src/jobs'))}); import store, run_account_mail as r
 k = store.unlock(${JSON.stringify(path.join(SITE, 'p/khaled/keys.json'))}, open(${JSON.stringify(path.join(TMP, 'mailsec', 'setup_key.txt'))}).read().strip())
 i = json.loads(sys.stdin.read()); p = r.open_mail_pkg(k, i["pkg"]); priv, _ = r.account_key(p["pk8"])
 print(json.dumps(json.loads(store.unseal(priv, i["settings"]).decode())["data"]))`], { input: JSON.stringify({ pkg: npk, settings: FB.docs[`users/${nuid}/docs/portfolio__settings`].fields.blob.stringValue }), stdio: ['pipe', 'pipe', 'inherit'] })) : {};
-    check('the settings ask the job for a history import (no start date yet) with the Thndr name', (nset.historyImport || {}).status === 'pending' && !nset.trackFrom && (nset.account || {}).holder === 'Nour Test', JSON.stringify({ h: nset.historyImport, t: nset.trackFrom, a: nset.account }));
+    check('the settings ask the job for a history import (no start date yet, no Thndr name to type)', (nset.historyImport || {}).status === 'pending' && !nset.trackFrom && !(nset.account || {}).holder, JSON.stringify({ h: nset.historyImport, t: nset.trackFrom, a: nset.account }));
   } catch (e) {
     check('run', false, e.stack || String(e));
   }

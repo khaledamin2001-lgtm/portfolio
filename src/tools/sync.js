@@ -369,8 +369,8 @@ async function run() {
         const own = TS.ownerCheck(docs, settings);
         if (own.error) {
           entry.status = 'hold'; entry.reasons.push(`refused: this ${kind === 'invoice' ? 'invoice' : 'statement'} ${own.error}; nothing from it was used`);
-        } else if (own.code && settings.account && !settings.account.unifiedCode) {
-          settings = { ...settings, account: { ...settings.account, unifiedCode: own.code } }; changed.settings = true;
+        } else if (own.code && !(settings.account || {}).unifiedCode) {
+          settings = { ...settings, account: { ...(settings.account || {}), unifiedCode: own.code } }; changed.settings = true;
           entry.notes.push(`Thndr account ${own.code} recorded for this portfolio from its first statement`);
         }
         if (own.error) { /* held above */ } else if (kind === 'invoice') {

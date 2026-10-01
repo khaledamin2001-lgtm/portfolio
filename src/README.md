@@ -83,7 +83,7 @@ with only the public key; `jobs/publish.py` and `jobs/run_sync.py` call them.
 | `tests/test_dietz.js` | Modified Dietz, bonus shares, round trips, same-day ordering. Sections on the real data run only with private exports (`KHALED_EXPORT`, `YASSIN_EXPORT`, `EXPECTED_JSON`), otherwise `SKIP`. |
 | `tests/test.js` | Excel parity against the original workbook; needs two private fixtures, otherwise exits 0. |
 | `tests/test_statement.js` | Statement reading and matching (the right ledger row, quiet months). |
-| `tests/test_owner.js` | The account lock: a statement is used only for its own holder / Thndr account. |
+| `tests/test_owner.js` | The account lock: a statement is used only for its own holder / Thndr account; a new account's first statement sets it. |
 | `tests/test_jobs.py` | The jobs' rules: market patches, sync writes, the time gate, recipients, unsent emails, the watcher, the alarm key. |
 | `tests/test_account_mail.py` | The account job end to end with a fake Firebase and mailer: alerts, weekly, Gmail import, history import, reports, friends, impostor links. `DUMP_EMAILS=<dir>` writes every email out. |
 | `tests/test_history_seed.py` | Building a portfolio from statements: gaps, names vs tickers, funds, an empty start, two Thndr accounts. |

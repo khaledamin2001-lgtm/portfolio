@@ -469,13 +469,15 @@ async function reviewUpload(files){
     const docs=[]; for(const f of files){ if(!/\.pdf$/i.test(f.name) && f.type!=='application/pdf') throw new Error(`${f.name} is not a PDF`); docs.push({filename:f.name, lines: await TS.pdfLines(pdfjs, new Uint8Array(await f.arrayBuffer()))}); }
     let own = TS.ownerCheck(docs, S.settings);
     const acc = S.settings.account||{};
-    if(own.error && !String(acc.unifiedCode||'').trim()){
+    if((own.error || own.firstUse) && !String(acc.unifiedCode||'').trim()){
       const a = TS.accountOf(docs, '');
-      if(a.codes.length===1 && confirm(`These PDFs are for Thndr account ${a.code}. Is that your account?\n\nIt will be recorded for this portfolio, and from then on only that account's statements are accepted.`)){
+      if(a.codes.length!==1){ if(own.firstUse) own = {error: a.codes.length ? `mixes Thndr accounts ${a.codes.join(' and ')}` : 'names no Thndr account'}; }
+      else if(confirm(`These PDFs are for Thndr account ${a.code}. Is that your account?\n\nIt will be recorded for this portfolio, and from then on only that account's statements are accepted.`)){
         const settings = {...S.settings, account:{...acc, unifiedCode:a.code}};
         if(!(await save(()=>S.db.doc('portfolio/settings').set(settings), `Thndr account ${a.code} recorded for this portfolio`))) throw new Error('the account could not be saved');
         own = TS.ownerCheck(docs, settings);
       }
+      else if(own.firstUse) throw new Error('cancelled: nothing was imported');
     }
     if(own.error) throw new Error(`refused — this statement ${own.error}. Only this portfolio's own Thndr documents are ever imported.`);
     const st0 = TS.parseStatement(docs); if(!st0.cash) throw new Error('could not find the account statement among the PDFs (upload every PDF from the Thndr statement email)');

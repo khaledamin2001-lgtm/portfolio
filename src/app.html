@@ -499,6 +499,8 @@ window.pdPeriod = () => {
 };
 function renderPeriod(){
   const R=S.R; const months=R.months.filter(r=>r.has).map(r=>r.month).reverse();
+  // a brand-new portfolio, or one still being built from the Thndr emails: no period to pick yet
+  if((!months.length && !allTx().length) || ((S.settings||{}).historyImport||{}).status==='pending'){ $('#period').innerHTML=''; return; }
   const asOf = R.range.asOf;
   const opt=(m,sel)=>`<option value="${m}" ${m===sel?'selected':''}>${M(m)}${R.months.find(r=>r.month===m&&r.live)?liveParen():''}</option>`;
   $('#period').innerHTML = `
@@ -610,7 +612,15 @@ function jobsStatus(now=Date.now()){
 
 // ---------- Overview ----------
 function vOverview(){
-  const R=S.R, st=R.stats; if(!st.n) return `${window.pdFriendsPanel ? window.pdFriendsPanel() : ''}<div class="panel empty"><h2>No data for this selection</h2></div>`;
+  const R=S.R, st=R.stats;
+  if(!st.n){
+    // a brand-new portfolio has nothing to show yet: the site layer's card says what happens next (being built from the
+    // Thndr emails, or one step left); otherwise a plain pointer to where trades come from
+    const fresh = !allTx().length, building = ((S.settings||{}).historyImport||{}).status==='pending';
+    const msg = !fresh ? '<div class="panel empty"><h2>No data for this selection</h2><p>Pick another period at the top.</p></div>'
+      : building ? '' : `<div class="panel empty" data-testid="empty-portfolio"><h2>Nothing here yet</h2><p>${S.readOnly?'Your trades appear here once they are added.':'Add your trades on the Activity tab, or let the site add them from your Thndr emails (Account, then Thndr emails).'}</p></div>`;
+    return `${window.pdFriendsPanel ? window.pdFriendsPanel() : ''}${msg}`;
+  }
   const cashNow = R.liveCash ?? R.settings.cash; const total = cashNow + R.pos.mvTotal; const dp=dayPL(); const cs=checkSummary();
   const unreal = R.pos.open.reduce((s,r)=>s+(r.unreal||0),0);
   const rows=st.rows; const labels=rows.map(r=>Ms(r.month));
@@ -1044,7 +1054,7 @@ function vInputs(){
       <label>Headline return method<select id="st-ret" data-testid="settings-return-method"><option value="dietz" ${st.returnMethod!=='daily'?'selected':''}>Monthly (Modified Dietz)</option><option value="daily" ${st.returnMethod==='daily'?'selected':''}>Daily-linked</option></select></label>
       <label>Manual price default date<input type="date" id="st-pd" value="${esc(st.priceDate||'')}"></label>
       <label>Factsheet email<input type="text" id="st-email" class="inp" value="${esc(st.factsheetEmail||'')}" placeholder="you@gmail.com"></label>
-      <label>Thndr account holder (name as printed on statements)<input type="text" id="st-holder" class="inp" value="${esc((st.account||{}).holder||'')}" placeholder="Full name on the statement" data-testid="settings-holder"></label>
+      <label>Thndr account holder (optional: without it, the first Thndr statement sets the account)<input type="text" id="st-holder" class="inp" value="${esc((st.account||{}).holder||'')}" placeholder="Full name on the statement" data-testid="settings-holder"></label>
       <label>Thndr Unified Code (top of every statement)<input type="text" id="st-ucode" class="inp" value="${esc((st.account||{}).unifiedCode||'')}" placeholder="learned from the first statement" data-testid="settings-unified-code"></label>      <label>EGX30 Capped close before inception<input type="number" step="any" id="st-bcs" class="inp" value="${st.benchCloseStart??''}"></label>
       <button class="btn primary" type="submit" ${S.readOnly?'disabled':''} data-testid="save-settings">Save settings</button>
     </form></div>`;
@@ -1072,7 +1082,7 @@ function extraChecks(){
   else out.push({label:'Month-ends sourced from Thndr statements', status: typed.length||!stm.length?'warn':'ok', detail: `${stm.length} from statements` + (rec.length?` · ${rec.map(r=>M(r.month)).join(', ')} rebuilt from the next statement`:'') + (est.length?` · ${est.length} closing-price estimates (${est.map(r=>M(r.month)).join(', ')}; no holdings list on those statements)`:'') + (typed.length?` · typed by hand: ${typed.map(r=>M(r.month)).join(', ')}`:'')});
   // account lock: statements and invoices are only accepted for this account; the Unified Code is definitive, the holder name is a fallback
   const acct=(S.settings&&S.settings.account)||{}; const code=String(acct.unifiedCode||'').trim(), holder=String(acct.holder||'').trim();
-  out.push({label:'Thndr account lock', status: code?'ok':holder?'warn':'error', detail: code?`Unified Code recorded${holder?` · holder ${holder}`:''}`:holder?'Unified Code unknown until the first statement is posted; documents are matched by holder name only':'No account holder or Unified Code set: no statement or invoice can be matched to this portfolio. Set the holder under Settings → Inputs & settings.'});
+  out.push({label:'Thndr account lock', status:'ok', detail: code?`Unified Code recorded${holder?` · holder ${holder}`:''}`:holder?'Unified Code unknown until the first statement is posted; documents are matched by holder name only':'Not recorded yet: the first Thndr statement records its account, and from then on only that account\'s documents are accepted.'});
   try{ PA.tradeChecks(S.R.ledger, S.assets, pbook(), S.bench && S.bench.actions).forEach(c=>out.push(c)); }catch(e){ console.error(e); }
   // provenance: rows in statement-confirmed months that no statement or invoice booked (the statement confirms the month's totals)
   const uv=unverifiedRows(); const uvM=[...new Set(uv.map(t=>String(t.d).slice(0,7)))].sort();
@@ -1175,7 +1185,6 @@ document.addEventListener('submit', async e=>{
     await save(()=>S.db.doc('portfolio/assets').set({items:{...S.assets,[name]:a}}),`${name} added; it will be priced at the next run`); }
   if(e.target.id==='settings-form'){ const g=id=>$(id).value; const n=id=>parseFloat($(id).value);
     const s={...S.settings, name:g('#st-name').trim()||'Portfolio', inception:g('#st-inc')||S.settings.inception, openingValue:n('#st-open'), cash:n('#st-cash'), cashDate:g('#st-cashd')||null, riskFree:n('#st-rf')/100, fxStart:n('#st-fx'), volLow:n('#st-vl')/100, volHigh:n('#st-vh')/100, openThreshold:n('#st-thr'), staleDays:n('#st-stale'), priceDate:g('#st-pd')||null, factsheetEmail:g('#st-email').trim()||null, returnMethod:g('#st-ret')==='daily'?'daily':'dietz', benchCloseStart:isFinite(n('#st-bcs'))?n('#st-bcs'):null, account:{holder:g('#st-holder').trim(), unifiedCode:g('#st-ucode').trim()}};
-    if(!s.account.holder && !s.account.unifiedCode){ toast('Set the Thndr account holder: statements and invoices are only accepted for that account','error'); return; }
     if(['openingValue','cash','riskFree','fxStart','volLow','volHigh','openThreshold','staleDays'].some(k=>!isFinite(s[k]))){ toast('Every number field needs a value','error'); return; }
     await save(()=>S.db.doc('portfolio/settings').set(s),'Settings saved'); }
 });

@@ -407,8 +407,11 @@
     const code = String(acc.unifiedCode || '').trim(), holder = String(acc.holder || '').trim();
     const a = accountOf(docs, holder);
     const r = { code: a.code, holderSeen: a.holderSeen, error: null };
-    if (!code && !holder) r.error = 'cannot be used: this portfolio has no Thndr account holder set (Inputs → Settings → Thndr account)';
-    else if (a.codes.length > 1) r.error = `mixes Thndr accounts ${a.codes.join(' and ')}`;
+    // A portfolio with neither an account number nor a holder name yet (a new site account: nobody types their Thndr name)
+    // takes the account of its first statement or invoice: the caller records that number (firstUse), and from then on
+    // only documents of that account are used.
+    if (a.codes.length > 1) r.error = `mixes Thndr accounts ${a.codes.join(' and ')}`;
+    else if (!code && !holder) r.firstUse = true;
     else if (code && a.code) { if (a.code !== code) r.error = `belongs to Thndr account ${a.code}, not this portfolio's account ${code}`; }
     else if (holder) {
       if (!a.holderSeen) {
