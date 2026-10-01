@@ -1,20 +1,9 @@
 // =====================================================================
 // Analytics pages: daily valuation, attribution, income, factsheet, statements
 // =====================================================================
-const GMAIL = 'Gmail', REMOTE = 'Claude Code Remote';
-// ---------- portfolio switcher (the page title): both pages belong to the same Claude account ----------
-const PORTFOLIOS = [
-  { id: 'khaled', name: 'Khaled Investment Portfolio', url: 'https://claude.ai/artifact/PNjUN5wQkvgtZDcTML1HFe' },
-  { id: 'yassin', name: 'Yassin Investment Portfolio', url: 'https://claude.ai/artifact/6VL6yHnoUHkNqP1PdzRazc' },
-];
-function currentPortfolioId(){ return S.settings.portfolioId || (PORTFOLIOS.find(p=>p.name===S.settings.name)||{}).id || null; }
-function renderSwitch(){
-  const cur = currentPortfolioId(), m = $('#pf-menu'); if(!m) return;
-  m.innerHTML = PORTFOLIOS.map(p=>{ const isCur = p.id===cur;
-    if(window.pdSelect) return `<button type="button" data-pid="${p.id}" class="${isCur?'cur':''}" data-testid="switch-${p.id}">${esc(p.name)}<small>${isCur?'open now':'switch on this site'}</small></button>`;
-    return isCur ? `<button type="button" class="cur" data-testid="switch-${p.id}">${esc(p.name)}<small>this page</small></button>`
-                 : `<a href="${p.url}" data-testid="switch-${p.id}">${esc(p.name)}<small>opens its Claude page</small></a>`; }).join('');
-}
+// ---------- the portfolio title menu: on the site it is the friends hub (site/lock.js pdHub) ----------
+function currentPortfolioId(){ return (window.pdCurrentId && window.pdCurrentId()) || S.settings.portfolioId || null; }
+function renderSwitch(){ const m = $('#pf-menu'); if(m && window.pdHub) window.pdHub(m); }
 document.addEventListener('click', e=>{
   const menu = $('#pf-menu'); if(!menu) return;
   if(e.target.closest('#pf-name')){ renderSwitch(); menu.hidden = !menu.hidden; $('#pf-name').setAttribute('aria-expanded', String(!menu.hidden)); return; }
@@ -451,62 +440,25 @@ function vFactsheet(){
     <div class="row"><label class="ink2" style="font-size:12px">Month <select id="fs-month" data-testid="factsheet-month">${months.map(m=>`<option value="${m}" ${m===S.fsMonth?'selected':''}>${M(m)}${S.R.months.find(r=>r.month===m).live?liveParen():''}</option>`).join('')}</select></label>
     <button class="btn" id="fs-dl" data-testid="factsheet-download">Download HTML</button>
     ${window.pdDownloadExport?`<button class="btn" id="fs-xlsx" data-testid="factsheet-excel" data-month="${S.fsMonth}">Download Excel</button>`:''}${window.pdDownloadExport&&ex&&ex.pdf?`<button class="btn" id="fs-pdf" data-testid="factsheet-pdf" data-month="${S.fsMonth}">Download PDF</button>`:''}
-    <button class="btn primary" id="fs-email" data-testid="factsheet-email" ${email?'':'disabled'} title="${email?'Send to '+esc(email):'Set an email address under Settings → Inputs &amp; settings'}">Email to me</button></div></div>
-    <p class="note" style="margin:0 0 14px" data-testid="factsheet-note">${S.readOnly?`${S.sync&&email?`Emailed to <span class="mono">${esc(email)}</span> automatically after each monthly statement is posted. `:''}Download it here any time.`:email?`Sends from your Gmail to <span class="mono">${esc(email)}</span>. Posting a monthly statement offers to send it automatically.`:'Add an email address under Settings → Inputs &amp; settings to send factsheets.'}</p>
+    </div></div>
+    <p class="note" style="margin:0 0 14px" data-testid="factsheet-note">${S.sync&&email?`Emailed to <span class="mono">${esc(email)}</span> automatically, with the Excel workbook, after each monthly statement is posted. `:''}Download it here any time.</p>
     <div style="overflow-x:auto;background:var(--surface-2);border-radius:10px;padding:14px 8px" data-testid="factsheet-preview">${factsheetHTML(F)}</div></div>`;
 }
-async function emailFactsheet(m, quiet){
-  const mcp = await window.claude?.use?.('mcp'); const to = S.settings.factsheetEmail;
-  if(!mcp || !to){ if(!quiet) toast('Email is not available here. Set an address under Settings → Inputs & settings and allow Gmail when asked.','error'); return false; }
-  const F = factsheetData(m);
-  const html = `<!doctype html><html><body style="margin:0;padding:16px;background:#EDF2EF">${factsheetHTML(F)}</body></html>`;
-  const text = `${S.settings.name} — ${M(m)}\nValue ${egp(F.value)} EGP\nMonth ${pct(F.row&&F.row.ret)} vs EGX30 Capped ${pct(F.row&&F.row.bench)}\nYTD ${pct(F.tr[3].p)} · Since inception ${pct(F.st.twr)}`;
-  try{ await mcp.callTool(GMAIL,'send_message',{to:[to], subject:`${S.settings.name} · factsheet ${M(m)}`, htmlBody:html, body:text},{cache:false}); toast(`Factsheet for ${M(m)} sent to ${to}`); return true; }
-  catch(e){ toast('Could not send the email: '+(e.message||e.code),'error'); return false; }
-}
+// tools/factsheet.js renders the month-end factsheet with this page's own code, headless: the HTML, and the headline figures
+// for the month-end email (src/jobs/emails.py monthend)
+window.pdFactsheet = (m) => factsheetHTML(factsheetData(m));
+window.pdFactsheetSummary = (m) => { const F = factsheetData(m), st = F.st || {}, c = (F.sectors || []).find((x) => x.s === 'Cash & Savings');
+  return { name: S.settings.name, month: m, live: !!F.live, inception: S.settings.inception, value: F.value,
+    monthRet: F.row ? F.row.ret : null, monthBench: F.row ? F.row.bench : null, ytd: F.tr && F.tr[3] ? F.tr[3].p : null, ytdBench: F.tr && F.tr[3] ? F.tr[3].b : null,
+    si: st.twr, siBench: st.benchTwr, annualized: st.annualized, top: (F.top || []).slice(0, 5).map((r) => ({ symbol: r.symbol || null, name: r.name, w: r.w })),
+    cashW: c ? c.p : 0, income: F.incM }; };
 
-// ---------- Statements (Gmail → review → post) ----------
-function payloadOf(res){ let p = res && (res.payload !== undefined ? res.payload : res); if(typeof p==='string'){ try{ p=JSON.parse(p); }catch(e){} }
-  if(p && Array.isArray(p.content)){ const t=p.content.find(c=>c.type==='text'); if(t){ try{ p=JSON.parse(t.text); }catch(e){} } }
-  if(p && p.structuredContent) p=p.structuredContent; return p; }
+// ---------- Statements (statement PDFs chosen on this device → review → post) ----------
 let pdfjsP = null;
+// pdf.js reads the statement PDFs: the site serves its own copy (vendor/, 3.11.174)
 function loadPdfjs(){ if(!pdfjsP) pdfjsP = new Promise((res,rej)=>{ const add=(src,cb)=>{ const s=document.createElement('script'); s.src=src; s.onload=cb; s.onerror=()=>{ pdfjsP=null; rej(new Error('Could not load the PDF reader')); }; document.head.appendChild(s); };
-  add('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js', ()=>add('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js', ()=>res(window.pdfjsLib))); }); return pdfjsP; }
-const MONNUM={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
-async function scanGmail(auto){
-  const mcp = await window.claude?.use?.('mcp'); if(!mcp){ if(!auto) toast('Gmail is not available in this view.','error'); return; }
-  S.stmt.busy='Searching Gmail…'; if(S.tab==='settings') renderTab(true);
-  try{
-    const res = await mcp.callTool(GMAIL,'search_threads',{query:'from:no-reply@system.thndr.app subject:E-statement -subject:"US Market"', pageSize:50},{cache:false});
-    const p = payloadOf(res); const best={};
-    ((p&&p.threads)||[]).forEach(th=>(th.messages||[]).forEach(msg=>{ const sm=(msg.subject||'').match(/E-statement\s*-\s*([A-Za-z]{3})\w*\s+(\d{4})/i); if(!sm) return;
-      const month=`${sm[2]}-${String(MONNUM[sm[1].toLowerCase()]).padStart(2,'0')}`; const monthly=/monthly/i.test(msg.subject);
-      const c={month, id:msg.id, subject:msg.subject, date:msg.date, monthly}; const b=best[month];
-      if(!b || (monthly && !b.monthly) || (monthly===b.monthly && c.date>b.date)) best[month]=c; }));
-    S.stmt.list = Object.values(best).sort((a,b)=>b.month.localeCompare(a.month)); S.stmt.scanned=new Date().toISOString(); S.stmt.error=null;
-  }catch(e){ S.stmt.error = 'Gmail search failed: '+(e.message||e.code); }
-  S.stmt.busy=false; if(S.tab==='settings'||S.tab==='overview') renderTab(true);
-}
-async function reviewStatement(item){
-  const mcp = await window.claude?.use?.('mcp'); if(!mcp) return;
-  S.stmt.busy=`Reading the ${M(item.month)} statement…`; S.stmt.review=null; renderTab(true);
-  try{
-    const [pdfjs, res] = await Promise.all([loadPdfjs(), mcp.callTool(GMAIL,'get_message',{messageId:item.id, messageFormat:'RAW'},{cache:false})]);
-    const p = payloadOf(res); if(!p || !p.raw) throw new Error('the email came back without its attachments');
-    const att = TS.attachments(p.raw); if(!att.length) throw new Error('no PDF attachments found');
-    const docs=[]; for(const a of att) docs.push({filename:a.filename, lines: await TS.pdfLines(pdfjs, a.bytes)});
-    const own = TS.ownerCheck(docs, S.settings); if(own.error) throw new Error(`refused — this statement ${own.error}. Only this portfolio's own Thndr documents are ever imported.`);
-    const st = TS.parseStatement(docs); if(!st.cash) throw new Error('could not find the account statement among the PDFs');
-    const rc = TS.reconcile(st, allTx(), S.assets, S.marks);
-    rc.item=item; rc.files=att.map(a=>a.filename); rc.accountCode=own.code;
-    rc.pick = rc.fresh.map(()=>true); rc.use = rc.conflicts.map(()=>false);
-    rc.applyMarks = !!(rc.markProposal && rc.markProposal.securities!=null);
-    S.stmt.review = rc; S.stmt.error=null;
-    if(IMPORT_DEBUG) console.debug('[statement]', rc);
-  }catch(e){ S.stmt.error = `Could not read the ${M(item.month)} statement: ${e.message||e}`; }
-  S.stmt.busy=false; renderTab(true);
-}
-// The same review from statement PDFs chosen on this device (the live site has no Gmail; any portfolio being edited). A
+  add('vendor/pdf.worker.min.js', ()=>add('vendor/pdf.min.js', ()=>res(window.pdfjsLib))); }); return pdfjsP; }
+// A review from statement PDFs chosen on this device (any portfolio being edited). A
 // portfolio that does not know its Thndr account yet asks once to confirm the account the PDFs name, then records it, so
 // from then on only that account's documents are accepted.
 async function reviewUpload(files){
@@ -538,20 +490,15 @@ async function reviewUpload(files){
   S.stmt.busy=false; renderTab(true);
 }
 document.addEventListener('change', e=>{ if(e.target && e.target.id==='stmt-files'){ const f=[...(e.target.files||[])]; e.target.value=''; if(f.length) reviewUpload(f); } });
-const IMPORT_DEBUG = false;
 function vStatements(){
-  const T=S.stmt, imp=S.imports||{};
-  const latest = T.list && T.list.find(x=>x.monthly);
-  const rv=T.review;
-  const row=(x)=>{ const done=imp[x.month]; const part=done&&done.fullMonth===false; return `<tr><td><b>${M(x.month)}</b></td><td class="ink2">${x.monthly?'Monthly statement':'Requested statement'} · ${dfmt((x.date||'').slice(0,10))}</td><td>${done?`<span class="pill ${part?'man':'win'}" title="${part?'A part-month statement was posted; the month-end still needs the monthly statement':''}">${part?'Part posted':'Posted'} ${dfmt((done.postedAt||'').slice(0,10))}</span>`:x.monthly?'<span class="pill prov">Not posted</span>':'<span class="pill man">Not posted</span>'}</td><td><button class="btn sm" data-review="${x.month}" data-testid="review-statement">${done?'Review again':'Review'}</button></td></tr>`; };
-  // The inbox job only exists for a portfolio that has a sync/state document; the other portfolio posts statements by hand.
+  const T=S.stmt, rv=T.review;
+  // The inbox job only exists for a portfolio that has a sync/state document; any other portfolio posts statements by hand.
   const hasSync = !!S.sync;
   return `
-  <div class="panel"><div class="phead"><div><h2>Thndr statements</h2><div class="sub" data-testid="statements-intro">${hasSync?`An automatic job reads every new Thndr email twice a day. Trade invoices are booked straight away; any statement you request replaces the ledger for the dates it covers and updates your cash; the monthly statement with its positions snapshot rewrites the whole month and sets the month-end, then the factsheet is emailed to you. Nothing is saved unless the corrected month reconciles exactly (cash to the piaster, every share count); otherwise the email is held and sent to you for review here.`:`No automatic inbox sync is set up for this portfolio. Statements are posted by hand from this page (Check Gmail → Review → Post).`}</div></div>
-    ${S.readOnly?'':`<label class="btn" data-testid="statement-upload-label" ${T.busy?'aria-disabled="true"':''}>Upload statement PDFs<input type="file" id="stmt-files" data-testid="statement-upload" accept="application/pdf,.pdf" multiple hidden ${T.busy?'disabled':''}></label>`}
-    <button class="btn primary" id="scan-gmail" data-testid="scan-gmail" ${T.busy?'disabled':''}>${T.list?'Check Gmail again':'Check Gmail'}</button></div>
+  <div class="panel"><div class="phead"><div><h2>Thndr statements</h2><div class="sub" data-testid="statements-intro">${hasSync?`An automatic job reads every new Thndr email three times a day (4:15 pm, 6:15 pm and 11 pm Cairo). Trade invoices are booked straight away; any statement you request replaces the ledger for the dates it covers and updates your cash; the monthly statement with its positions snapshot rewrites the whole month and sets the month-end, then the month-end report is emailed to you. Nothing is saved unless the corrected month reconciles exactly (cash to the piaster, every share count); otherwise the email is held and sent to you for review here.`:`No automatic inbox sync is set up for this portfolio. Statements are posted by hand: turn on editing, upload the statement PDFs, review, post.`}</div></div>
+    ${S.readOnly?'':`<label class="btn" data-testid="statement-upload-label" ${T.busy?'aria-disabled="true"':''}>Upload statement PDFs<input type="file" id="stmt-files" data-testid="statement-upload" accept="application/pdf,.pdf" multiple hidden ${T.busy?'disabled':''}></label>`}</div>
     ${T.busy?`<p class="note">${esc(T.busy)}</p>`:''}${T.error?`<div class="banner" style="background:var(--neg-bg);color:var(--neg)">${esc(T.error)}</div>`:''}
-    ${T.list? (T.list.length? `<div class="tbl"><table data-testid="statements-table"><thead><tr><th>Month</th><th>Email</th><th>Status</th><th></th></tr></thead><tbody>${T.list.map(row).join('')}</tbody></table></div>` : '<p class="muted">No Thndr statement emails found.</p>') : S.readOnly?'':`<p class="muted">Thndr emails the monthly statement around the 3rd of each month with three PDFs: the account statement, the fund account, and a month-end positions snapshot. The first check asks your permission to read Gmail.</p>`}
+    ${S.readOnly?'':`<p class="muted">Thndr emails the monthly statement around the 3rd of each month with three PDFs: the account statement, the fund account, and a month-end positions snapshot. Upload all three.</p>`}
   </div>
   ${syncHistory()}
   ${rv? reviewPanel(rv) : ''}`;
@@ -579,7 +526,7 @@ function syncHistory(){
 // Removes the held entries from sync/state.seen so the next inbox run processes those emails again.
 async function retryHeld(btn){
   const held=heldEmails(); if(!held.length){ toast('No held emails to retry'); return; }
-  if(!S.db||S.readOnly){ toast('Retrying is only possible on the Claude page.','error'); return; }
+  if(!S.db||S.readOnly){ toast('Turn on editing at the bottom of the page to retry held emails.','error'); return; }
   if(btn){ btn.disabled=true; }
   const seen={}; held.forEach(e=>{ seen[e.id]={'__delete__':true}; });
   const n=held.length;
@@ -603,7 +550,7 @@ function reviewPanel(rv){
       <dt>Securities (${mp.fundsFromLedger?'snapshot stocks + funds at last NAV':'positions snapshot'})</dt><dd>${mp.securities!=null?egp(mp.securities,2):'No snapshot in this email'} <span class="note">${md.securities!=null?`now ${egp(md.current.securities,2)} · diff ${egp(md.securities,2)}`:''}</span></dd></dl>
       ${mp.securities!=null?`<label style="display:flex;gap:8px;margin-top:8px"><input type="checkbox" id="apply-marks" ${rv.applyMarks?'checked':''}> Set ${M(rv.month)} month-end marks from the statement and mark the month confirmed</label>`:''}`:''}
     <p class="note" style="margin-top:14px" data-testid="review-outcome">${postOutcome(rv).text}</p>
-    <div class="row" style="margin-top:18px;justify-content:space-between"><label style="display:flex;gap:8px" data-testid="post-email-label"><input type="checkbox" id="post-email" ${S.settings.factsheetEmail&&rv.fullMonth?'checked':''} ${S.settings.factsheetEmail?'':'disabled'}> Email me the ${M(rv.month)} factsheet afterwards</label>
+    <div class="row" style="margin-top:18px;justify-content:flex-end">
       <div class="row"><button class="btn" id="review-close">Close</button><button class="btn primary" id="post-statement" data-testid="post-statement" ${S.readOnly?'disabled':''}>Post to portfolio</button></div></div>
   </div>`;
 }
@@ -643,18 +590,9 @@ async function postStatement(){
   // fullMonth is true only for a full-calendar-month statement with a snapshot whose marks were applied in this post; a requested
   // (part-month) statement never marks the month final, so the monthly statement is still expected.
   if(ok) ok = await save(()=>S.db.doc('imports/'+rv.month).set({month:rv.month, messageId:rv.item.id, subject:rv.item.subject, postedAt:new Date().toISOString(), added:add.length, replaced:repl.length, marks:applyMarks, fullMonth:outcome.final, statementFrom:rv.from||null, statementTo:rv.to||null}));
-  if(ok){ toast(`${M(rv.month)} posted: ${add.length} added, ${repl.length} replaced${applyMarks?', marks updated':''}`); const wantEmail=$('#post-email')&&$('#post-email').checked; const m=rv.month; S.stmt.review=null; renderTab(true); if(wantEmail) setTimeout(()=>emailFactsheet(m), 1500); }
+  if(ok){ toast(`${M(rv.month)} posted: ${add.length} added, ${repl.length} replaced${applyMarks?', marks updated':''}`); S.stmt.review=null; renderTab(true); }
   else if(btn){ btn.disabled=false; btn.textContent='Post to portfolio'; }
 }
-function statementBanner(){
-  const T=S.stmt; if(!T.list) return '';
-  const imp=S.imports||{}; const m = T.list.find(x=>x.monthly && !(imp[x.month] && imp[x.month].fullMonth!==false));   // a part-month post does not close the month
-  return m ? `<div class="banner" data-testid="statement-banner"><b>Your ${M(m.month)} Thndr statement is ready to post.</b><span>Review it against the ledger and update the month-end marks.</span><button class="btn sm" data-go="statements">Review</button></div>` : '';
-}
-async function autoScan(){
-  try{ const perm = await window.claude?.use?.('permissions'); if(!perm) return; const st = await perm.state('mcp'); if(st==='granted') scanGmail(true); }catch(e){}
-}
-
 // ---------- Risk explained: the down-month analysis, done for you (no rules, just what happened and why) ----------
 function betaOf(pb, sym){
   const from = PE.addMonths(PE.cairoToday().slice(0,7), -12) + '-01'; const days = pb.days.filter(d=>d>=from);

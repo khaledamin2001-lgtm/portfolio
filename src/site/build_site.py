@@ -11,39 +11,9 @@ page = re.sub(r'<title>.*?</title>\s*', '', page, count=1)
 m = re.search(r'<meta name="pd-build" content="([^"]+)">', page)   # written by ../build.py: '<12 hex> <UTC date time>'
 assert m, 'page layout changed: pd-build meta not found'
 BUILD = m.group(1)
-assert page.count('readOnly:false,') == 1, 'page layout changed: readOnly flag not found'
-# view-only unless this device has editing turned on for the open portfolio (lock.js pdCanEdit); the page re-renders on change
-page = page.replace('readOnly:false,', 'get readOnly(){ return !(window.pdCanEdit && window.pdCanEdit()); }, set readOnly(v){},')
-# the Claude page's wording for a view-only reader, as it applies on the site
-for a, b in [("function currentPortfolioId(){ return", "function currentPortfolioId(){ if(window.pdCurrentId) return window.pdCurrentId(); return"),
-             ("m.innerHTML = PORTFOLIOS.map(p=>{", "m.innerHTML = (window.pdPortfolioList ? window.pdPortfolioList() : PORTFOLIOS).map(p=>{"),
-             # the top-left menu is the friends hub on the site (lock.js pdHub): you and your friends, ranked, tap to view
-             ("function renderSwitch(){\n", "function renderSwitch(){ if(window.pdHub){ window.pdHub($('#pf-menu')); return; }\n"),
-             # the same ranking as a section at the top of the Overview tab (lock.js pdFriendsPanel; empty without an account)
-             ("const ht=headTwr(st), cc=cashCum(rows);\n  return `${statementBanner()}", "const ht=headTwr(st), cc=cashCum(rows);\n  return `${window.pdFriendsPanel ? window.pdFriendsPanel() : ''}${statementBanner()}"),
-             ("function vOverview(){\n  const R=S.R, st=R.stats; if(!st.n) return `", "function vOverview(){\n  const R=S.R, st=R.stats; if(!st.n) return `${window.pdFriendsPanel ? window.pdFriendsPanel() : ''}"),
-             ("}).join('');\n}\ndocument.addEventListener('click', e=>{\n  const menu = $('#pf-menu');", "}).join('') + (window.pdSwitch ? '<button type=\"button\" data-testid=\"switch-other\" onclick=\"pdSwitch()\">Another portfolio<small>sign in, or open one with a setup key</small></button>' : '');\n}\ndocument.addEventListener('click', e=>{\n  const menu = $('#pf-menu');"),
-             ("toast('The watchlist is edited on the Claude page.','error')", "toast('Turn on editing at the bottom of the page to change the watchlist.','error')"),
-             ("toast('Retrying is only possible on the Claude page.','error')", "toast('Turn on editing at the bottom of the page to retry held emails.','error')"),
-             ("as recorded on the Claude page.", "as recorded."),
-             ("<b>View only</b> — this is the published site. Edit on the Claude page; changes appear here after the next daily update.",
-              "<b>View only</b>. To change something, turn on editing at the bottom of the page."),
-             ("<small>opens its Claude page</small>", "<small>opens it</small>"),
-             ("The database for this page is empty. Ask Claude to load your workbook into it.", "Nothing has been added to this portfolio yet."),
-             ("The portfolio database is full. Ask Claude to delete old history months to free space.", "The portfolio could not be saved (storage is full). Tell the site owner."),
-             # statement PDFs are read with the site's own copy of pdf.js (vendor/, the same 3.11.174 build the Claude page loads)
-             ("'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'", "'vendor/pdf.worker.min.js'"),
-             ("'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'", "'vendor/pdf.min.js'")]:
-    assert page.count(a) == 1, 'page layout changed: ' + a
-    page = page.replace(a, b)
-hook = "async function refreshNow(btn){"
-assert page.count(hook) == 1, 'page layout changed: refreshNow not found'
-page = page.replace(hook, hook + " if(window.pdRefreshPrices) return window.pdRefreshPrices(btn, toast);")
-hook = "function toast(msg, kind){"   # lock.js shows its notices (live prices unavailable) through the page's own toast
-assert page.count(hook) == 1, 'page layout changed: toast() not found'
-page = page.replace(hook, "window.pdToast = (m, k) => toast(m, k);\n" + hook)
-# Self-hosted fonts: the Claude page links Google Fonts; the site serves the same WOFF2 files itself (site/fonts/, listed in
-# fonts.json with each face's weight and unicode-range) from its own fonts/ folder, so no request leaves for Google.
+# Self-hosted fonts: app.html links Google Fonts (handy when opening the built desk page on its own); the site serves the
+# same WOFF2 files itself (site/fonts/, listed in fonts.json with each face's weight and unicode-range) from its own fonts/
+# folder, so no request leaves for Google.
 FONTS = json.load(open('fonts/fonts.json'))
 os.makedirs(os.path.join(REPO, 'fonts'), exist_ok=True)
 for f in sorted({x['file'] for x in FONTS}): shutil.copyfile(os.path.join('fonts', f), os.path.join(REPO, 'fonts', f))
@@ -53,8 +23,8 @@ assert len(gf) == 3, 'page layout changed: expected the 3 Google Fonts <link> ta
 for x in gf: page = page.replace(x, '', 1)
 assert 'fonts.googleapis.com' not in page and 'fonts.gstatic.com' not in page, 'a Google Fonts reference is left in the page'
 # Content-Security-Policy: the page loads only itself (fonts included) and talks only to the TradingView scanner and, when editing
-# is on, the GitHub API; accounts talk to Firebase's sign-in and Firestore REST APIs (pdf.js is never loaded on the site: it is only fetched by the Claude page's statement reader). Inline
-# scripts/styles are the whole app, hence 'unsafe-inline'.
+# is on, the GitHub API; accounts talk to Firebase's sign-in and Firestore REST APIs. pdf.js (statement uploads) is the
+# site's own copy in vendor/. Inline scripts/styles are the whole app, hence 'unsafe-inline'.
 CSP = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
        "font-src 'self'; connect-src 'self' https://scanner.tradingview.com https://api.github.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://firestore.googleapis.com; img-src 'self' data: blob:; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'")
 css, js = open('lock.css').read(), open('store.js').read() + '\n' + open('lock.js').read()
@@ -69,7 +39,6 @@ head = '''<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>Stock Market Portfolio Tracker</title>
 <style>''' + face + ''':root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:#F3F6F4}img{max-width:100%}[hidden]{display:none!important}
 ''' + css + '''
-[data-testid=scan-gmail],[data-testid=factsheet-email],[data-testid=post-email-label]{display:none!important}
 body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[data-testid=save-marks],[data-testid=save-assets],[data-testid=save-settings],[data-testid=post-statement],[data-testid=statement-upload-label]){display:none!important}
 </style></head><body class="pd-locked">
 <div id="lock" role="dialog" aria-modal="true" aria-label="Unlock portfolio"></div>

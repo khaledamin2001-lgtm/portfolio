@@ -170,7 +170,9 @@
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; document.body.appendChild(a); a.click();
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   } });
-  window.claude = Object.freeze({ use: async (n) => (n === 'db' ? dbReady : n === 'downloads' ? downloads : null) });
+  // the services the page runs on (app.html reads them through window.pdHost.use): 'db' = this portfolio's documents
+  // (pdStore), 'downloads' = saving a file
+  window.pdHost = Object.freeze({ use: async (n) => (n === 'db' ? dbReady : n === 'downloads' ? downloads : null) });
 
   /* ---------- editing from the site ----------
      A portfolio whose portfolios.json entry names an "engine" repository (its private data repository) can be edited here.

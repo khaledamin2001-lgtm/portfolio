@@ -209,7 +209,7 @@ const cleanup = [];
     // ---- 3. a whole-document save from an older copy keeps the job's change ----
     const firstAsset = Object.keys(readDoc('portfolio', 'assets').data.items)[0];
     jobWrite([{ op: 'update', collection: 'portfolio', doc_id: 'assets', data: { items: { [firstAsset]: { fromJob: 7 } } } }]);
-    await page.evaluate(async () => { const db = await window.claude.use('db'); const cur = (await db.doc('portfolio/assets').get()).data(); await db.doc('portfolio/assets').set({ items: Object.assign({}, cur.items, { 'Test Added Co': { symbol: 'TSTX', note: 'from the site', watch: true } }) }); });
+    await page.evaluate(async () => { const db = await window.pdHost.use('db'); const cur = (await db.doc('portfolio/assets').get()).data(); await db.doc('portfolio/assets').set({ items: Object.assign({}, cur.items, { 'Test Added Co': { symbol: 'TSTX', note: 'from the site', watch: true } }) }); });
     const a1 = readDoc('portfolio', 'assets');
     check('assets: the page\'s new asset is saved', !!a1.data.items['Test Added Co'] && a1.data.items['Test Added Co'].note === 'from the site');
     check('assets: the job\'s change made meanwhile is kept', a1.data.items[firstAsset].fromJob === 7);

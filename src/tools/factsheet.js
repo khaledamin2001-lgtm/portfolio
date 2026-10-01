@@ -23,30 +23,24 @@ if (args.overlay && fs.existsSync(args.overlay)) for (const f of fs.readdirSync(
   else if (f === 'assets_update.json') docs['portfolio/assets'] = { items: { ...(docs['portfolio/assets'] || {}).items, ...v.items } };
   else if ((m = f.match(/^import_(.+)\.json$/))) { (cols.imports || (cols.imports = {}))[m[1]] = v; }
 }
-const mock = `<script>window.claude={use:async(n)=>{ if(n!=='db') return null; const D=${JSON.stringify(docs)}, C=${JSON.stringify(cols)};
+const mock = `<script>window.pdHost={use:async(n)=>{ if(n!=='db') return null; const D=${JSON.stringify(docs)}, C=${JSON.stringify(cols)};
  const snap=(id,d)=>({id,exists:!!d,data:()=>d,metadata:{}});
  return {doc:(p)=>({onSnapshot:(f)=>{setTimeout(()=>f(snap(p.split('/')[1],D[p])),10);return()=>{}}}),
   collection:(p)=>({onSnapshot:(f)=>{const docs=Object.entries(C[p]||{}).map(([k,v])=>snap(k,v));setTimeout(()=>f({docs,size:docs.length,empty:!docs.length}),10);return()=>{}}})};}};</script>`;
 let page = fs.readFileSync(args.page, 'utf8');
 page = page.replace(/^<!doctype html><html><head>[\s\S]*?<\/head><body>/i, '');
-if (!page.includes('async function emailFactsheet(m, quiet){')) throw new Error('page layout changed: factsheet hook not found');
-page = page.replace('async function emailFactsheet(m, quiet){', 'window.__fs=(m)=>factsheetHTML(factsheetData(m));\n' +
-  'window.__fsum=(m)=>{const F=factsheetData(m),st=F.st||{},c=(F.sectors||[]).find((x)=>x.s===\'Cash & Savings\');return {name:S.settings.name,month:m,live:!!F.live,inception:S.settings.inception,value:F.value,' +
-  'monthRet:F.row?F.row.ret:null,monthBench:F.row?F.row.bench:null,ytd:F.tr&&F.tr[3]?F.tr[3].p:null,ytdBench:F.tr&&F.tr[3]?F.tr[3].b:null,si:st.twr,siBench:st.benchTwr,annualized:st.annualized,' +
-  'top:(F.top||[]).slice(0,5).map((r)=>({symbol:r.symbol||null,name:r.name,w:r.w})),cashW:c?c.p:0,income:F.incM};};\n' +
-  'async function emailFactsheet(m, quiet){');
 if (!args.out && !args.pdf) throw new Error('give --out <file.html> and/or --pdf <file.pdf>');
 const tmp = path.join(path.dirname(args.out || args.pdf), '_factsheet_page.html');
 fs.writeFileSync(tmp, '<!doctype html><html><head><meta charset="utf-8"></head><body>' + mock + page + '</body></html>');
 (async () => {
   const b = await playwright.chromium.launch(); const p = await b.newPage();
   const errs = []; p.on('pageerror', (e) => errs.push(e.message));
-  await p.goto('file://' + path.resolve(tmp)); await p.waitForFunction(() => window.__fs && document.querySelector('#main section'), null, { timeout: 30000 });
-  const html = await p.evaluate((m) => window.__fs(m), args.month);
+  await p.goto('file://' + path.resolve(tmp)); await p.waitForFunction(() => window.pdFactsheet && document.querySelector('#main section'), null, { timeout: 30000 });
+  const html = await p.evaluate((m) => window.pdFactsheet(m), args.month);   // app2.js: the page's own factsheet
   if (errs.length) { await b.close(); throw new Error('page errors: ' + errs.join('; ')); }
   const doc = `<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0;padding:16px;background:#EDF2EF">${html}</body></html>`.replace(/>\s+</g, '><');
   const res = { ok: true };
-  if (args.summary) { fs.writeFileSync(args.summary, JSON.stringify(await p.evaluate((m) => window.__fsum(m), args.month))); res.summary = args.summary; }
+  if (args.summary) { fs.writeFileSync(args.summary, JSON.stringify(await p.evaluate((m) => window.pdFactsheetSummary(m), args.month))); res.summary = args.summary; }
   if (args.out) { fs.writeFileSync(args.out, doc); Object.assign(res, { out: args.out, bytes: doc.length }); }
   if (args.pdf) {
     // the same HTML, printed: the email's 16px page padding and grey page background are dropped (the PDF has its own

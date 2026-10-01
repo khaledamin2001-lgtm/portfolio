@@ -138,7 +138,6 @@ body.pd-locked>:not(#lock){display:none!important}
 #lock .lk-or{display:flex;align-items:center;gap:10px;color:var(--ink-3,#5F6C67);font-size:12px}
 #lock .lk-or::before,#lock .lk-or::after{content:"";flex:1;border-top:1px solid var(--rule,#DAE2DE)}
 
-[data-testid=scan-gmail],[data-testid=factsheet-email],[data-testid=post-email-label]{display:none!important}
 body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[data-testid=save-marks],[data-testid=save-assets],[data-testid=save-settings],[data-testid=post-statement],[data-testid=statement-upload-label]){display:none!important}
 </style></head><body class="pd-locked">
 <div id="lock" role="dialog" aria-modal="true" aria-label="Unlock portfolio"></div>
@@ -435,7 +434,9 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; document.body.appendChild(a); a.click();
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   } });
-  window.claude = Object.freeze({ use: async (n) => (n === 'db' ? dbReady : n === 'downloads' ? downloads : null) });
+  // the services the page runs on (app.html reads them through window.pdHost.use): 'db' = this portfolio's documents
+  // (pdStore), 'downloads' = saving a file
+  window.pdHost = Object.freeze({ use: async (n) => (n === 'db' ? dbReady : n === 'downloads' ? downloads : null) });
 
   /* ---------- editing from the site ----------
      A portfolio whose portfolios.json entry names an "engine" repository (its private data repository) can be edited here.
@@ -2258,7 +2259,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   })();
 })();
 </script>
-<meta name="pd-build" content="d2bd45182229 2026-10-01 01:50">
+<meta name="pd-build" content="d6827c7110e3 2026-10-01 01:56">
 <style>
 :root{
   --bg:#F3F6F4; --surface:#FFFFFF; --surface-2:#EDF2EF; --ink:#0F1A17; --ink-2:#46534E; --ink-3:#5F6C67;
@@ -4103,7 +4104,6 @@ button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.pl
 <script>
 (function(){
 'use strict';
-const REFRESH_TRIGGER_ID = 'trig_014NNnjAsB4CrMpKaZSAJNoG';   // the scheduled price routine; 'Refresh now' fires it once
 const $ = (s, el=document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const ls = { get(k,d){ try{ const v = localStorage.getItem(k); return v==null?d:JSON.parse(v);}catch(e){return d;} }, set(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch(e){} } };
@@ -4137,12 +4137,13 @@ const S = {
   tab: ls.get('pd.tab','overview'),
   sel: ls.get('pd.sel',{type:'Since Inception',asOf:null,from:null,to:null}),
   ledgerFilter: {q:'', type:'', year:'', src:''},
-  R:null, get readOnly(){ return !(window.pdCanEdit && window.pdCanEdit()); }, set readOnly(v){}, bench:null, imports:{}, sync:null, stmt:{list:null, busy:false, error:null, review:null}, fsMonth:null, fallback:null, heads:null,
+  R:null, // view-only unless this device has editing turned on for the open portfolio (site/lock.js pdCanEdit)
+  get readOnly(){ return !(window.pdCanEdit && window.pdCanEdit()); }, set readOnly(v){}, bench:null, imports:{}, sync:null, stmt:{list:null, busy:false, error:null, review:null}, fsMonth:null, fallback:null, heads:null,
   D:undefined, exportsList:null,
 };
 if(location.hash && /^#[a-z]+$/.test(location.hash)) S.tab = location.hash.slice(1);
 
-window.pdToast = (m, k) => toast(m, k);
+window.pdToast = (m, k) => toast(m, k);   // site/lock.js shows its notices through the page's toast
 function toast(msg, kind){ const t=$('#toast'); t.textContent=msg; t.className='toast'+(kind?' '+kind:''); t.hidden=false; clearTimeout(toast._t); toast._t=setTimeout(()=>t.hidden=true, Math.max(kind==='error'?6000:2800, 60*String(msg).length)); }
 function errText(e){ const c=e&&e.code; if(c==='invalid_argument') return 'Saving was refused. You may only have view access to this page.'; if(c==='quota_exceeded') return 'The portfolio could not be saved (storage is full). Tell the site owner.'; if(c==='resource_exhausted') return 'Too many saves in a row. Wait a few seconds and try again.'; return 'Could not save: '+(e&&e.message||'unknown error')+'. Try again in a moment.'; }
 async function save(fn, ok){ try{ await fn(); if(ok) toast(ok); document.querySelectorAll('#main .dirty').forEach(x=>x.classList.remove('dirty')); if(document.activeElement && document.activeElement.blur) document.activeElement.blur(); S.pending=false; renderTab(true); return true; }catch(e){ console.error(e); if(e&&e.code==='invalid_argument') S.readOnly=true; toast(errText(e),'error'); return false; } }
@@ -4182,7 +4183,7 @@ function recompute(){
 function renderEmpty(){ $('#main').innerHTML = `<div class="empty"><h2>No portfolio data yet</h2><p>Nothing has been added to this portfolio yet.</p></div>`; $('#period').innerHTML=''; }
 
 // Live or saved copy: on the site, lock.js sets #pd-offline data-state to 'online' | 'offline' | 'saved'; 'offline' and 'saved'
-// mean the figures are the copy saved on this device, so nothing is labelled live. The Claude page has no #pd-offline: live.
+// mean the figures are the copy saved on this device, so nothing is labelled live.
 function pricesLive(){ const el=document.getElementById('pd-offline'); const st=el&&el.dataset.state; return !(st==='offline'||st==='saved'); }
 const livePill = () => pricesLive() ? '<span class="pill prov" data-testid="live-pill" data-live="1">Live</span>' : '<span class="pill stale" data-testid="live-pill" data-live="0" title="From the copy saved on this device, not live prices">Saved</span>';
 const liveParen = () => pricesLive() ? ' (live)' : ' (saved)';
@@ -4250,7 +4251,7 @@ function renderTape(){
     item('s','EGX70 EWI',ix.EGX70EWI&&ix.EGX70EWI.close,ix.EGX70EWI&&ix.EGX70EWI.chg,1)+
     item('f','USD/EGP',m.fx&&m.fx.USDEGP&&m.fx.USDEGP.price,m.fx&&m.fx.USDEGP&&m.fx.USDEGP.chg,2)+
     item('g','GOLD 24K /g',m.gold&&m.gold.gram24kEgp,null,0);
-  $('#feed').innerHTML = `<span class="dot ${fs.cls}" data-testid="feed-dot" data-live="${pricesLive()?1:0}"></span><span class="muted">${esc(fs.text)}</span>${REFRESH_TRIGGER_ID?` <button class="btn sm" id="refresh-prices" data-testid="refresh-prices" title="Fetch the latest prices, EGX30 Capped, USD/EGP and gold now">Refresh now</button>`:''}`;
+  $('#feed').innerHTML = `<span class="dot ${fs.cls}" data-testid="feed-dot" data-live="${pricesLive()?1:0}"></span><span class="muted">${esc(fs.text)}</span>${window.pdRefreshPrices?` <button class="btn sm" id="refresh-prices" data-testid="refresh-prices" title="Fetch the latest prices, EGX30 Capped, USD/EGP and gold now">Refresh now</button>`:''}`;
 }
 
 // ---------- period selector ----------
@@ -4360,7 +4361,7 @@ function unverifiedRows(){ const R=S.R; const tx=allTx(); const byId=new Map(tx.
 // Trading cost of one ledger row (engine r.cost; the same rule here for an older engine): commission = |amount| − price × shares
 function costOf(r){ if(r.cost!=null) return r.cost; if((r.t!=='Buy'&&r.t!=='Sell')||r.acc==='MF'||r.p==null||r.q==null) return 0; const g=r.p*r.q; const c=r.t==='Buy'?Math.abs(r.amt)-g:g-r.amt; return Math.max(0,Math.round(c*100)/100); }
 // ---------- freshness of the three scheduled jobs (Cairo time; EGX sessions run Sunday to Thursday) ----------
-const JOB = { marketCutoffMin: 16*60, syncHours: 22 };   // market job 3:10 PM → counted from 4 PM; inbox job 6:17 PM + 10:17 PM → longest normal gap 20 h
+const JOB = { marketCutoffMin: 16*60, syncHours: 22 };   // market job 3:40 PM → counted from 4 PM; inbox checks 4:15, 6:15 and 11 PM → longest normal gap 17 h
 function cairoParts(t){ const p=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'Africa/Cairo',weekday:'short',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date(t)).map(x=>[x.type,x.value])); return {wd:p.weekday, day:`${p.year}-${p.month}-${p.day}`, min:(+p.hour%24)*60+(+p.minute)}; }
 const isSession = (day) => { const [y,m,d]=day.split('-').map(Number); return new Date(Date.UTC(y,m-1,d)).getUTCDay()<=4; };   // Sun(0)…Thu(4)
 const dayBefore = (day) => { const [y,m,d]=day.split('-').map(Number); return new Date(Date.UTC(y,m-1,d-1)).toISOString().slice(0,10); };
@@ -4388,7 +4389,7 @@ function vOverview(){
   const maxW=Math.max(...R.pos.open.map(r=>r.weight),0.0001);
   const noCpi=rows.filter(r=>r.cpi==null).map(r=>M(r.month));
   const ht=headTwr(st), cc=cashCum(rows);
-  return `${window.pdFriendsPanel ? window.pdFriendsPanel() : ''}${statementBanner()}
+  return `${window.pdFriendsPanel ? window.pdFriendsPanel() : ''}
   <div class="kpis">
     <div data-testid="total-value-tile" data-live="${pricesLive()?1:0}" style="display:contents">${pricesLive() ? kpi('Total value · live', egp(total), `<span class="${sgn(dp.pl)}">${dp.pct!=null?`${dp.pl>=0?'+':'−'}${egp(Math.abs(dp.pl))} EGP last session (${pct(dp.pct,2)})`:'No session change yet'}</span>`,'hero','EGP')
       : kpi('Total value · saved copy', egp(total), `the copy saved on this device, not live prices${dp.pct!=null?` · <span class="${sgn(dp.pl)}">${dp.pl>=0?'+':'−'}${egp(Math.abs(dp.pl))} EGP</span> in its last session`:''}`,'','EGP')}</div>
@@ -4750,7 +4751,7 @@ function vInputs(){
   const cur=PE.monthOf(R.today);
   const mk=(m)=>S.marks[m]||{};
   const ro=S.readOnly;
-  // A cell of the marks grid. On the Claude page it is an input; on the published site it is plain text (nothing there can be edited).
+  // A cell of the marks grid: an input while editing is on, plain text otherwise.
   // For an estimate row (closed month, no statement yet) the ESTIMATE is what shows: as the value on the site, as the placeholder of
   // an empty input on the page, with any stored placeholder number kept in the tooltip so the row cannot be misread as a real mark.
   const cell=(m,f,v,step='any',ph,stored)=>{
@@ -4881,20 +4882,9 @@ function vChecks(){
 // =====================================================================
 // Analytics pages: daily valuation, attribution, income, factsheet, statements
 // =====================================================================
-const GMAIL = 'Gmail', REMOTE = 'Claude Code Remote';
-// ---------- portfolio switcher (the page title): both pages belong to the same Claude account ----------
-const PORTFOLIOS = [
-  { id: 'khaled', name: 'Khaled Investment Portfolio', url: 'https://claude.ai/artifact/PNjUN5wQkvgtZDcTML1HFe' },
-  { id: 'yassin', name: 'Yassin Investment Portfolio', url: 'https://claude.ai/artifact/6VL6yHnoUHkNqP1PdzRazc' },
-];
-function currentPortfolioId(){ if(window.pdCurrentId) return window.pdCurrentId(); return S.settings.portfolioId || (PORTFOLIOS.find(p=>p.name===S.settings.name)||{}).id || null; }
-function renderSwitch(){ if(window.pdHub){ window.pdHub($('#pf-menu')); return; }
-  const cur = currentPortfolioId(), m = $('#pf-menu'); if(!m) return;
-  m.innerHTML = (window.pdPortfolioList ? window.pdPortfolioList() : PORTFOLIOS).map(p=>{ const isCur = p.id===cur;
-    if(window.pdSelect) return `<button type="button" data-pid="${p.id}" class="${isCur?'cur':''}" data-testid="switch-${p.id}">${esc(p.name)}<small>${isCur?'open now':'switch on this site'}</small></button>`;
-    return isCur ? `<button type="button" class="cur" data-testid="switch-${p.id}">${esc(p.name)}<small>this page</small></button>`
-                 : `<a href="${p.url}" data-testid="switch-${p.id}">${esc(p.name)}<small>opens it</small></a>`; }).join('') + (window.pdSwitch ? '<button type="button" data-testid="switch-other" onclick="pdSwitch()">Another portfolio<small>sign in, or open one with a setup key</small></button>' : '');
-}
+// ---------- the portfolio title menu: on the site it is the friends hub (site/lock.js pdHub) ----------
+function currentPortfolioId(){ return (window.pdCurrentId && window.pdCurrentId()) || S.settings.portfolioId || null; }
+function renderSwitch(){ const m = $('#pf-menu'); if(m && window.pdHub) window.pdHub(m); }
 document.addEventListener('click', e=>{
   const menu = $('#pf-menu'); if(!menu) return;
   if(e.target.closest('#pf-name')){ renderSwitch(); menu.hidden = !menu.hidden; $('#pf-name').setAttribute('aria-expanded', String(!menu.hidden)); return; }
@@ -5331,62 +5321,25 @@ function vFactsheet(){
     <div class="row"><label class="ink2" style="font-size:12px">Month <select id="fs-month" data-testid="factsheet-month">${months.map(m=>`<option value="${m}" ${m===S.fsMonth?'selected':''}>${M(m)}${S.R.months.find(r=>r.month===m).live?liveParen():''}</option>`).join('')}</select></label>
     <button class="btn" id="fs-dl" data-testid="factsheet-download">Download HTML</button>
     ${window.pdDownloadExport?`<button class="btn" id="fs-xlsx" data-testid="factsheet-excel" data-month="${S.fsMonth}">Download Excel</button>`:''}${window.pdDownloadExport&&ex&&ex.pdf?`<button class="btn" id="fs-pdf" data-testid="factsheet-pdf" data-month="${S.fsMonth}">Download PDF</button>`:''}
-    <button class="btn primary" id="fs-email" data-testid="factsheet-email" ${email?'':'disabled'} title="${email?'Send to '+esc(email):'Set an email address under Settings → Inputs &amp; settings'}">Email to me</button></div></div>
-    <p class="note" style="margin:0 0 14px" data-testid="factsheet-note">${S.readOnly?`${S.sync&&email?`Emailed to <span class="mono">${esc(email)}</span> automatically after each monthly statement is posted. `:''}Download it here any time.`:email?`Sends from your Gmail to <span class="mono">${esc(email)}</span>. Posting a monthly statement offers to send it automatically.`:'Add an email address under Settings → Inputs &amp; settings to send factsheets.'}</p>
+    </div></div>
+    <p class="note" style="margin:0 0 14px" data-testid="factsheet-note">${S.sync&&email?`Emailed to <span class="mono">${esc(email)}</span> automatically, with the Excel workbook, after each monthly statement is posted. `:''}Download it here any time.</p>
     <div style="overflow-x:auto;background:var(--surface-2);border-radius:10px;padding:14px 8px" data-testid="factsheet-preview">${factsheetHTML(F)}</div></div>`;
 }
-async function emailFactsheet(m, quiet){
-  const mcp = await window.claude?.use?.('mcp'); const to = S.settings.factsheetEmail;
-  if(!mcp || !to){ if(!quiet) toast('Email is not available here. Set an address under Settings → Inputs & settings and allow Gmail when asked.','error'); return false; }
-  const F = factsheetData(m);
-  const html = `<!doctype html><html><body style="margin:0;padding:16px;background:#EDF2EF">${factsheetHTML(F)}</body></html>`;
-  const text = `${S.settings.name} — ${M(m)}\nValue ${egp(F.value)} EGP\nMonth ${pct(F.row&&F.row.ret)} vs EGX30 Capped ${pct(F.row&&F.row.bench)}\nYTD ${pct(F.tr[3].p)} · Since inception ${pct(F.st.twr)}`;
-  try{ await mcp.callTool(GMAIL,'send_message',{to:[to], subject:`${S.settings.name} · factsheet ${M(m)}`, htmlBody:html, body:text},{cache:false}); toast(`Factsheet for ${M(m)} sent to ${to}`); return true; }
-  catch(e){ toast('Could not send the email: '+(e.message||e.code),'error'); return false; }
-}
+// tools/factsheet.js renders the month-end factsheet with this page's own code, headless: the HTML, and the headline figures
+// for the month-end email (src/jobs/emails.py monthend)
+window.pdFactsheet = (m) => factsheetHTML(factsheetData(m));
+window.pdFactsheetSummary = (m) => { const F = factsheetData(m), st = F.st || {}, c = (F.sectors || []).find((x) => x.s === 'Cash & Savings');
+  return { name: S.settings.name, month: m, live: !!F.live, inception: S.settings.inception, value: F.value,
+    monthRet: F.row ? F.row.ret : null, monthBench: F.row ? F.row.bench : null, ytd: F.tr && F.tr[3] ? F.tr[3].p : null, ytdBench: F.tr && F.tr[3] ? F.tr[3].b : null,
+    si: st.twr, siBench: st.benchTwr, annualized: st.annualized, top: (F.top || []).slice(0, 5).map((r) => ({ symbol: r.symbol || null, name: r.name, w: r.w })),
+    cashW: c ? c.p : 0, income: F.incM }; };
 
-// ---------- Statements (Gmail → review → post) ----------
-function payloadOf(res){ let p = res && (res.payload !== undefined ? res.payload : res); if(typeof p==='string'){ try{ p=JSON.parse(p); }catch(e){} }
-  if(p && Array.isArray(p.content)){ const t=p.content.find(c=>c.type==='text'); if(t){ try{ p=JSON.parse(t.text); }catch(e){} } }
-  if(p && p.structuredContent) p=p.structuredContent; return p; }
+// ---------- Statements (statement PDFs chosen on this device → review → post) ----------
 let pdfjsP = null;
+// pdf.js reads the statement PDFs: the site serves its own copy (vendor/, 3.11.174)
 function loadPdfjs(){ if(!pdfjsP) pdfjsP = new Promise((res,rej)=>{ const add=(src,cb)=>{ const s=document.createElement('script'); s.src=src; s.onload=cb; s.onerror=()=>{ pdfjsP=null; rej(new Error('Could not load the PDF reader')); }; document.head.appendChild(s); };
   add('vendor/pdf.worker.min.js', ()=>add('vendor/pdf.min.js', ()=>res(window.pdfjsLib))); }); return pdfjsP; }
-const MONNUM={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
-async function scanGmail(auto){
-  const mcp = await window.claude?.use?.('mcp'); if(!mcp){ if(!auto) toast('Gmail is not available in this view.','error'); return; }
-  S.stmt.busy='Searching Gmail…'; if(S.tab==='settings') renderTab(true);
-  try{
-    const res = await mcp.callTool(GMAIL,'search_threads',{query:'from:no-reply@system.thndr.app subject:E-statement -subject:"US Market"', pageSize:50},{cache:false});
-    const p = payloadOf(res); const best={};
-    ((p&&p.threads)||[]).forEach(th=>(th.messages||[]).forEach(msg=>{ const sm=(msg.subject||'').match(/E-statement\s*-\s*([A-Za-z]{3})\w*\s+(\d{4})/i); if(!sm) return;
-      const month=`${sm[2]}-${String(MONNUM[sm[1].toLowerCase()]).padStart(2,'0')}`; const monthly=/monthly/i.test(msg.subject);
-      const c={month, id:msg.id, subject:msg.subject, date:msg.date, monthly}; const b=best[month];
-      if(!b || (monthly && !b.monthly) || (monthly===b.monthly && c.date>b.date)) best[month]=c; }));
-    S.stmt.list = Object.values(best).sort((a,b)=>b.month.localeCompare(a.month)); S.stmt.scanned=new Date().toISOString(); S.stmt.error=null;
-  }catch(e){ S.stmt.error = 'Gmail search failed: '+(e.message||e.code); }
-  S.stmt.busy=false; if(S.tab==='settings'||S.tab==='overview') renderTab(true);
-}
-async function reviewStatement(item){
-  const mcp = await window.claude?.use?.('mcp'); if(!mcp) return;
-  S.stmt.busy=`Reading the ${M(item.month)} statement…`; S.stmt.review=null; renderTab(true);
-  try{
-    const [pdfjs, res] = await Promise.all([loadPdfjs(), mcp.callTool(GMAIL,'get_message',{messageId:item.id, messageFormat:'RAW'},{cache:false})]);
-    const p = payloadOf(res); if(!p || !p.raw) throw new Error('the email came back without its attachments');
-    const att = TS.attachments(p.raw); if(!att.length) throw new Error('no PDF attachments found');
-    const docs=[]; for(const a of att) docs.push({filename:a.filename, lines: await TS.pdfLines(pdfjs, a.bytes)});
-    const own = TS.ownerCheck(docs, S.settings); if(own.error) throw new Error(`refused — this statement ${own.error}. Only this portfolio's own Thndr documents are ever imported.`);
-    const st = TS.parseStatement(docs); if(!st.cash) throw new Error('could not find the account statement among the PDFs');
-    const rc = TS.reconcile(st, allTx(), S.assets, S.marks);
-    rc.item=item; rc.files=att.map(a=>a.filename); rc.accountCode=own.code;
-    rc.pick = rc.fresh.map(()=>true); rc.use = rc.conflicts.map(()=>false);
-    rc.applyMarks = !!(rc.markProposal && rc.markProposal.securities!=null);
-    S.stmt.review = rc; S.stmt.error=null;
-    if(IMPORT_DEBUG) console.debug('[statement]', rc);
-  }catch(e){ S.stmt.error = `Could not read the ${M(item.month)} statement: ${e.message||e}`; }
-  S.stmt.busy=false; renderTab(true);
-}
-// The same review from statement PDFs chosen on this device (the live site has no Gmail; any portfolio being edited). A
+// A review from statement PDFs chosen on this device (any portfolio being edited). A
 // portfolio that does not know its Thndr account yet asks once to confirm the account the PDFs name, then records it, so
 // from then on only that account's documents are accepted.
 async function reviewUpload(files){
@@ -5418,20 +5371,15 @@ async function reviewUpload(files){
   S.stmt.busy=false; renderTab(true);
 }
 document.addEventListener('change', e=>{ if(e.target && e.target.id==='stmt-files'){ const f=[...(e.target.files||[])]; e.target.value=''; if(f.length) reviewUpload(f); } });
-const IMPORT_DEBUG = false;
 function vStatements(){
-  const T=S.stmt, imp=S.imports||{};
-  const latest = T.list && T.list.find(x=>x.monthly);
-  const rv=T.review;
-  const row=(x)=>{ const done=imp[x.month]; const part=done&&done.fullMonth===false; return `<tr><td><b>${M(x.month)}</b></td><td class="ink2">${x.monthly?'Monthly statement':'Requested statement'} · ${dfmt((x.date||'').slice(0,10))}</td><td>${done?`<span class="pill ${part?'man':'win'}" title="${part?'A part-month statement was posted; the month-end still needs the monthly statement':''}">${part?'Part posted':'Posted'} ${dfmt((done.postedAt||'').slice(0,10))}</span>`:x.monthly?'<span class="pill prov">Not posted</span>':'<span class="pill man">Not posted</span>'}</td><td><button class="btn sm" data-review="${x.month}" data-testid="review-statement">${done?'Review again':'Review'}</button></td></tr>`; };
-  // The inbox job only exists for a portfolio that has a sync/state document; the other portfolio posts statements by hand.
+  const T=S.stmt, rv=T.review;
+  // The inbox job only exists for a portfolio that has a sync/state document; any other portfolio posts statements by hand.
   const hasSync = !!S.sync;
   return `
-  <div class="panel"><div class="phead"><div><h2>Thndr statements</h2><div class="sub" data-testid="statements-intro">${hasSync?`An automatic job reads every new Thndr email twice a day. Trade invoices are booked straight away; any statement you request replaces the ledger for the dates it covers and updates your cash; the monthly statement with its positions snapshot rewrites the whole month and sets the month-end, then the factsheet is emailed to you. Nothing is saved unless the corrected month reconciles exactly (cash to the piaster, every share count); otherwise the email is held and sent to you for review here.`:`No automatic inbox sync is set up for this portfolio. Statements are posted by hand from this page (Check Gmail → Review → Post).`}</div></div>
-    ${S.readOnly?'':`<label class="btn" data-testid="statement-upload-label" ${T.busy?'aria-disabled="true"':''}>Upload statement PDFs<input type="file" id="stmt-files" data-testid="statement-upload" accept="application/pdf,.pdf" multiple hidden ${T.busy?'disabled':''}></label>`}
-    <button class="btn primary" id="scan-gmail" data-testid="scan-gmail" ${T.busy?'disabled':''}>${T.list?'Check Gmail again':'Check Gmail'}</button></div>
+  <div class="panel"><div class="phead"><div><h2>Thndr statements</h2><div class="sub" data-testid="statements-intro">${hasSync?`An automatic job reads every new Thndr email three times a day (4:15 pm, 6:15 pm and 11 pm Cairo). Trade invoices are booked straight away; any statement you request replaces the ledger for the dates it covers and updates your cash; the monthly statement with its positions snapshot rewrites the whole month and sets the month-end, then the month-end report is emailed to you. Nothing is saved unless the corrected month reconciles exactly (cash to the piaster, every share count); otherwise the email is held and sent to you for review here.`:`No automatic inbox sync is set up for this portfolio. Statements are posted by hand: turn on editing, upload the statement PDFs, review, post.`}</div></div>
+    ${S.readOnly?'':`<label class="btn" data-testid="statement-upload-label" ${T.busy?'aria-disabled="true"':''}>Upload statement PDFs<input type="file" id="stmt-files" data-testid="statement-upload" accept="application/pdf,.pdf" multiple hidden ${T.busy?'disabled':''}></label>`}</div>
     ${T.busy?`<p class="note">${esc(T.busy)}</p>`:''}${T.error?`<div class="banner" style="background:var(--neg-bg);color:var(--neg)">${esc(T.error)}</div>`:''}
-    ${T.list? (T.list.length? `<div class="tbl"><table data-testid="statements-table"><thead><tr><th>Month</th><th>Email</th><th>Status</th><th></th></tr></thead><tbody>${T.list.map(row).join('')}</tbody></table></div>` : '<p class="muted">No Thndr statement emails found.</p>') : S.readOnly?'':`<p class="muted">Thndr emails the monthly statement around the 3rd of each month with three PDFs: the account statement, the fund account, and a month-end positions snapshot. The first check asks your permission to read Gmail.</p>`}
+    ${S.readOnly?'':`<p class="muted">Thndr emails the monthly statement around the 3rd of each month with three PDFs: the account statement, the fund account, and a month-end positions snapshot. Upload all three.</p>`}
   </div>
   ${syncHistory()}
   ${rv? reviewPanel(rv) : ''}`;
@@ -5483,7 +5431,7 @@ function reviewPanel(rv){
       <dt>Securities (${mp.fundsFromLedger?'snapshot stocks + funds at last NAV':'positions snapshot'})</dt><dd>${mp.securities!=null?egp(mp.securities,2):'No snapshot in this email'} <span class="note">${md.securities!=null?`now ${egp(md.current.securities,2)} · diff ${egp(md.securities,2)}`:''}</span></dd></dl>
       ${mp.securities!=null?`<label style="display:flex;gap:8px;margin-top:8px"><input type="checkbox" id="apply-marks" ${rv.applyMarks?'checked':''}> Set ${M(rv.month)} month-end marks from the statement and mark the month confirmed</label>`:''}`:''}
     <p class="note" style="margin-top:14px" data-testid="review-outcome">${postOutcome(rv).text}</p>
-    <div class="row" style="margin-top:18px;justify-content:space-between"><label style="display:flex;gap:8px" data-testid="post-email-label"><input type="checkbox" id="post-email" ${S.settings.factsheetEmail&&rv.fullMonth?'checked':''} ${S.settings.factsheetEmail?'':'disabled'}> Email me the ${M(rv.month)} factsheet afterwards</label>
+    <div class="row" style="margin-top:18px;justify-content:flex-end">
       <div class="row"><button class="btn" id="review-close">Close</button><button class="btn primary" id="post-statement" data-testid="post-statement" ${S.readOnly?'disabled':''}>Post to portfolio</button></div></div>
   </div>`;
 }
@@ -5523,18 +5471,9 @@ async function postStatement(){
   // fullMonth is true only for a full-calendar-month statement with a snapshot whose marks were applied in this post; a requested
   // (part-month) statement never marks the month final, so the monthly statement is still expected.
   if(ok) ok = await save(()=>S.db.doc('imports/'+rv.month).set({month:rv.month, messageId:rv.item.id, subject:rv.item.subject, postedAt:new Date().toISOString(), added:add.length, replaced:repl.length, marks:applyMarks, fullMonth:outcome.final, statementFrom:rv.from||null, statementTo:rv.to||null}));
-  if(ok){ toast(`${M(rv.month)} posted: ${add.length} added, ${repl.length} replaced${applyMarks?', marks updated':''}`); const wantEmail=$('#post-email')&&$('#post-email').checked; const m=rv.month; S.stmt.review=null; renderTab(true); if(wantEmail) setTimeout(()=>emailFactsheet(m), 1500); }
+  if(ok){ toast(`${M(rv.month)} posted: ${add.length} added, ${repl.length} replaced${applyMarks?', marks updated':''}`); S.stmt.review=null; renderTab(true); }
   else if(btn){ btn.disabled=false; btn.textContent='Post to portfolio'; }
 }
-function statementBanner(){
-  const T=S.stmt; if(!T.list) return '';
-  const imp=S.imports||{}; const m = T.list.find(x=>x.monthly && !(imp[x.month] && imp[x.month].fullMonth!==false));   // a part-month post does not close the month
-  return m ? `<div class="banner" data-testid="statement-banner"><b>Your ${M(m.month)} Thndr statement is ready to post.</b><span>Review it against the ledger and update the month-end marks.</span><button class="btn sm" data-go="statements">Review</button></div>` : '';
-}
-async function autoScan(){
-  try{ const perm = await window.claude?.use?.('permissions'); if(!perm) return; const st = await perm.state('mcp'); if(st==='granted') scanGmail(true); }catch(e){}
-}
-
 // ---------- Risk explained: the down-month analysis, done for you (no rules, just what happened and why) ----------
 function betaOf(pb, sym){
   const from = PE.addMonths(PE.cairoToday().slice(0,7), -12) + '-01'; const days = pb.days.filter(d=>d>=from);
@@ -5951,15 +5890,12 @@ document.addEventListener('click', async e=>{
   if(e.target.id==='dl-monthly'){ const st=S.R.stats; const rows=[['Month','Opening','NetFlow','WeightedFlow','Dividends','MonthEndValue','Return','EGX30Capped','Alpha','CumReturn','CumBench','Drawdown','USDReturn','RealReturn','Status']].concat(st.rows.map(r=>[r.month,r.opening,r.netFlow,r.weightedFlow,r.dividends,r.value,r.ret,r.bench,r.alpha,r.pCum,r.pBench,r.dd,r.usdRet,r.realRet,r.live?'live':r.estimate?'estimate':r.provisional?'provisional':'confirmed'])); download('portfolio-monthly.csv', toCsv(rows)); return; }
   if(e.target.id==='dl-backup'){ download('portfolio-backup.json', JSON.stringify({exported:new Date().toISOString(), ...dataset(), history:S.history},null,1)); return; }
   if(e.target.id==='refresh-prices'){ refreshNow(e.target); return; }
-  if(e.target.id==='scan-gmail'){ scanGmail(false); return; }
-  const rvb=e.target.closest('[data-review]'); if(rvb){ const it=S.stmt.list.find(x=>x.month===rvb.dataset.review); if(it) reviewStatement(it); return; }
   if(e.target.id==='review-close'){ S.stmt.review=null; renderTab(true); return; }
   if(e.target.id==='retry-held'){ retryHeld(e.target); return; }
   if(e.target.id==='post-statement'){ postStatement(); return; }
   if((e.target.id==='fs-xlsx'||e.target.id==='fs-pdf') && window.pdExportsNote && window.pdExportsNote(M(e.target.dataset.month))){ toast(window.pdExportsNote(M(e.target.dataset.month))); return; }
   if(e.target.id==='fs-xlsx'){ const b=e.target, m=b.dataset.month; b.disabled=true; b.textContent='Preparing…'; try{ const list=await window.pdExports(); if(!list.some(x=>x.month===m)){ const have=list.map(x=>M(x.month)).join(', '); toast(`No Excel workbook for ${M(m)} yet. Workbooks are published with each monthly statement${have?` (available: ${have})`:''}.`,'error'); } else { await window.pdDownloadExport(m); toast(`Excel workbook for ${M(m)} saved`); } }catch(err){ toast('Could not download the workbook: '+(err.message||err),'error'); } b.disabled=false; b.textContent='Download Excel'; return; }
   if(e.target.id==='fs-pdf'){ const b=e.target, m=b.dataset.month; b.disabled=true; b.textContent='Preparing…'; try{ await window.pdDownloadExport(m,'pdf'); toast(`PDF factsheet for ${M(m)} saved`); }catch(err){ toast('Could not download the PDF: '+(err.message||err),'error'); } b.disabled=false; b.textContent='Download PDF'; return; }
-  if(e.target.id==='fs-email'){ e.target.disabled=true; await emailFactsheet(S.fsMonth); e.target.disabled=false; return; }
   if(e.target.id==='fs-dl'){ const F=factsheetData(S.fsMonth); download(`factsheet-${S.fsMonth}.html`, `<!doctype html><html><head><meta charset="utf-8"><title>${esc(S.settings.name)} factsheet ${M(S.fsMonth)}</title></head><body style="margin:0;padding:16px;background:#EDF2EF">${factsheetHTML(F)}</body></html>`); return; }
 });
 document.addEventListener('input', e=>{ if(e.target.matches('.grid-in input')) e.target.classList.add('dirty');
@@ -5999,17 +5935,17 @@ async function addToWatchlist(raw){
 // A cell starting with = + - @ is read as a formula by Excel and Sheets: a leading ' keeps it text. Plain numbers ("-8905.12") stay numbers.
 function csvCell(v){ let s=v==null?'':String(v); if(/^[=+\-@]/.test(s) && !(typeof v==='number' || /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(s))) s="'"+s; return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s; }
 function toCsv(rows){ return rows.map(r=>r.map(csvCell).join(',')).join('\n'); }
-async function download(filename, data){ const dl=await window.claude?.use?.('downloads'); if(!dl){ toast('Downloads are not available in this view','error'); return; }
+async function download(filename, data){ const dl=await window.pdHost?.use?.('downloads'); if(!dl){ toast('Downloads are not available in this view','error'); return; }
   try{ await dl.save({filename, data}); }catch(e){ if(e&&e.code!=='declined') toast('Download failed: '+(e.message||e.code),'error'); } }
-async function refreshNow(btn){ if(window.pdRefreshPrices) return window.pdRefreshPrices(btn, toast); const mcp=await window.claude?.use?.('mcp'); if(!mcp){ toast('Refreshing from the page is not available here. Prices update automatically after each session.','error'); return; }
-  btn.disabled=true; btn.textContent='Starting…';
-  try{ await mcp.callTool('Claude Code Remote','fire_trigger',{trigger_id:REFRESH_TRIGGER_ID},{cache:false}); toast('Price refresh started. New prices arrive in about two minutes.'); btn.textContent='Refresh started'; }
-  catch(e){ toast('Could not start the refresh: '+(e.message||e.code),'error'); btn.disabled=false; btn.textContent='Refresh now'; } }
+// "Refresh now": the site layer (site/lock.js pdRefreshPrices) fetches live prices; without it prices come with each daily update
+async function refreshNow(btn){ if(window.pdRefreshPrices) return window.pdRefreshPrices(btn, toast); toast('Prices update automatically after each session.','error'); }
 
 // ---------- boot ----------
 (async function boot(){
-  const db = await (window.claude && window.claude.use ? window.claude.use('db') : Promise.resolve(null));
-  if(!db){ $('#main').innerHTML=`<div class="empty"><h2>Open this page in Claude to see your portfolio</h2><p>Your portfolio data lives in this page's private database, which only loads inside the Claude viewer.</p></div>`; $('#tape').innerHTML='<span class="muted">Market data unavailable in this view</span>'; return; }
+  // window.pdHost: the services the page runs on (site/lock.js; tools/factsheet.js when rendering headless): 'db' = the
+  // portfolio's documents, 'downloads' = saving a file
+  const db = await (window.pdHost && window.pdHost.use ? window.pdHost.use('db') : Promise.resolve(null));
+  if(!db){ $('#main').innerHTML=`<div class="empty"><h2>The portfolio is not open</h2><p>Open the site and unlock a portfolio to see it.</p></div>`; $('#tape').innerHTML='<span class="muted">Market data unavailable in this view</span>'; return; }
   S.db=db;
   const onErr=(e)=>{ console.error(e); toast('Lost connection to the portfolio database. Reload the page.','error'); };
   db.doc('portfolio/settings').onSnapshot(s=>{ S.settings=s.exists?s.data():null; S.ready.settings=true; schedule(); }, onErr);
@@ -6021,7 +5957,6 @@ async function refreshNow(btn){ if(window.pdRefreshPrices) return window.pdRefre
   db.doc('bench/egx30').onSnapshot(s=>{ S.bench=s.exists?s.data():null; schedule(); }, onErr);
   db.collection('imports').onSnapshot(q=>{ const o={}; q.docs.forEach(d=>{ o[d.id]=d.data(); }); S.imports=o; schedule(); }, onErr);
   db.doc('sync/state').onSnapshot(s=>{ S.sync=s.exists?s.data():null; schedule(); }, onErr);
-  setTimeout(autoScan, 2500);
 })();
 })();
 </script>
