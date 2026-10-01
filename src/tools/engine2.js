@@ -442,6 +442,89 @@
     return { items, drawdown, errors };
   }
 
-  const api = { headsUp, drawdownCheck, heldStocks, priceBook, makePricer, daily, dailyStats, dailyTwr, capWeights, benchWeights, holdingsAt, estimateMarks, attribution, activeWeights, tradeChecks, income, trailing, calendar, TRADING_DAYS, TRADING_NOTE };
+  // ---------- trading habits (Analysis → Your trading) ----------
+  // How the trades went, by habit. trips: the engine's closed round trips of the period (pos.trips, cash-like funds already
+  // left out by the caller). o: { open (pos.open, cash-like left out), ledger (for the sale prices), pb (price book), quotes
+  // (market.quotes, today's prices), today }. Returns plain numbers, no text: the page writes the sentences.
+  //   per trade: n, wins, losses, winRate, pl, expectancy (P/L per trade), avgWin, avgLoss, holdWin / holdLoss (days)
+  //   byHold / bySector / bySize (thirds by money put in, from 6 trades) / byMonth (month sold): n, wins, winRate, pl, avgRoi
+  //   streaks: longest run of wins and of losses, and the current run (by sale date)
+  //   after: each sold stock 30 days after the sale (or up to today when 30 days have not passed): your average sale price,
+  //          the price then, the move, and what the shares you sold gained or lost since (amount); avg30 / amount30 over
+  //          the trips with the full 30 days; indexMove / avgIndex30: EGX30 Capped over the same days
+  //   repeat: stocks traded more than once in the period; open: open positions split into winners and losers
+  //   bigLosses: the 3 biggest losses and their share of all losses
+  const HOLD_BUCKETS = [['week', 'Up to a week', 0, 7], ['month', '1 to 4 weeks', 8, 30], ['quarter', '1 to 3 months', 31, 90], ['long', 'Over 3 months', 91, Infinity]];
+  function tradingHabits(trips, o) {
+    o = o || {};
+    trips = (trips || []).filter((t) => t && t.lastSell);
+    const group = (list) => {
+      const w = list.filter((t) => t.total > 0);
+      return { n: list.length, wins: w.length, winRate: list.length ? w.length / list.length : null, pl: sum(list.map((t) => t.total)),
+        avgRoi: list.length ? mean(list.map((t) => t.roi)) : null };
+    };
+    const wins = trips.filter((t) => t.total > 0), losses = trips.filter((t) => t.total <= 0);
+    const out = { ...group(trips), losses: losses.length,
+      expectancy: trips.length ? sum(trips.map((t) => t.total)) / trips.length : null,
+      avgWin: wins.length ? mean(wins.map((t) => t.total)) : null, avgLoss: losses.length ? mean(losses.map((t) => t.total)) : null,
+      holdWin: wins.length ? mean(wins.map((t) => t.holdDays)) : null, holdLoss: losses.length ? mean(losses.map((t) => t.holdDays)) : null };
+    out.byHold = HOLD_BUCKETS.map(([key, label, lo, hi]) => ({ key, label, lo, hi, ...group(trips.filter((t) => t.holdDays >= lo && t.holdDays <= hi)) }));
+    const by = (keyOf) => { const m = {}; trips.forEach((t) => { (m[keyOf(t)] || (m[keyOf(t)] = [])).push(t); }); return m; };
+    const sec = by((t) => t.sector || 'Unclassified');
+    out.bySector = Object.keys(sec).map((k) => ({ sector: k, ...group(sec[k]) })).sort((a, b) => b.pl - a.pl);
+    out.bySize = null;
+    if (trips.length >= 6) {
+      const sorted = trips.slice().sort((a, b) => a.buyCost - b.buyCost), n = sorted.length, c1 = Math.floor(n / 3), c2 = Math.floor((2 * n) / 3);
+      out.bySize = [['Smallest third', sorted.slice(0, c1)], ['Middle third', sorted.slice(c1, c2)], ['Largest third', sorted.slice(c2)]]
+        .map(([label, l]) => ({ label, lo: l[0].buyCost, hi: l[l.length - 1].buyCost, ...group(l) }));
+    }
+    const mon = by((t) => monthOf(t.lastSell));
+    out.byMonth = Object.keys(mon).sort().map((m) => ({ month: m, ...group(mon[m]) }));
+    // streaks, oldest sale first
+    const chrono = trips.slice().sort((a, b) => (a.lastSell < b.lastSell ? -1 : a.lastSell > b.lastSell ? 1 : a.trip - b.trip));
+    let run = 0, kind = null, best = { win: 0, loss: 0 };
+    chrono.forEach((t) => { const k = t.total > 0 ? 'win' : 'loss'; run = k === kind ? run + 1 : 1; kind = k; if (run > best[k]) best[k] = run; });
+    out.streaks = { win: best.win, loss: best.loss, current: kind ? { kind, n: run } : null };
+    // after the sale
+    const pb = o.pb, quotes = o.quotes || {}, ledger = o.ledger || [], today = o.today || PE.cairoToday();
+    const dayStr = (n) => new Date(n * 86400000).toISOString().slice(0, 10);
+    out.after = { rows: [], avg30: null, avgIndex30: null, n30: 0, amount30: null };
+    trips.forEach((t) => {
+      if (!t.symbol || !(t.sold > 0)) return;
+      const sells = ledger.filter((x) => x.t === 'Sell' && x.a === t.name && x.d >= t.firstBuy && x.d <= t.lastSell && x.p > 0 && x.q > 0);
+      const q = sum(sells.map((x) => x.q)), sellPx = q ? sum(sells.map((x) => x.p * x.q)) / q : t.proceeds / t.sold;
+      const d30 = dayStr(dayNum(t.lastSell) + 30), full = !!(pb && pb.last && d30 <= pb.last);
+      let px = null, pxDate = null;
+      if (full) { px = pb.at(t.symbol, d30); pxDate = pb.lastDayOnOrBefore(d30); }
+      else { const qt = quotes[t.symbol]; if (qt && qt.price > 0) { px = qt.price; pxDate = qt.date || today; } else if (pb && pb.last) { px = pb.at(t.symbol, pb.last); pxDate = pb.last; } }
+      if (!(px > 0) || !(sellPx > 0)) return;
+      // the index over the same days, so a market-wide move is not read as a good or bad exit
+      const i0 = pb && pb.at('EGX30CAPPED', t.lastSell), i1 = pb && (full ? pb.at('EGX30CAPPED', d30) : pb.at('EGX30CAPPED', pb.last));
+      out.after.rows.push({ name: t.name, symbol: t.symbol, sold: t.lastSell, sellPx, px, pxDate, full30: full,
+        days: Math.max(0, dayNum(pxDate || today) - dayNum(t.lastSell)), move: px / sellPx - 1, amount: (px - sellPx) * t.sold, outcome: t.outcome,
+        indexMove: i0 > 0 && i1 > 0 ? i1 / i0 - 1 : null });
+    });
+    out.after.rows.sort((a, b) => (a.sold < b.sold ? 1 : a.sold > b.sold ? -1 : 0));
+    const f30 = out.after.rows.filter((r) => r.full30);
+    out.after.n30 = f30.length;
+    if (f30.length) {
+      out.after.avg30 = mean(f30.map((r) => r.move)); out.after.amount30 = sum(f30.map((r) => r.amount));
+      const wi = f30.filter((r) => r.indexMove != null);
+      out.after.avgIndex30 = wi.length === f30.length ? mean(wi.map((r) => r.indexMove)) : null;
+    }
+    // stocks traded more than once
+    const nm = by((t) => t.name);
+    out.repeat = Object.keys(nm).filter((k) => nm[k].length > 1).map((k) => ({ name: k, symbol: nm[k][0].symbol, ...group(nm[k]) })).sort((a, b) => b.n - a.n || b.pl - a.pl);
+    // open positions now
+    const open = (o.open || []).filter((r) => r.openCost > 0), side = (l) => ({ n: l.length, avgDays: l.length ? mean(l.map((r) => r.holdDays || 0)) : null,
+      avgPct: l.length ? mean(l.map((r) => r.unreal / r.openCost)) : null, amount: sum(l.map((r) => r.unreal || 0)) });
+    out.open = { winners: side(open.filter((r) => r.unreal > 0)), losers: side(open.filter((r) => r.unreal <= 0)) };
+    // the biggest losses
+    const lossAmts = losses.map((t) => t.total).filter((x) => x < 0).sort((a, b) => a - b), allLoss = sum(lossAmts);
+    out.bigLosses = lossAmts.length ? { n: Math.min(3, lossAmts.length), top: sum(lossAmts.slice(0, 3)), share: allLoss ? sum(lossAmts.slice(0, 3)) / allLoss : null, count: lossAmts.length } : null;
+    return out;
+  }
+
+  const api = { headsUp, drawdownCheck, heldStocks, priceBook, makePricer, daily, dailyStats, dailyTwr, capWeights, benchWeights, holdingsAt, estimateMarks, attribution, activeWeights, tradeChecks, tradingHabits, income, trailing, calendar, TRADING_DAYS, TRADING_NOTE };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.PA = api;
 })(this);

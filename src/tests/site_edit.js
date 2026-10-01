@@ -152,6 +152,8 @@ const cleanup = [];
     await page.click('#tab-overview');
     const heads = await page.locator('[data-testid=heads-up-item]').allTextContents();
     check('heads-up worked out on the page: the synthetic target hit is listed', heads.some((t) => /reached its target/.test(t)), JSON.stringify(heads));
+    await page.click('#tab-analysis'); await $t('trading').waitFor({ timeout: 10000 });
+    check('Analysis opens on "Your trading"; with no trade closed yet it says so and still shows the open positions', await $t('trading-empty').isVisible() && /Winners held/.test(await $t('trading-open').textContent()) && (await page.locator('#sec-trading').count()) === 1);
     await page.click('#tab-settings');
     check('view only: the settings save button is hidden', !(await $t('save-settings').isVisible()));
 

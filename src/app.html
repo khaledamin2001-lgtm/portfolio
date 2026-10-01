@@ -426,12 +426,12 @@ function watchLiveState(){ const el=document.getElementById('pd-offline'); if(!e
 
 // ---------- tabs ----------
 // Seven tabs; the older, finer-grained names still work as links and jump to their section inside the merged tab.
-const TAB_ALIAS = {dailypl:'performance', attribution:'analysis', risk:'analysis', whatif:'analysis', income:'holdings', watchlist:'holdings', trades:'activity', ledger:'activity', statements:'settings', factsheet:'reports', inputs:'settings', checks:'settings'};
+const TAB_ALIAS = {dailypl:'performance', trading:'analysis', attribution:'analysis', risk:'analysis', whatif:'analysis', income:'holdings', watchlist:'holdings', trades:'activity', ledger:'activity', statements:'settings', factsheet:'reports', inputs:'settings', checks:'settings'};
 const TAB_VIEWS = {
   overview: [['overview','Overview',()=>vOverview()]],
   holdings: [['holdings','Holdings',()=>vHoldings()],['watchlist','Watchlist',()=>vWatchlist()],['income','Income & dividends',()=>vIncome()]],
   performance: [['performance','Performance',()=>vPerformance()],['dailypl','Daily P/L',()=>vDailyPL()]],
-  analysis: [['analysis','What the numbers say',()=>vAnalysis()],['whatif','What if',()=>vWhatIf()],['attribution','Attribution vs EGX30 Capped',()=>vAttribution()]],
+  analysis: [['trading','Your trading',()=>vTrading()],['analysis','What the numbers say',()=>vAnalysis()],['whatif','What if',()=>vWhatIf()],['attribution','Attribution vs EGX30 Capped',()=>vAttribution()]],
   activity: [['trades','Closed trades',()=>vTrades()],['ledger','Ledger',()=>vLedger()]],
   reports: [['factsheet','Monthly factsheet & Excel',()=>vFactsheet()]],
   settings: [['inputs','Inputs & settings',()=>vInputs()],['statements','Statements & imports',()=>vStatements()],['checks','Checks',()=>vChecks()]],

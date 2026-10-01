@@ -628,6 +628,96 @@ function whyText(d){ const bad=d.rows.filter(x=>x.contrib<0).slice(0,2); if(!bad
   const w=bad.reduce((s,x)=>s+x.w,0);
   if(d.diff>=0){ const good=d.rows.filter(x=>x.contrib>0).sort((a,b)=>b.contrib-a.contrib)[0]; return `Held up${good?`: ${esc(good.sym)} ${pct(good.ret,0)} offset ${bad.map(x=>`${esc(x.sym)} ${pct(x.ret,0)}`).join(' and ')}`:''}.`; }
   return `${bad.map(x=>`${esc(x.sym)} ${pct(x.ret,0)}`).join(' and ')} ${bad.length>1?'were':'was'} ${pct(w,0,false)} of the portfolio${d.cashPct<0.02?', with no cash to cushion it':''}${d.buys>=8?`; ${d.buys} buys were made as it fell`:''}.`; }
+// ---------- Your trading (Analysis tab, first section) ----------
+// How the trades closed in the picked period went, by habit: PA.tradingHabits does the sums, this writes them up. Cash-like
+// funds are left out, as on Activity → Closed trades (parking money in the savings fund is not a trade).
+function tradingData(){
+  const R=S.R, trips=(Array.isArray(R.pos.trips)?R.pos.trips:[]).filter(t=>t.closedInPeriod && !isCashLike(t));
+  let pb=null; try{ pb=pbook(); }catch(e){ pb=null; }
+  return PA.tradingHabits(trips, { open:(R.pos.open||[]).filter(r=>!isCashLike(r)), ledger:R.ledger||[], pb, quotes:(S.market&&S.market.quotes)||{}, today:PE.cairoToday() });
+}
+// the few sentences at the top: only the ones the data can back (enough trades on each side)
+function tradingInsights(h){
+  const out=[], days=(x)=>`${num(x,0)} day${Math.round(x)===1?'':'s'}`;
+  if(h.n){
+    const pay = h.avgWin!=null && h.avgLoss ? Math.abs(h.avgWin/h.avgLoss) : null;
+    out.push(`Each closed trade made <b class="${sgn(h.expectancy)}">${egp(h.expectancy)} EGP</b> on average. You won ${pct(h.winRate,0,false)} of them${pay!=null?`, and an average win (${short(h.avgWin)}) is ${num(pay,1)}× an average loss (${short(Math.abs(h.avgLoss))})`:''}.`);
+  }
+  if(h.wins>=2 && h.losses>=2 && h.holdWin>0){
+    const r=h.holdLoss/h.holdWin;
+    out.push(r>1.25 ? `You hold losing trades <b class="neg">${num(r,1)}× longer</b> than winning ones (${days(h.holdLoss)} against ${days(h.holdWin)}). Most traders do this; selling losers sooner is usually the quickest improvement.`
+      : r<0.8 ? `You cut losing trades faster than winning ones (<b>${days(h.holdLoss)}</b> against <b>${days(h.holdWin)}</b>): a good habit, keep it.`
+      : `You hold winners and losers for about the same time (${days(h.holdWin)} and ${days(h.holdLoss)}).`);
+  }
+  const hb=h.byHold.filter(b=>b.n>=2);
+  if(hb.length>=2){
+    const best=hb.reduce((a,b)=>b.pl>a.pl?b:a), worst=hb.reduce((a,b)=>b.pl<a.pl?b:a);
+    if(best.pl>0) out.push(`Your best holding period is <b>${esc(best.label.toLowerCase())}</b>: ${egp(best.pl)} EGP from ${best.n} trades, ${pct(best.winRate,0,false)} of them winners.`);
+    if(worst.pl<0 && worst!==best) out.push(`Trades held ${esc(worst.label.toLowerCase())} lost <span class="neg">${egp(worst.pl)} EGP</span> overall (${worst.n} trades).`);
+  }
+  const A=h.after;
+  if(A.n30>=3 && A.avg30!=null){
+    const ex = A.avgIndex30!=null ? A.avg30-A.avgIndex30 : null, idx = A.avgIndex30!=null ? `, against ${pct(A.avgIndex30)} for EGX30 Capped` : '';
+    if(ex!=null ? ex>0.02 : A.avg30>0.03) out.push(`In the 30 days after you sold, your stocks rose another <b class="pos">${pct(A.avg30)}</b> on average${idx}: you may be selling too early.`);
+    else if(ex!=null ? ex<-0.02 : A.avg30<-0.03) out.push(`In the 30 days after you sold, your stocks did <b>${pct(A.avg30)}</b> on average${idx}: your exits were well timed.`);
+    else out.push(`In the 30 days after you sold, your stocks moved ${pct(A.avg30)} on average${idx}: about the same as the market, so your exit timing is neither helping nor hurting.`);
+  }
+  const L=h.bigLosses;
+  if(L && L.count>=4 && L.share>=0.5) out.push(`Your ${L.n} biggest losses are <b>${pct(L.share,0,false)}</b> of everything you lost on closed trades (<span class="neg">${egp(L.top)} EGP</span>). A stop-loss on trades like those would have made the biggest difference.`);
+  if(h.bySize){ const [sm,,lg]=h.bySize;
+    if(lg.pl<0 && sm.pl>0) out.push(`Your largest positions lost money (<span class="neg">${egp(lg.pl)} EGP</span>) while your smallest ones made money: size down until a trade proves itself.`);
+    else if(lg.winRate!=null && sm.winRate!=null && lg.winRate-sm.winRate>=0.15) out.push(`You win more often on your largest positions (${pct(lg.winRate,0,false)}) than your smallest (${pct(sm.winRate,0,false)}): your conviction trades work.`); }
+  const W=h.open.winners, Lo=h.open.losers;
+  if(Lo.n && W.n && Lo.avgDays>W.avgDays*1.25) out.push(`Right now you hold ${Lo.n} losing position${Lo.n===1?'':'s'} for ${days(Lo.avgDays)} on average, longer than your ${W.n} winner${W.n===1?'':'s'} (${days(W.avgDays)}).`);
+  return out;
+}
+function vTrading(){
+  const R=S.R, st=R.stats, h=tradingData(), ins=tradingInsights(h);
+  const wr=(b)=>b.winRate!=null?pct(b.winRate,0,false):'—';
+  // four columns at most, so each table fits a phone screen
+  const grpRow=(label,b)=>`<tr><td style="white-space:normal">${label}</td><td class="n">${b.n}</td><td class="n">${b.n?wr(b):'—'}</td><td class="n ${sgn(b.pl)}">${b.n?egp(b.pl):'—'}</td></tr>`;
+  const grpHead=(first)=>`<thead><tr><th>${first}</th><th class="n">Trades</th><th class="n">Won</th><th class="n">P/L (EGP)</th></tr></thead>`;
+  const W=h.open.winners, Lo=h.open.losers, A=h.after;
+  const openPanel = (W.n||Lo.n) ? `<div class="panel" data-testid="trading-open"><div class="phead"><div><h2>What you hold now</h2><div class="sub">Open positions split into winners and losers · how long you have held them</div></div></div>
+    <div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr))">
+      ${kpi('Winners held', W.n, W.n?`<span class="pos">${pct(W.avgPct)}</span> on average · held ${num(W.avgDays,0)} days · <span class="pos">${short(W.amount)}</span> EGP`:'none right now')}
+      ${kpi('Losers held', Lo.n, Lo.n?`<span class="neg">${pct(Lo.avgPct)}</span> on average · held ${num(Lo.avgDays,0)} days · <span class="neg">${short(Lo.amount)}</span> EGP`:'none right now')}
+    </div></div>` : '';
+  if(!h.n) return `<div class="panel" data-testid="trading"><div class="phead"><div><h2>Your trading</h2><div class="sub">${esc(st.label||'')}</div></div></div>
+    <p class="note" data-testid="trading-empty">No trade was closed in this period, so there is nothing to analyse yet. A trade counts once the position is fully sold; pick a longer period at the top (e.g. All time) to see more.</p></div>${openPanel}`;
+  const months = h.byMonth.length>=2 ? `<div class="panel"><div class="phead"><div><h2>Month by month</h2><div class="sub">Profit or loss of the trades closed each month (by the month you sold)</div></div></div>
+    ${chartSlot('ch-trade-months',{kind:'bar',title:'Closed-trade P/L by month',labels:h.byMonth.map(m=>Ms(m.month)),series:[{name:'P/L',colorFn:v=>v>=0?C.pos():C.neg(),values:h.byMonth.map(m=>m.pl)}],yFmt:egpAxis,tipExtra:(i)=>`<div>${h.byMonth[i].n} trade${h.byMonth[i].n===1?'':'s'} · ${wr(h.byMonth[i])} won</div>`},220)}</div>` : '';
+  const after = A.rows.length ? `<div class="panel" data-testid="trading-after"><div class="phead"><div><h2>After you sold</h2><div class="sub">Each stock's price 30 days after your sale (up to today when 30 days have not passed yet), against your average sale price</div></div></div>
+    <div class="tbl"><table><thead><tr><th>Stock</th><th class="n">Sold at</th><th class="n">30 days on</th></tr></thead><tbody>
+    ${A.rows.slice(0,15).map(r=>`<tr><td><span class="sym">${esc(r.symbol)}</span> <span class="pill ${r.outcome==='WIN'?'win':'loss'}">${r.outcome==='WIN'?'Win':'Loss'}</span><div class="muted" style="font-size:11.5px">${dfmt(r.sold)}</div></td><td class="n">${num(r.sellPx,2)}</td><td class="n">${num(r.px,2)}<div style="font-size:11.5px" class="${sgn(r.move)}">${pct(r.move)}</div>${r.indexMove!=null?`<div class="muted" style="font-size:11.5px">index ${pct(r.indexMove)}</div>`:''}${r.full30?'':`<div class="muted" style="font-size:11.5px">so far, ${r.days} days</div>`}</td></tr>`).join('')}
+    </tbody></table></div>
+    ${A.n30?`<p class="note" style="margin-top:10px">Over the ${A.n30} sale${A.n30===1?'':'s'} with 30 days behind them, the stocks moved <b class="${sgn(A.avg30)}">${pct(A.avg30)}</b> on average${A.avgIndex30!=null?` and EGX30 Capped ${pct(A.avgIndex30)}`:''}. Had you kept those shares 30 days longer, they would have been worth <b class="${sgn(A.amount30)}">${egp(Math.abs(A.amount30))} EGP ${A.amount30>=0?'more':'less'}</b>.</p>`:''}
+    ${A.rows.length>15?`<p class="note">The latest 15 of ${A.rows.length} sales.</p>`:''}</div>` : '';
+  const repeat = h.repeat.length ? `<div class="panel"><div class="phead"><div><h2>Stocks you traded more than once</h2><div class="sub">Every round trip in the period on the same stock</div></div></div>
+    <div class="tbl"><table>${grpHead('Stock')}<tbody>${h.repeat.map(r=>grpRow(`<span class="sym">${esc(r.symbol||'—')}</span><div class="muted" style="font-size:11.5px">${esc(r.name)}</div>`,r)).join('')}</tbody></table></div></div>` : '';
+  return `
+  <div class="panel" data-testid="trading"><div class="phead"><div><h2>Your trading</h2><div class="sub">${esc(st.label||'')} · ${h.n} closed trade${h.n===1?'':'s'} (cash-like funds left out) · change the period at the top</div></div></div>
+    <ul class="insights" data-testid="trading-insights" style="margin:4px 0 0;padding-left:18px;line-height:1.55">${ins.map(x=>`<li style="margin:6px 0">${x}</li>`).join('')}</ul>
+  </div>
+  <div class="kpis" data-testid="trading-kpis">
+    ${kpi('Per trade', `<span class="${sgn(h.expectancy)}">${egp(h.expectancy)}</span>`, `average P/L of a closed trade, dividends included`, '', 'EGP')}
+    ${kpi('Won', pct(h.winRate,0,false), `${h.wins} of ${h.n} trades`)}
+    ${kpi('Days held', `<span class="pos">${num(h.holdWin,0)}</span> <span class="muted">/</span> <span class="neg">${num(h.holdLoss,0)}</span>`, 'winners / losers, on average')}
+    ${kpi('Longest streak', `<span class="pos">${h.streaks.win}</span> <span class="muted">/</span> <span class="neg">${h.streaks.loss}</span>`, `wins / losses in a row${h.streaks.current?` · now ${h.streaks.current.n} ${h.streaks.current.kind==='win'?'win':'loss'}${h.streaks.current.n===1?'':(h.streaks.current.kind==='win'?'s':'es')} in a row`:''}`)}
+  </div>
+  <div class="grid g2">
+    <div class="panel" data-testid="trading-hold"><div class="phead"><div><h2>By how long you held</h2><div class="sub">From the first buy to the last sell</div></div></div>
+      <div class="tbl"><table>${grpHead('Held')}<tbody>${h.byHold.map(b=>grpRow(esc(b.label),b)).join('')}</tbody></table></div></div>
+    <div class="panel" data-testid="trading-size"><div class="phead"><div><h2>By position size</h2><div class="sub">${h.bySize?'Your trades split into thirds by the money put in':'Shown from 6 closed trades'}</div></div></div>
+      ${h.bySize?`<div class="tbl"><table>${grpHead('Size')}<tbody>${h.bySize.map(b=>grpRow(`${esc(b.label)}<div class="muted" style="font-size:11.5px">${short(b.lo)} to ${short(b.hi)} EGP</div>`,b)).join('')}</tbody></table></div>`:`<p class="note">${h.n} closed trade${h.n===1?'':'s'} so far.</p>`}</div>
+  </div>
+  ${after}
+  ${months}
+  <div class="panel" data-testid="trading-sector"><div class="phead"><div><h2>By sector</h2><div class="sub">Best to worst by profit</div></div></div>
+    <div class="tbl"><table>${grpHead('Sector')}<tbody>${h.bySector.map(b=>grpRow(esc(b.sector),b)).join('')}</tbody></table></div></div>
+  ${repeat}
+  ${openPanel}`;
+}
 function vAnalysis(){
   const R=S.R, st=R.stats, dm=downMonths(), H=holdingRisk(), cash=R.liveCash??R.settings.cash, tot=R.pos.mvTotal+Math.max(0,cash);
   if(!st.n) return `<div class="panel empty"><h2>No data for this selection</h2></div>`;

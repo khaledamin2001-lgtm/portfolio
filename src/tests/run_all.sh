@@ -49,6 +49,8 @@ step_tests() {
   echo "  test_owner.js: $(tail -1 "$TMP/owner.out")"
   node src/tests/test_statement.js > "$TMP/statement.out" || { cat "$TMP/statement.out"; die "test_statement.js"; }
   echo "  test_statement.js: $(tail -1 "$TMP/statement.out")"
+  node src/tests/test_trading.js > "$TMP/trading.out" || { cat "$TMP/trading.out"; die "test_trading.js"; }
+  echo "  test_trading.js: $(tail -1 "$TMP/trading.out")"
   (cd "$TMP/tsrc" && node tests/test.js > "$TMP/test.out") || { cat "$TMP/test.out"; die "test.js"; }
   echo "  test.js: $(head -c 160 "$TMP/test.out")"
   (cd "$TMP/tsrc" && node tests/test_site_store.js > "$TMP/sitestore.out") || { cat "$TMP/sitestore.out"; die "test_site_store.js"; }

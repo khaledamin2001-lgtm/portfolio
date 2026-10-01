@@ -9,9 +9,9 @@ file lists every file and how to build and test.
 | File | What it is |
 |---|---|
 | `app.html` | The page: markup, styles and the UI code (tabs, charts, settings, editing). Four placeholders `/*ENGINE*/ /*ENGINE2*/ /*STATEMENT*/ /*APP2*/` are filled in by `build.py`. It reads its data through `window.pdHost.use('db')`, which the site layer provides. |
-| `app2.js` | The rest of the UI: analytics pages, attribution, income, the factsheet (also used headless by `tools/factsheet.js` through `window.pdFactsheet`), statement upload and review. |
+| `app2.js` | The rest of the UI: analytics pages (Your trading, What the numbers say, What if), attribution, income, the factsheet (also used headless by `tools/factsheet.js` through `window.pdFactsheet`), statement upload and review. |
 | `engine.js` | The core maths, no DOM and no network: the ledger with average cost, the monthly Modified-Dietz return chain, period statistics, XIRR, positions, data checks. |
-| `engine2.js` | The second layer: the price book from the daily history, daily valuation, Brinson attribution, income, trailing returns, `holdingsAt`, heads-up alerts. |
+| `engine2.js` | The second layer: the price book from the daily history, daily valuation, Brinson attribution, income, trailing returns, `holdingsAt`, heads-up alerts, trading habits (`tradingHabits`, for Analysis → Your trading). |
 | `statement.js` | Thndr PDF statements: PDF text → statement rows and the positions snapshot → matching against the ledger (`reconcile`), plus the account lock (`ownerCheck`: only a portfolio's own Thndr account is ever applied). |
 | `build.py` | Builds `portfolio-desk.html` and `yassin-desk.html` (the same page, different title) from the five files above, stamped `<meta name="pd-build" content="<12 hex> <UTC time>">`. They are build outputs (gitignored). |
 | `docs/SCHEMA.md` | The data: every document, its shape and who writes it. |
@@ -83,6 +83,7 @@ with only the public key; `jobs/publish.py` and `jobs/run_sync.py` call them.
 | `tests/test_dietz.js` | Modified Dietz, bonus shares, round trips, same-day ordering. Sections on the real data run only with private exports (`KHALED_EXPORT`, `YASSIN_EXPORT`, `EXPECTED_JSON`), otherwise `SKIP`. |
 | `tests/test.js` | Excel parity against the original workbook; needs two private fixtures, otherwise exits 0. |
 | `tests/test_statement.js` | Statement reading and matching (the right ledger row, quiet months). |
+| `tests/test_trading.js` | The sums behind Analysis → Your trading (`engine2.js` `tradingHabits`): per trade, days held, groups, streaks, after the sale. |
 | `tests/test_owner.js` | The account lock: a statement is used only for its own holder / Thndr account; a new account's first statement sets it. |
 | `tests/test_jobs.py` | The jobs' rules: market patches, sync writes, the time gate, recipients, unsent emails, the watcher, the alarm key. |
 | `tests/test_account_mail.py` | The account job end to end with a fake Firebase and mailer: alerts, weekly, Gmail import, history import, reports, friends, impostor links. `DUMP_EMAILS=<dir>` writes every email out. |
