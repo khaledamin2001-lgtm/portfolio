@@ -84,6 +84,7 @@ with only the public key; `jobs/publish.py` and `jobs/run_sync.py` call them.
 | `tests/test.js` | Excel parity against the original workbook; needs two private fixtures, otherwise exits 0. |
 | `tests/test_statement.js` | Statement reading and matching (the right ledger row, quiet months). |
 | `tests/test_trading.js` | The sums behind Analysis → Your trading (`engine2.js` `tradingHabits`): per trade, days held, groups, streaks, after the sale. |
+| `tests/test_checks.js` | The model checks that tell a real problem from how Thndr books things: cash dips, estimated months, trade prices on big-move days, typed fund rows. |
 | `tests/test_owner.js` | The account lock: a statement is used only for its own holder / Thndr account; a new account's first statement sets it. |
 | `tests/test_jobs.py` | The jobs' rules: market patches, sync writes, the time gate, recipients, unsent emails, the watcher, the alarm key. |
 | `tests/test_account_mail.py` | The account job end to end with a fake Firebase and mailer: alerts, weekly, Gmail import, history import, reports, friends, impostor links. `DUMP_EMAILS=<dir>` writes every email out. |

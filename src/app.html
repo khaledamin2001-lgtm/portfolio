@@ -1076,9 +1076,9 @@ function disableReadOnlyForms(){ if(!S.readOnly) return; document.querySelectorA
 function jobsPanel(){ const J=jobsStatus();
   const row=(tid,name,when,x,extra)=>`<div class="check" data-testid="${tid}" data-state="${x.ok===null?'n/a':x.ok?'fresh':'stale'}"><span class="ic ${x.ok===null?'':x.ok?'ok':'warn'}" style="${x.ok===null?'background:var(--surface-2);color:var(--ink-3)':''}">${x.ok===null?'–':x.ok?'✓':'!'}</span><span><b>${name}</b> · ${esc(when)}</span><span class="dt">${extra}</span></div>`;
   return `<div class="panel" data-testid="jobs"><div class="phead"><div><h2>Jobs</h2><div class="sub">When each scheduled job last ran · amber means it is late</div></div></div><div class="checks jobs">
-    ${row('job-market','Market update', J.market.at?cairoAt(J.market.at):'never', J.market, `Sunday to Thursday at 3:10 PM Cairo, after the EGX close${J.market.ok===false&&J.market.at?' · the last session\'s prices have not arrived yet':''}`)}
-    ${row('job-sync','Inbox sync', J.sync.none?'not set up for this portfolio':J.sync.at?cairoAt(J.sync.at):'never', J.sync, J.sync.none?'Statements for this portfolio are posted by hand':`Daily at 6:17 PM and 10:17 PM Cairo${J.sync.ok===false?` · no run in the last ${JOB.syncHours} hours`:''}`)}
-    ${row('job-site','Site data', J.site.page?'published by the site job':J.site.at?cairoAt(J.site.at):'unknown', J.site, J.site.page?'The live site is refreshed Sunday to Thursday at 3:38 PM Cairo; its footer shows when':`Sunday to Thursday at 3:38 PM Cairo${J.site.ok===false?' · older than expected':''}`)}
+    ${row('job-market','Market update', J.market.at?cairoAt(J.market.at):'never', J.market, `Sunday to Thursday at 3:40 PM Cairo, after the EGX close${J.market.ok===false&&J.market.at?' · the last session\'s prices have not arrived yet':''}`)}
+    ${row('job-sync','Inbox sync', J.sync.none?'not set up for this portfolio':J.sync.at?cairoAt(J.sync.at):'never', J.sync, J.sync.none?'Statements for this portfolio are posted by hand':`Daily at 4:15 PM, 6:15 PM and 11 PM Cairo${J.sync.ok===false?` · no run in the last ${JOB.syncHours} hours`:''}`)}
+    ${row('job-site','Site data', J.site.page?'published by the site job':J.site.at?cairoAt(J.site.at):'unknown', J.site, J.site.page?'The live site is refreshed after each market update and inbox check; its footer shows when':`After each market update and inbox check${J.site.ok===false?' · older than expected':''}`)}
   </div></div>`; }
 function extraChecks(){
   const out=[]; const D=dailyA();
@@ -1095,7 +1095,7 @@ function extraChecks(){
   try{ PA.tradeChecks(S.R.ledger, S.assets, pbook(), S.bench && S.bench.actions).forEach(c=>out.push(c)); }catch(e){ console.error(e); }
   // provenance: rows in statement-confirmed months that no statement or invoice booked (the statement confirms the month's totals)
   const uv=unverifiedRows(); const uvM=[...new Set(uv.map(t=>String(t.d).slice(0,7)))].sort();
-  out.push({label:'Rows not confirmed by a statement', status: uv.length?'warn':'ok', detail: uv.length ? `${uv.length} row${uv.length===1?'':'s'} typed by hand in months closed from a statement (${uvM.map(m=>`${M(m)} ${uv.filter(t=>String(t.d).startsWith(m)).length}`).join(', ')}) · filter the ledger by source to see them` : 'every row in a statement month came from the statement or a Thndr invoice'});
+  out.push({label:'Rows not confirmed by a statement', status: uv.length?'warn':'ok', detail: uv.length ? `${uv.length} row${uv.length===1?'':'s'} typed by hand in months closed from a statement (${uvM.map(m=>`${M(m)} ${uv.filter(t=>String(t.d).startsWith(m)).length}`).join(', ')}) · filter the ledger by source to see them` : 'every row in a statement month is confirmed: by the statement, a Thndr invoice, a statement\'s fund page, or (savings and money-market funds) the statement\'s cash balance'});
   return out;
 }
 function vChecks(){
@@ -1106,7 +1106,7 @@ function vChecks(){
   <div class="grid g2">
     <div class="panel"><div class="phead"><div><h2>Model checks</h2><div class="sub">The same controls as the workbook cover sheet, plus a cash reconciliation</div></div><span class="chip ${checkSummary().cls}">${esc(checkSummary().text)}</span></div>
       <div class="checks" data-testid="model-checks">${allChecks.map(c=>`<div class="check"><span class="ic ${c.status}">${c.status==='ok'?'✓':c.status==='warn'?'!':'×'}</span><span>${esc(c.label)}</span><span class="dt">${esc(c.detail)}</span></div>`).join('')}</div></div>
-    <div class="panel"><div class="phead"><div><h2>Price automation</h2><div class="sub">Runs Sunday to Thursday at 3:10 PM Cairo, after the EGX close</div></div></div>
+    <div class="panel"><div class="phead"><div><h2>Price automation</h2><div class="sub">Runs Sunday to Thursday at 3:40 PM Cairo, after the EGX close</div></div></div>
       <dl class="kv"><dt>Last update</dt><dd>${m&&m.asOf?esc(feedStatus().text):'Not yet run'}</dd><dt>Source</dt><dd>${esc(m&&m.source||'TradingView scanner')}</dd>
       <dt>Symbols priced</dt><dd>${m?Object.keys(m.quotes||{}).length:0}</dd><dt>Held positions with no quote</dt><dd>${(()=>{ const held=new Set(R.pos.open.map(r=>r.symbol)); const mm=((m&&m.missing)||[]).filter(x=>held.has(x)); return mm.length?esc(mm.join(', ')):'None'; })()}</dd>
       <dt>EGX30 Capped close</dt><dd>${m&&m.index&&m.index.EGX30CAPPED?num(m.index.EGX30CAPPED.close,1)+' · prior month-end '+num(m.index.EGX30CAPPED.prevMonthClose,1):'—'}</dd>

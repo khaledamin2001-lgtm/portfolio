@@ -485,7 +485,7 @@
     catch (e) { console.error(e); toast && toast('Could not reach TradingView: ' + (e.message || e) + '. Showing the last saved prices.', 'error'); }
     finally { const b = document.getElementById('refresh-prices'); if (b) { b.disabled = false; b.textContent = 'Refresh now'; } }
   };
-  // Site data freshness: the site job publishes Sunday to Thursday at 3:38 PM Cairo. Stale = older than 26 hours on an EGX
+  // Site data freshness: the market job publishes Sunday to Thursday at 3:40 PM Cairo (and every inbox check after). Stale = older than 26 hours on an EGX
   // weekday, older than 74 hours otherwise (Friday, Saturday, and Sunday until the day's job has had time to run at 4 PM).
   const FRESH_H = { weekday: 26, other: 74 };
   function dataStale(iso, now = Date.now()) {

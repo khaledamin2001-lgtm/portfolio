@@ -500,14 +500,27 @@
   };
   // byMonth[M] counts rows per kind; unverified = ids of rows with neither a statement nor an invoice source, dated in a month whose
   // mark comes from a Thndr statement (the statement confirms the month's totals, not those rows individually).
-  function provenance(tx, marks) {
+  // unverified: rows typed by hand in a month closed from a statement. Two kinds of typed row count as confirmed anyway:
+  // a row checked against a statement's fund page (its note says "checked against the Thndr <Mon-YY> statement"), and a
+  // cash-like fund row (savings / money-market fund, which the statement's trade pages do not list) in a month whose ledger
+  // cash ends within 1 EGP of the statement's cash, so its amount is confirmed by the statement's balance.
+  function provenance(tx, marks, assets) {
     const byMonth = {}, unverified = [];
+    const sectorOf = {}; Object.values(assets || {}).forEach((a) => { if (a && a.name) sectorOf[a.name] = a.sector; });
+    const endCash = {}; let bal = 0;
+    (tx || []).slice().sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : 0)).forEach((t) => { if (t.d) { bal += t.amt || 0; endCash[monthOf(t.d)] = bal; } });
+    const endKeys = Object.keys(endCash).sort();
+    const cashAt = (M) => { let c = 0; endKeys.forEach((k) => { if (k <= M) c = endCash[k]; }); return c; };
+    const reconciled = (M) => marks && marks[M] && typeof marks[M].cash === 'number' && Math.abs(cashAt(M) - marks[M].cash) < 1;
     (tx || []).forEach((t) => {
       if (!t.d) return;
       const M = monthOf(t.d), k = srcKind(t.src);
       const b = byMonth[M] || (byMonth[M] = { statement: 0, invoice: 0, typed: 0, manual: 0, total: 0 });
       b[k]++; b.total++;
-      if (k !== 'statement' && k !== 'invoice' && t.id != null && marks && marks[M] && marks[M].source === 'statement') unverified.push(t.id);
+      if (k === 'statement' || k === 'invoice' || t.id == null || !(marks && marks[M] && marks[M].source === 'statement')) return;
+      if (/checked against the Thndr .*statement/i.test(t.note || '')) return;
+      if (t.a && CASH_LIKE.has(sectorOf[t.a]) && reconciled(M)) return;
+      unverified.push(t.id);
     });
     return { byMonth, unverified };
   }
@@ -548,8 +561,23 @@
     const est = closedM.filter((r) => r.has && (r.estimate || r.source === 'price-estimate'));
     const noVal = closedM.filter((r) => !r.has);
     const prov = closedM.filter((r) => r.has && r.provisional && !r.estimate && r.source !== 'price-estimate');
-    add('Closed months confirmed by Thndr statements', noVal.length ? 'error' : est.length || prov.length ? 'warn' : 'ok',
-      noVal.length ? `No value: ${noVal.map((r) => fmtMonth(r.month)).join(', ')}` : est.length || prov.length ? [est.length ? `estimated from closing prices: ${est.map((r) => fmtMonth(r.month)).join(', ')}` : '', prov.length ? `provisional: ${prov.map((r) => fmtMonth(r.month)).join(', ')}` : ''].filter(Boolean).join(' · ') : 'All closed months from statements');
+    // An estimated month is expected in two cases: the month's full statement was posted but carries no holdings list (its
+    // cash is the statement's, its holdings are valued at closing prices, as the statement would), or the month ended only
+    // days ago and Thndr's monthly statement has not arrived yet. Only an estimate with neither is a warning.
+    const stmtMonths = new Set();
+    tx.forEach((t) => { const s = String(t.src || ''); let m;
+      if ((m = s.match(/^stmt-(\d{4}-\d{2})(?!-\d)/))) stmtMonths.add(m[1]);
+      else if ((m = s.match(/^stmt-partial-(\d{4}-\d{2})-(\d{2})/)) && eom(m[1]) === `${m[1]}-${m[2]}`) stmtMonths.add(m[1]); });
+    const estStmt = est.filter((r) => stmtMonths.has(r.month)), rest = est.filter((r) => !stmtMonths.has(r.month));
+    const estWait = rest.filter((r) => dayNum(today) - dayNum(eom(r.month)) <= 20), estMissing = rest.filter((r) => !estWait.includes(r));
+    const L = (a) => a.map((r) => fmtMonth(r.month)).join(', ');
+    add('Closed months confirmed by Thndr statements', noVal.length ? 'error' : estMissing.length || prov.length ? 'warn' : 'ok',
+      noVal.length ? `No value: ${L(noVal)}` : [
+        estMissing.length ? `estimated from closing prices, no statement posted: ${L(estMissing)}` : '',
+        prov.length ? `provisional: ${L(prov)}` : '',
+        estWait.length ? `${L(estWait)}: estimated until Thndr's monthly statement arrives (it is applied by itself)` : '',
+        estStmt.length ? `${L(estStmt)}: cash from the statement, holdings at closing prices (those statements have no holdings list)` : '',
+      ].filter(Boolean).join(' · ') || 'All closed months from statements');
     const over = ctx.ledger ? ctx.ledger.filter((t) => t.oversold) : [];
     add('Sells never exceed shares held', over.length ? 'error' : 'ok', over.length ? over.slice(0, 6).map((t) => `${t.a} ${t.d}: sold ${fmtNum(t.q)}, held ${fmtNum(t.q - t.oversold)}`).join('; ') + (over.length > 6 ? ` … ${over.length} rows` : '') : 'Every sell covered by shares held');
     const seen = {}, dups = [];
@@ -558,8 +586,19 @@
     // end-of-day balances (a same-day sale may fund a buy, so the intra-day order does not matter)
     let bal = 0, neg = null;
     const sorted = sortLedger(tx, { sameDay: ctx.sameDay });
-    for (let i = 0; i < sorted.length && !neg; i++) { bal += sorted[i].amt || 0; if ((i + 1 === sorted.length || sorted[i + 1].d !== sorted[i].d) && bal < -1) neg = { d: sorted[i].d, bal }; }
-    add('Ledger cash never negative', neg ? 'warn' : 'ok', neg ? `First below zero on ${neg.d}: ${fmtNum(neg.bal)} EGP at end of day` : 'End-of-day cash balance never below zero');
+    // A dip below zero inside a month is how a broker books a purchase a day or two before the sale or deposit that paid
+    // for it (Thndr's own statements show the same); only a month that ENDS below zero points at a missing row.
+    const dips = [], monthEnd = {};
+    for (let i = 0; i < sorted.length; i++) {
+      bal += sorted[i].amt || 0;
+      if (i + 1 === sorted.length || sorted[i + 1].d !== sorted[i].d) { if (bal < -1) dips.push({ d: sorted[i].d, bal }); monthEnd[monthOf(sorted[i].d)] = bal; }
+    }
+    const curM = monthOf(today), negEnd = Object.keys(monthEnd).filter((m) => m < curM && monthEnd[m] < -1).sort();
+    if (negEnd.length) neg = { d: negEnd[0], bal: monthEnd[negEnd[0]] };
+    const low = dips.reduce((a, x) => (!a || x.bal < a.bal ? x : a), null);
+    add('Ledger cash never negative', neg ? 'warn' : 'ok', neg ? `${fmtMonth(neg.d)} ends below zero: ${fmtNum(neg.bal)} EGP (a deposit or sale is probably missing)`
+      : dips.length ? `Every month ends at or above zero · dips below zero inside a month on ${dips.length} day${dips.length === 1 ? '' : 's'} (lowest ${fmtNum(low.bal)} EGP on ${low.d}): a purchase booked before the money that paid for it, as on Thndr's statements`
+      : 'End-of-day cash balance never below zero');
     const benchMissing = months.filter((r) => r.has && r.bench == null);
     add('Benchmark return present every month', benchMissing.length ? 'warn' : 'ok', benchMissing.length ? `Missing: ${benchMissing.map((r) => fmtMonth(r.month)).join(', ')}` : 'EGX30 Capped complete');
     const gap = pos.rows.filter((r) => r.shareGap !== 0);
@@ -620,7 +659,7 @@
       benchDivYield: bench && typeof bench.divYield === 'number' ? bench.divYield : null, benchDivYieldAsOf: bench ? bench.divYieldAsOf || null : null });
     return {
       today, settings, ledger, months, range, pos, stats, ledgerCash, ledgerCashAt, liveCash, live, flowTiming: opts.flowTiming || 'dietz', sameDay: opts.sameDay || 'type', closedTrades: opts.closedTrades || 'trip',
-      provenance: provenance(tx, data.marks || {}),
+      provenance: provenance(tx, data.marks || {}, data.assets || {}),
       sectors: sectors(pos), conc: concentration(pos, settings),
       checks: checks({ tx, ledger, months, range, pos, settings, today, ledgerCash: ledgerCashAt, sameDay: opts.sameDay }),
     };

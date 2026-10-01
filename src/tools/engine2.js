@@ -279,9 +279,14 @@
       if ((t.t !== 'Buy' && t.t !== 'Sell') || !t.a || !(t.p > 0)) return;
       const a = byName[t.a]; if (!quoted(a)) return;
       const c = pb.at(a.symbol, t.d); if (!(c > 0)) return;
-      if (Math.abs(t.p / c - 1) > 0.06) off.push(`${a.symbol} ${t.d}: traded ${t.p} vs close ${c}`);
+      // the day's range is at least the previous close to the close: on a day the stock jumps, a trade at the open is far
+      // from the close but right. With no earlier close (its first day of trading, an IPO allotment) a statement's price stands.
+      const prev = pb.at(a.symbol, new Date((dayNum(t.d) - 1) * 86400000).toISOString().slice(0, 10));
+      if (!(prev > 0) && /^(stmt|invoice)-/.test(t.src || '')) return;
+      const lo = prev > 0 ? Math.min(prev, c) : c, hi = prev > 0 ? Math.max(prev, c) : c;
+      if (t.p < lo * 0.94 || t.p > hi * 1.06) off.push(`${a.symbol} ${t.d}: traded ${t.p} vs ${prev > 0 ? `previous close ${prev}, close ${c}` : `close ${c}`}`);
     });
-    out.push({ label: 'Trade prices agree with closing prices', status: off.length ? 'warn' : 'ok', detail: off.length ? off.slice(0, 8).join('; ') + (off.length > 8 ? ` … ${off.length} rows` : '') : 'Every trade within 6% of that day\'s close' });
+    out.push({ label: 'Trade prices agree with closing prices', status: off.length ? 'warn' : 'ok', detail: off.length ? off.slice(0, 8).join('; ') + (off.length > 8 ? ` … ${off.length} rows` : '') : 'Every trade within 6% of that day\'s range (previous close to close)' });
     const missing = [];
     (actions || []).forEach((ac) => {
       if (!ac || !ac.s || !ac.date || !(ac.ratio > 1)) return;
