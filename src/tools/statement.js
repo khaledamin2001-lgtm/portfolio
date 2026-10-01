@@ -158,7 +158,8 @@
     const start = t.match(/Start Balance (-?[\d,]+(?:\.\d+)?)/), end = t.match(/End Balance (-?[\d,]+(?:\.\d+)?)/);
     const rows = accountRows(lines);
     const isMF = rows.some((r) => r.raw && /@\s*[\d.,]+\s*EGP\s*\)/.test(r.raw)) || rows.some((r) => /^Transfer (from|to) main account/i.test(r.desc) || (/^Transfer to Mutual Funds Account$/i.test(r.desc) && r.value > 0));
-    return { kind: isMF ? 'mf' : 'cash', from: period ? dmy(period[1]) : null, to: period ? dmy(period[2]) : null, start: start ? num(start[1]) : null, end: end ? num(end[1]) : null, rows };
+    return { kind: isMF ? 'mf' : 'cash', from: period ? dmy(period[1]) : null, to: period ? dmy(period[2]) : null, start: start ? num(start[1]) : null, end: end ? num(end[1]) : null, rows,
+      head: lines.slice(0, 6).join(' ') };
   }
 
   // classify one cash-account row
@@ -198,7 +199,10 @@
     docs.forEach((d) => { const p = parseDoc(d.lines); p.filename = d.filename; if (p.kind === 'snapshot') out.snapshot = p; else acct.push(p); });
     // the brokerage cash account carries deposits, kickbacks and share trades; the fund account carries fund-unit trades
     const score = (p) => p.rows.filter((r) => /^(Commission Kickback|Deposit|Cash Dividends|Transfer To Mutual|Transfer From Mutual)/i.test(r.desc || '') || (r.raw && /@\s*[\d.,]+\s*\)/.test(r.raw) && !/EGP\s*\)/.test(r.raw))).length;
-    acct.sort((a, b) => score(b) - score(a));
+    // in a quiet month neither scores (no deposits, trades or transfers): then the one whose header or file name says
+    // mutual funds is the fund account, whatever order the PDFs came in
+    const fundish = (p) => (/mutual\s*funds?|\bmf[-_ ]/i.test(((p.head || '') + ' ' + (p.filename || ''))) ? 1 : 0);
+    acct.sort((a, b) => (score(b) - score(a)) || (fundish(a) - fundish(b)));
     if (acct[0]) { out.cash = acct[0]; out.cash.kind = 'cash'; }
     if (acct[1]) { out.mf = acct[1]; out.mf.kind = 'mf'; }
     if (!out.cash) return out;
@@ -264,8 +268,12 @@
     // match against existing ledger rows (the ledger may come from the app export, so allow small date/amount differences).
     // Opening rows (t.opening: the holdings and cash typed at sign-up) stand for everything before tracking started; they
     // are never matched, corrected or removed by a statement, only counted in the holdings and cash checks.
+    // A row just outside this statement's dates is only a candidate while no other statement has confirmed it (a deposit on
+    // 29 Aug that the August statement posted is never "this September's 2 Sep deposit").
     const used = new Set();
-    const pool = tx.filter((t) => !t.opening && t.d >= addDays(from, -6) && t.d <= addDays(to, 6));
+    const inside = (d) => d >= from && d <= to;
+    const pool = tx.filter((t) => !t.opening && t.d >= addDays(from, -6) && t.d <= addDays(to, 6)
+      && (inside(t.d) || !/^(stmt-|history-|invoice-)/.test(t.src || '')));
     const same = (t, r) => {
       if (t.t !== r.t || used.has(t)) return false;
       const dd = days(t.d, r.d);
@@ -275,7 +283,10 @@
       return dd <= 4 && Math.abs(t.amt - r.amt) <= 0.05;
     };
     const fresh = [], matched = [], conflicts = [];
-    cand.forEach((r) => { const hit = pool.find((t) => same(t, r)); if (hit) { used.add(hit); matched.push({ stmt: r, ledger: hit }); } else fresh.push(r); });
+    // the best match, not the first: a row inside the statement's dates first, then the nearest date, then the nearest amount
+    const best = (r) => pool.filter((t) => same(t, r)).sort((a, b) => (inside(b.d) - inside(a.d)) || (days(a.d, r.d) - days(b.d, r.d))
+      || (Math.abs(a.amt - r.amt) - Math.abs(b.amt - r.amt)))[0];
+    cand.forEach((r) => { const hit = best(r); if (hit) { used.add(hit); matched.push({ stmt: r, ledger: hit }); } else fresh.push(r); });
     // same amount and date but booked to a different asset: flag, never auto-post
     for (let i = fresh.length - 1; i >= 0; i--) {
       const r = fresh[i]; if (r.t !== 'Buy' && r.t !== 'Sell') continue;

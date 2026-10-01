@@ -323,7 +323,7 @@ function applyStatement(st, entry, msg) {
   entry.changes.push(...ops); entry.removedRows = removed;
   let cashMoved = false;
   if (st.cash.end != null && (!settings.cashDate || st.to >= settings.cashDate)) {
-    if (settings.cash !== st.cash.end || settings.cashDate !== st.to) { cashMoved = true; entry.changes.push(`cash at Thndr: ${fmt(st.cash.end)} EGP on ${st.to}${settings.cash === st.cash.end ? ' (unchanged)' : ` (was ${fmt(settings.cash)} EGP${settings.cashDate ? ' on ' + settings.cashDate : ''})`}`); }
+    if (settings.cash !== st.cash.end || settings.cashDate !== st.to) { cashMoved = true; entry.changes.push(`cash at Thndr: ${fmt(st.cash.end)} EGP on ${st.to}${settings.cash === st.cash.end ? ' (unchanged)' : settings.cash == null ? '' : ` (was ${fmt(settings.cash)} EGP${settings.cashDate ? ' on ' + settings.cashDate : ''})`}`); }
     settings = { ...settings, cash: st.cash.end, cashDate: st.to, cashSource: `Thndr statement to ${st.to}` }; changed.settings = true;
   }
   if (final) {

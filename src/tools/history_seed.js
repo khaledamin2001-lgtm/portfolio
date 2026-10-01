@@ -48,7 +48,7 @@ const isFundName = (n) => /^thndr/i.test(n || '');
   const bench = opt(D('bench', 'egx30.json'), { members: [] });
   const macro = opt(D('market', 'macro.json'), {});
   const manifest = fs.existsSync(path.join(args.inbox, 'manifest.json')) ? JSON.parse(fs.readFileSync(path.join(args.inbox, 'manifest.json'))) : [];
-  const byMonth = {}; let refused = 0; const skipped = [];
+  const byMonth = {}, accepted = []; let refused = 0; const skipped = [];
   for (const msg of manifest) {
     if (!/(monthly|requested) e-statement/i.test(msg.subject || '') || /us market/i.test(msg.subject || '')) continue;
     try {
@@ -61,13 +61,25 @@ const isFundName = (n) => /^thndr/i.test(n || '');
       const st = TS.parseStatement(docs);
       const why = !st.cash ? 'no account statement' : !st.month ? 'no period' : !st.fullMonth ? `not a whole month (${st.from} to ${st.to})` : st.cash.end == null ? 'no closing balance' : null;
       if (why) { skipped.push({ month: st.month || null, why }); continue; }
-      // the same month twice (a resent email, or one requested in the app): one with a position snapshot wins, then
-      // Thndr's monthly one, then the later
-      const prev = byMonth[st.month], rank = (x) => [x.st.snapshot ? 1 : 0, /monthly/i.test(x.msg.subject || '') ? 1 : 0, +x.msg.date || 0];
-      const better = !prev || (() => { const a = rank({ msg, st }), b = rank(prev); for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i]; return false; })();
-      if (prev) skipped.push({ month: st.month, why: 'the same month twice (one of them is used)' });
-      if (better) byMonth[st.month] = { msg, st, own };
+      accepted.push({ msg, st, own });
     } catch (e) { skipped.push({ date: msg.date, why: 'unreadable: ' + String((e && e.message) || e).slice(0, 80) }); }
+  }
+  // One Thndr account only. With no account number saved yet, the holder name is all ownerCheck had to go on, so two
+  // accounts whose holders' names look alike could both pass: the account number printed on most of the statements
+  // (the latest one's on a tie) is this portfolio's, and statements of any other account number are left out.
+  const codes = {};
+  accepted.forEach((x) => { if (x.own.code) codes[x.own.code] = (codes[x.own.code] || 0) + 1; });
+  const latestCode = (accepted.filter((x) => x.own.code).sort((a, b) => (+b.msg.date || 0) - (+a.msg.date || 0))[0] || {}).own;
+  const mine = Object.keys(codes).sort((a, b) => (codes[b] - codes[a]) || ((latestCode && latestCode.code === b) - (latestCode && latestCode.code === a)))[0] || null;
+  for (const x of accepted) {
+    if (mine && x.own.code && x.own.code !== mine) { refused++; skipped.push({ month: x.st.month, why: 'another Thndr account' }); continue; }
+    // the same month twice (a resent email, or one requested in the app): one with a position snapshot wins, then
+    // Thndr's monthly one, then the later
+    const { msg, st } = x;
+    const prev = byMonth[st.month], rank = (y) => [y.st.snapshot ? 1 : 0, /monthly/i.test(y.msg.subject || '') ? 1 : 0, +y.msg.date || 0];
+    const better = !prev || (() => { const a = rank(x), b = rank(prev); for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i]; return false; })();
+    if (prev) skipped.push({ month: st.month, why: 'the same month twice (one of them is used)' });
+    if (better) byMonth[st.month] = x;
   }
   const cands = Object.keys(byMonth).sort().map((m) => byMonth[m]);
   const s0 = cands.findIndex((c) => c.st.snapshot);   // the first month whose holdings Thndr printed
@@ -350,7 +362,11 @@ const isFundName = (n) => /^thndr/i.test(n || '');
   const last = cands[cands.length - 1], ML = last.st.month, toL = last.st.to;
   const acct = Object.assign({}, settings.account || {}, first.own.code ? { unifiedCode: first.own.code } : {});
   const P = prevMonth(M0), num = (x) => typeof x === 'number' && isFinite(x);
-  const s2 = Object.assign({}, settings, { inception: M0, trackFrom: toL, openingValue: 0, cash: r2(last.st.cash.end), cashDate: toL, cashSource: `Thndr statement to ${toL}`, account: acct,
+  // an empty start's opening cash is dated the day before the inception month, which the returns do not count: it is the
+  // portfolio's value at inception (openingValue), not a gain in the first month. A snapshot start's opening rows are
+  // dated inside its month (its last day), so they start from 0.
+  const openDep = (earlier && earlier.used) ? rows.find((t) => t.opening && t.t === 'Deposit' && t.d === to0) : null;
+  const s2 = Object.assign({}, settings, { inception: M0, trackFrom: toL, openingValue: openDep ? openDep.amt : 0, cash: r2(last.st.cash.end), cashDate: toL, cashSource: `Thndr statement to ${toL}`, account: acct,
     historyImport: { status: 'done', from: M0, to: ML, months: B.months, adjustments: adjTotal, adjustedMonths: adjMonths, gaps, at: now } });
   if (num((macro.benchClose || {})[P])) s2.benchCloseStart = macro.benchClose[P];
   if (num((macro.fxEom || {})[P])) s2.fxStart = macro.fxEom[P];

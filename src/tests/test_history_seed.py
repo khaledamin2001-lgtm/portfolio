@@ -139,6 +139,23 @@ def main():
             else:
                 check("... and not used when they do not (the account held something before): the portfolio starts at May-26's snapshot",
                       res.get("earlier") == {"from": "2026-04", "used": False} and st["inception"] == "2026-05" and [r["t"] for r in rows if r.get("opening")] == ["Deposit", "Buy"], json.dumps([res, rows])[:700])
+        # an empty start with cash already in the account: that cash is the value at inception, not a first-month gain
+        tmp4 = os.path.join(tmp, "d"); os.makedirs(tmp4)
+        mails = {"c-apr": ("1777500000000", statement(tmp4, "2026-04", "--start", "5000", "--nosnap", subject="Your requested E-statement - Apr 2026")),   # private-scan: synthetic
+                 "c-may": ("1780200000000", statement(tmp4, "2026-05", "--start", "14145", "--deposit", "1000", "--qty", "5", "--price", "90", "--close", "91", "--hold", "15"))}   # private-scan: synthetic
+        res, rows, items, marks, st, out = run_seed(tmp4, mails, {"history/2026-04.json": {"month": "2026-04", "days": {"2026-04-30": {"COMI": 86}}}})
+        dep = [r for r in rows if r.get("opening") and r["t"] == "Deposit"]
+        check("an empty start with opening cash: the cash is dated the day before inception and is the opening value (no first-month gain)",
+              res.get("earlier") == {"from": "2026-04", "used": True} and [(r["d"], r["amt"]) for r in dep] == [("2026-03-31", 5000)] and st.get("openingValue") == 5000, json.dumps([res, dep, st.get("openingValue")])[:600])
+        # two Thndr accounts whose holder names look alike: only the account printed on most statements is used
+        tmp5 = os.path.join(tmp, "e"); os.makedirs(tmp5)
+        mails = {"x-apr": ("1777500000000", statement(tmp5, "2026-04", "--start", "9145", "--deposit", "1000", "--qty", "5", "--price", "90", "--close", "91", "--hold", "15")),   # private-scan: synthetic
+                 "x-may": ("1780200000000", statement(tmp5, "2026-05", "--start", "9695", "--deposit", "0", "--qty", "0", "--price", "90", "--close", "91", "--hold", "15")),   # private-scan: synthetic
+                 "x-jun": ("1782800000000", statement(tmp5, "2026-06", "--code", "7654321", "--start", "500", "--deposit", "100", "--qty", "1", "--price", "50", "--close", "51"))}   # private-scan: synthetic
+        res, rows, items, marks, st, out = run_seed(tmp5, mails)
+        check("statements of a second Thndr account (same-looking name) are left out; the account on most statements is used",
+              res.get("ok") and res.get("first") == "2026-04" and res.get("last") == "2026-05" and (st.get("account") or {}).get("unifiedCode") == "1234567"   # private-scan: synthetic
+              and any(x.get("why") == "another Thndr account" for x in res.get("skipped") or []), json.dumps(res)[:700])   # private-scan: synthetic
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("ALL PASS" if not fails else f"{fails} FAILED")
