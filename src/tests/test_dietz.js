@@ -31,6 +31,19 @@ const feb = R2.months.find((r) => r.month === '2026-02');
 check('No-flow month: Dietz == legacy', feb.ret === feb.retSimple && Math.abs(feb.ret - (1800 / 1600 - 1)) < 1e-12, `${feb.ret}`);
 check('No-flow month: weightedFlow 0', feb.weightedFlow === 0);
 
+// 2b. the first days of a month, before the index's first close of it: the live month's benchmark is 0 (not unknown), so
+// every period that includes it still has a benchmark (it used to go blank from midnight on the 1st until the first close)
+{
+  const st = { ...settings, benchCloseStart: 100 };
+  const mk = { '2026-01': { cash: 0, securities: 1600, benchClose: 110 } };
+  const market = { index: { EGX30CAPPED: { close: 110, chg: 0, date: '2026-01-29', prevMonthClose: 100 } }, quotes: {} };
+  const Rb = PE.run({ settings: st, marks: mk, assets: {}, tx, market }, { type: 'Since Inception' }, { today: '2026-02-01' });
+  const febL = Rb.months.find((r) => r.month === '2026-02');
+  check('New month before the index trades: its benchmark is 0% and the all-time benchmark stays (+10%)', febL && febL.live && febL.bench === 0 && Math.abs(Rb.stats.benchTwr - 0.1) < 1e-12, `feb ${febL && febL.bench} · all time ${Rb.stats.benchTwr}`);
+  const Rm = PE.run({ settings: st, marks: mk, assets: {}, tx, market: { ...market, index: { EGX30CAPPED: { close: 99, chg: -10, date: '2026-02-03', prevMonthClose: 110 } } } }, { type: 'Month' }, { today: '2026-02-03' });
+  check('Once the index trades in the month, the month\'s benchmark is the move since the last month-end', Math.abs(Rm.stats.benchTwr - (99 / 110 - 1)) < 1e-12, `${Rm.stats.benchTwr}`);
+}
+
 // 3. real Khaled export
 const SP = path.join(__dirname, '..'), dir = process.env.KHALED_EXPORT || path.join(SP, 'private', 'export-khaled'); // private database export, never in the repo
 if (fs.existsSync(dir)) {

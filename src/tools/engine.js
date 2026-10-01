@@ -600,10 +600,13 @@
       const ix = market && market.index && market.index.EGX30CAPPED;
       const mk = (data.marks || {})[curMonth];
       if (!mk || mk.provisional) {
+        // the index's latest close is this month's close so far; before its first close of the month (the 1st, a weekend) it is
+        // still the last close of an earlier month, so the month has no index move yet (and prevMonthClose is a month too old)
+        const ixThisMonth = !!(ix && ix.date && monthOf(ix.date) === curMonth);
         live = {
           month: curMonth, cash: liveCash, securities: pre.mvTotal,
-          benchClose: ix && ix.date && monthOf(ix.date) === curMonth ? ix.close : null,
-          prevBenchClose: ix && ix.date && monthOf(ix.date) === curMonth ? ix.prevMonthClose : null,
+          benchClose: ix && ix.date && typeof ix.close === 'number' ? ix.close : null,
+          prevBenchClose: ixThisMonth ? ix.prevMonthClose : null,
           usdegp: market && market.fx && market.fx.USDEGP ? market.fx.USDEGP.price : null,
         };
       }
