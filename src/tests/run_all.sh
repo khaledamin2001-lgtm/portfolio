@@ -45,6 +45,8 @@ step_tests() {
   grep -E '^(FAIL|SKIP)' "$TMP/dietz.out" || true
   echo "  test_dietz.js: $(grep -c '^PASS' "$TMP/dietz.out") PASS, $(grep -c '^SKIP' "$TMP/dietz.out" || true) SKIP (private sections), last line: $(tail -1 "$TMP/dietz.out")"
   grep -q '^PASS' "$TMP/dietz.out" || die "test_dietz.js ran no check"
+  node src/tests/test_owner.js > "$TMP/owner.out" || { cat "$TMP/owner.out"; die "test_owner.js"; }
+  echo "  test_owner.js: $(tail -1 "$TMP/owner.out")"
   (cd "$TMP/tsrc" && node tests/test.js > "$TMP/test.out") || { cat "$TMP/test.out"; die "test.js"; }
   echo "  test.js: $(head -c 160 "$TMP/test.out")"
   (cd "$TMP/tsrc" && node tests/test_site_store.js > "$TMP/sitestore.out") || { cat "$TMP/sitestore.out"; die "test_site_store.js"; }

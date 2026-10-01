@@ -367,10 +367,23 @@
   // "Start Balance n" / "Name" / "End Balance n" from the right column interleaved between its lines, so those fixed
   // labels are removed before the phrase test. A portfolio with neither set imports nothing.
   const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  // The holder name as typed matches when it is printed as it is, or (two words or more) when its words appear in the
+  // header in the same order within a few words of each other: "Khaled Amin" matches "Khaled Samer Adel Amin", the full
+  // legal name Thndr prints, since people type the short name they go by.
   function holderSeenIn(head, holder) {
     const h = norm(head.replace(/\b(Start|End) Balance\s*-?[\d,]+(?:\.\d+)?/gi, ' ').replace(/(^|\s)Name(?=\s|$)/g, ' '));
     const want = norm(holder);
-    return !!want && (' ' + h + ' ').includes(' ' + want + ' ');
+    if (!want) return false;
+    if ((' ' + h + ' ').includes(' ' + want + ' ')) return true;
+    const w = want.split(' ').filter(Boolean), t = h.split(' ');
+    if (w.length < 2) return false;
+    for (let i = 0; i < t.length; i++) {
+      if (t[i] !== w[0]) continue;
+      let k = 1;
+      for (let j = i + 1; j < t.length && j <= i + 7 && k < w.length; j++) if (t[j] === w[k]) k++;
+      if (k === w.length) return true;
+    }
+    return false;
   }
   function accountOf(docs, holder) {
     const heads = (docs || []).map((d) => ((d && d.lines) || d || []).slice(0, 10).join(' ').replace(/\s+/g, ' '));
