@@ -569,6 +569,14 @@ print(r.seal_json(json.load(open(${JSON.stringify(path.join(TMP, 'snap.json'))})
     const picked = await G.page.locator('[data-testid=panel-me] [data-testid=panel-picked]').textContent();
     check('picking This year at the top switches the friends cards to this year (the big number is the year-to-date return)',
       /Friends · This year/.test(await G.$t('friends-panel').textContent()) && ytdBelow && picked.trim() === ytdBelow && /All time/.test(await G.$t('panel-me').textContent()), `${ytdBelow} vs ${picked}`);
+    // This quarter and Calendar year head the page with their whole span, like "Oct 2026 – Dec 2026"
+    await G.page.click('#period [data-pt="Quarter"]'); await G.page.waitForTimeout(500);
+    const qLabel = (await G.$t('period-label').textContent()).trim();
+    await G.page.click('#period [data-pt="Year"]'); await G.page.waitForTimeout(500);
+    const yLabel = (await G.$t('period-label').textContent()).trim();
+    const [qa, qb] = qLabel.split(' – '), MONS = ['Jan', 'Apr', 'Jul', 'Oct'];
+    check('This quarter shows the whole quarter at the top (e.g. Oct 2026 – Dec 2026), Calendar year the whole year',
+      /^[A-Z][a-z]{2} \d{4} – (Mar|Jun|Sep|Dec) \d{4}$/.test(qLabel) && MONS[['Mar', 'Jun', 'Sep', 'Dec'].indexOf(qb.slice(0, 3))] === qa.slice(0, 3) && /^[A-Z][a-z]{2} \d{4} – Dec \d{4}$/.test(yLabel), `${qLabel} | ${yLabel}`);
     await G.page.click('#period [data-pt="Since Inception"]'); await G.page.waitForTimeout(500);
     await G.$t('panel-friend').click(); await G.page.waitForTimeout(1000);
     check('tapping a friend card on the Overview opens their portfolio', /Omar/.test(await G.page.locator('#pf-name-text').textContent()) && await G.$t('view-banner').isVisible());

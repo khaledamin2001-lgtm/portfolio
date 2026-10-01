@@ -497,6 +497,15 @@ window.pdPeriod = () => {
   else if(r && S.sel.asOf) label += ` to ${M(r.asOf)}`;
   return { sel: S.sel, label };
 };
+// The heading over the period buttons: a quarter or a calendar year shows its whole span ("Oct 2026 – Dec 2026") even while
+// it is still running; every other period shows the months it covers (the engine's label)
+function periodHead(R){
+  const t=S.sel.type, r=R.range;
+  if(!R.stats.n || (t!=='Quarter' && t!=='Year')) return R.stats.label;
+  const y=r.asOf.slice(0,4), mo=+r.asOf.slice(5,7);
+  const end = t==='Year' ? `${y}-12` : `${y}-${String(Math.floor((mo-1)/3)*3+3).padStart(2,'0')}`;
+  return `${M(r.from)} – ${M(end)}`;
+}
 function renderPeriod(){
   const R=S.R; const months=R.months.filter(r=>r.has).map(r=>r.month).reverse();
   // a brand-new portfolio, or one still being built from the Thndr emails: no period to pick yet
@@ -504,7 +513,7 @@ function renderPeriod(){
   const asOf = R.range.asOf;
   const opt=(m,sel)=>`<option value="${m}" ${m===sel?'selected':''}>${M(m)}${R.months.find(r=>r.month===m&&r.live)?liveParen():''}</option>`;
   $('#period').innerHTML = `
-    <div class="label">${esc(R.stats.label)}</div>
+    <div class="label" data-testid="period-label">${esc(periodHead(R))}</div>
     <div class="seg" role="group" aria-label="Analysis period">${PT.map(([v,l])=>`<button data-pt="${v}" aria-pressed="${S.sel.type===v}">${l}</button>`).join('')}</div>
     ${S.sel.type==='Custom' ? `<label>From <select id="sel-from">${months.slice().reverse().map(m=>opt(m,R.range.from)).join('')}</select></label><label>To <select id="sel-to">${months.map(m=>opt(m,R.range.to)).join('')}</select></label>`
       : S.sel.type==='Since Inception' && !S.sel.asOf ? `<label>As of <select id="sel-asof">${months.map(m=>opt(m,asOf)).join('')}</select></label>` : `<label>As of <select id="sel-asof">${months.map(m=>opt(m,asOf)).join('')}</select></label>`}
