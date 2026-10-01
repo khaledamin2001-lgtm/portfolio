@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Unit + real-data tests for src/jobs/store.py. Prints test names and pass/fail only -- never document data or keys.
 
-    python3 -m unittest -v tests/test_store.py        (from SP/offclaude/A)
+    python3 -m unittest -v src/tests/test_store.py     (from the repository root)
 
 Most tests use a THROWAWAY key pair (fast PBKDF2) and synthetic docs. The RealExports tests use the two real exports and
 the real keys (local-only setup key files) and are skipped when those files are absent (e.g. in public CI)."""
@@ -10,7 +10,7 @@ import os, sys, glob, json, copy, base64, shutil, hashlib, tempfile, unittest, s
 HERE = os.path.dirname(os.path.abspath(__file__))
 A = os.path.dirname(HERE)
 SP = os.path.dirname(os.path.dirname(A))
-# works from SP/offclaude/A/tests (store in ../src/jobs) and from the public repo's src/tests (store in ../jobs)
+# store.py is in ../jobs (src/tests -> src/jobs)
 JOBS = next(p for p in (os.path.join(A, "src", "jobs"), os.path.join(A, "jobs")) if os.path.exists(os.path.join(p, "store.py")))
 sys.path.insert(0, JOBS)
 import store  # noqa: E402

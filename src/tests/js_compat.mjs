@@ -3,7 +3,7 @@
 //   node js_compat.mjs crypto  < {pkcs8, pub, envelope, plain}   (a THROWAWAY test key and synthetic data only)
 //        -> decrypts a store.py envelope exactly like lock.js unseal(e, 'portfolio-file-v1'), then seals a new document
 //           with the public key (the site editor's write path) and prints it for store.py to decrypt.
-// Track C: deepMerge / stripMarkers / applyBatch below are the reference JS port; copy them rather than re-deriving.
+// deepMerge / stripMarkers / applyBatch below are a reference JS port of the store rules (site/store.js is the one the site runs).
 import fs from 'node:fs';
 const { subtle } = globalThis.crypto;
 const enc = new TextEncoder(), dec = new TextDecoder();

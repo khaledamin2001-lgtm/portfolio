@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""Thndr inbox sync for ONE portfolio's engine repository (the Claude routine "Portfolio: Thndr inbox sync", plus the
-11th-of-the-month statement backstop reminder, turned into code).
+"""Thndr inbox sync for ONE portfolio (its folder in the engine repository): reads the owner's new Thndr emails (invoices
+and statements) from Gmail, updates the ledger, sends the inbox email, the weekly summary and the month-end report,
+and refreshes the site.
 
     python3 run_sync.py --engine DIR [--code DIR] [--manual] [--force-publish] [--now ISO] [--no-publish]
                         [--site-remote URL|PATH]
 
-Schedule: the workflow fires at 18:17 and 22:17 Cairo in both UTC offsets (15:17, 16:17, 19:17, 20:17 UTC); a run
-goes ahead only inside a slot window - "afternoon" 16:15-18:14, "evening" 18:15-22:59, "night" 23:00-23:59 and "after
+Schedule: email-run.yml at 16:15, 18:15 and 23:00 Cairo (started on time by cron-job.org; GitHub's own timers are a
+late backup). A run goes ahead only inside a slot window - "afternoon" 16:15-18:14, "evening" 18:15-22:59, "night" 23:00-23:59 and "after
 midnight" 00:00-06:59 Cairo (a late-started 11 pm run) - when jobs.json has no run of
-that slot today. --manual (workflow_dispatch, e.g. "Check inbox now" on the site) always runs and is not recorded as
-a scheduled slot.
+that slot today. It writes ran=true|false to GITHUB_OUTPUT, and email-run.yml's later steps follow it. --manual (the
+site's "Check inbox" button, Run workflow) always runs and is not recorded as a scheduled slot.
 
-Steps (routine step numbers in brackets):
+Steps (numbered as in the code's comments):
  [1,2] decrypt this portfolio's documents; PLAN = plan.js --lastRun <sync/state.lastRun>.
  [3,4] imap_fetch.py: Gmail X-GM-RAW search after PLAN.gmailAfter, new ids only -> inbox/<id>.json + manifest.json.
  [6,7] node src/tools/sync.js --data <docs> --inbox <inbox> --out <run> --today PLAN.today.
@@ -19,19 +20,21 @@ Steps (routine step numbers in brackets):
        marks -> set portfolio/marks, settings -> set portfolio/settings, assets_update -> update portfolio/assets,
        import_M -> set imports/M, sync_state -> set sync/state; committed and pushed to the engine repo. On a version
        conflict / rejected push: redo decrypt + sync.js + write once with the same inbox; then FAILED.
- [9]   summary.email with notify -> email to settings.factsheetEmail (subject/text from sync.js).
+ [9]   summary.email with notify -> the inbox email (src/jobs/emails.py sync_email) to the portfolio's recipient. If it
+       cannot be sent, it is kept encrypted as sync/outbox and sent by the next run.
  [9b]  Weekly email: PLAN.weekday Thu and PLAN.hour >= 21, once per week-ending date (jobs.json), when the portfolio has
-       it (config.weeklyEmail, default on for portfolioId "khaled" only - the routine sent it for Khaled only):
+       it (config.weeklyEmail, default on for portfolioId "khaled" only):
        weekly.js --week-ending PLAN.today; exit 2 = no closing prices, skipped. Failure is reported, not FAILED.
  [11]  For each month M in summary.monthlyPending: build the desk page from src/ (src/build.py), factsheet.js
        (--overlay run/write) -> HTML + PDF, excel.js + excel.py -> workbook, both encrypted with the site key as
        exports/<Prefix>-Portfolio-<Mon-YY>.{xlsx,pdf}.enc.json with an exports/index.json entry (without "pdf" when only
-       the PDF failed), and the factsheet email (HTML + the sync text + where to download). The other portfolio's
-       month-end files are made by its own engine repo, never here.
+       the PDF failed), and the month-end email (headline figures, PDF and workbook attached; recorded in jobs.json
+       monthEndEmailed before the publish, so a failed publish never sends it twice). The other portfolio's month-end
+       files are made by its own job, never here.
  [12]  Publish this portfolio's site folder with those files (publish.py) - always, so the heartbeat shows. Must succeed.
  [12b] Only after the publish: imports/M update {"reports": {factsheetSentAt, workbooksPublishedAt}, "reportsPending":
        {"__delete__": true}} for every month whose email went out and whose workbook was published.
- Backstop (the old 11th-of-the-month reminder): the first run on/after the 11th checks imports/<PLAN.prevMonth>; when
+ Backstop (the 11th-of-the-month reminder): the first run on/after the 11th checks imports/<PLAN.prevMonth>; when
        last month's statement is not posted, it emails a reminder saying whether that month's marks are provisional or
        missing. Once per month (jobs.json).
  Token check: once a day, when SITE_TOKEN's expiry (GitHub's token-expiration header) is 14 days away or less, one
@@ -111,7 +114,7 @@ def portfolio_label(ctx):
 
 
 def desk_page(ctx, work):
-    """Build the desk page from the public repo's src/ (never a Claude page); returns its path."""
+    """Build the desk page from the public repo's src/ ; returns its path."""
     b = os.path.join(work, "page")
     if not os.path.isdir(b):
         os.makedirs(b)

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* Synthetic ArtifactData export for the CI smoke tests. EVERYTHING HERE IS MADE UP: the portfolio is "Demo Portfolio",
+/* Synthetic export folder (<coll>/<doc>.json) for the CI smoke tests. EVERYTHING HERE IS MADE UP: the portfolio is "Demo Portfolio",
    the holder "Demo Holder", and every price, share count, amount and mark is generated from a fixed seed. Only the ticker
    symbols are real EGX tickers (public) so the tools see familiar shapes.
      node make_synthetic.js <out dir>

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* Dates for the scheduled routines, computed once in Africa/Cairo so the prompts never work out dates themselves.
+/* Dates for the scheduled jobs, computed once in Africa/Cairo (one place for "today", the weekday, last month, ...).
      node plan.js [--lastRun ISO] [--now ISO]
    Prints ONE JSON object:
      nowCairo      Cairo wall-clock time with its UTC offset, e.g. '2026-09-28T15:10:04+03:00'

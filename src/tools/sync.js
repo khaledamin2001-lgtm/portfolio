@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /* Thndr inbox sync: applies every new Thndr email to the portfolio ledger, oldest first.
-     node sync.js --data <ArtifactData export dir> --inbox <dir> --out <plan dir> [--today YYYY-MM-DD]
+     node sync.js --data <plain export folder: <coll>/<doc>.json> --inbox <dir> --out <plan dir> [--today YYYY-MM-DD]
    <inbox>/manifest.json lists [{id, subject, date}]; <inbox>/<id>.json is the Gmail get_message RAW result.
    - "Your Thndr Invoice": each trade is added, or the matching ledger row corrected to the invoice. A ledger row
      matches an invoice block only when it has the SAME date, type and asset and (stocks) the same quantity or a
@@ -35,7 +35,7 @@
    An invoice email is all-or-nothing: if any of its blocks cannot be read, nothing from that email is written.
    Output: <out>/write/* (documents to write) and <out>/summary.json (what changed, what needs attention).
    summary.monthlyPending lists the full months whose factsheet email / workbooks are still owed (imports/<M>.reports
-   is stamped by the routine); sync_state.json carries toolSha = sha256 (12 hex) of the tool files that ran.
+   is stamped by the job); sync_state.json carries toolSha = sha256 (12 hex) of the tool files that ran.
    summary.alert is null, or — when a month's monthly statement newly became overdue (once per month, from the 10th
    of the next month; state.alerts[M]) — every month still missing one, e.g. ['2026-06', '2026-09'] (missingStatements).
    The email subject starts with settings.name and links the site.
@@ -440,7 +440,7 @@ async function run() {
   fs.writeFileSync(path.join(out, 'summary.json'), JSON.stringify(summary, null, 1));
   console.log(JSON.stringify({ status: summary.status, processed: summary.processed, applied: summary.applied, held: summary.held, monthlyPosted: summary.monthlyPosted, monthlyPending: summary.monthlyPending, alert, headsUp: heads.map((it) => it.key), writes: summary.writes, toolSha: summary.toolSha }));
 }
-// Full months whose month-end reports are still owed: the routine stamps imports/<M>.reports.factsheetSentAt and
+// Full months whose month-end reports are still owed: the job stamps imports/<M>.reports.factsheetSentAt and
 // .workbooksPublishedAt after sending / publishing; a month posted on or after 2026-09-28 (when the stamp was
 // introduced) without both stamps is pending, and so is every month posted by this run.
 const REPORTS_TRACKED_FROM = '2026-09-28';

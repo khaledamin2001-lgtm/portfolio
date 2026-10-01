@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Public unit tests of the engine-repo jobs (src/jobs/*) on synthetic data only - no network, no secrets, no private
-fixtures. Covers the rules the Claude routines followed: the market job's never-overwrite marks patch and its write
+fixtures. Covers the rules the jobs follow: the market job's never-overwrite marks patch and its write
 plan, the sync job's mapping of sync.js write files to pinned store writes, the Cairo time gate, the IMAP search query
 and id/date conversions, the publish allow-list and index.json merge, and mail_send's recipient lock.
     python3 src/tests/test_jobs.py        (exit 0 = all pass; needs: cryptography)"""
@@ -84,7 +84,7 @@ try:
         json.dump({"x": f}, open(f"{tmp}/{f}", "w"))
     w = run_sync.writes_from_plan(tmp, {"ledger/y2026": 9, "portfolio/marks": 2, "portfolio/settings": 3, "portfolio/assets": 4, "sync/state": 5})
     got = {(x["op"], x["collection"], x["doc_id"], x["if_version"]) for x in w}
-    check("sync plan: every file maps to the routine's batch entry, pinned (0 = new doc)", got == {
+    check("sync plan: every file maps to its store write, pinned (0 = new doc)", got == {
         ("set", "ledger", "y2026", 9), ("set", "portfolio", "marks", 2), ("set", "portfolio", "settings", 3),
         ("update", "portfolio", "assets", 4), ("set", "imports", "2026-09", 0), ("set", "sync", "state", 5)})
     json.dump({}, open(f"{tmp}/surprise.json", "w"))
@@ -107,7 +107,7 @@ check("gate: market before 15:10 no, 15:10 yes; manual always", jc.gate(P("15:09
       and jc.gate(P("15:10"), run_market.WINDOW, {}, False)[0] == "day" and jc.gate(P("03:00"), run_market.WINDOW, {"day": "2026-09-28"}, True)[0] == "manual")
 
 # ---- IMAP helpers
-check("imap: the routine's Gmail query", imap_fetch.QUERY.format(after="2026/09/22") ==
+check("imap: the Gmail query", imap_fetch.QUERY.format(after="2026/09/22") ==
       'from:no-reply@system.thndr.app (subject:Invoice OR subject:E-statement) -subject:"US Market" after:2026/09/22')
 check("imap: quoted for IMAP", imap_fetch.imap_quote('a "b" c') == '"a \\"b\\" c"')
 check("imap: INTERNALDATE -> ms", imap_fetch.internal_ms("31-Dec-2025 08:32:02 +0000") == "1767169922000"   # private-scan: synthetic

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* Month-end workbook data: runs the page's own engine on an ArtifactData export and writes one JSON file for excel.py.
+/* Month-end workbook data: runs the page's own engine on a plain export folder (<coll>/<doc>.json) and writes one JSON file for excel.py.
      node excel.js --data <export dir> [--overlay <plan dir>/write] --month YYYY-MM --out <data.json> */
 'use strict';
 const fs = require('fs'), path = require('path');

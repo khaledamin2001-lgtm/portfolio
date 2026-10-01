@@ -131,7 +131,7 @@ def rotate(pid, old_sec, new_sec, repo, export_dir, hint="-"):
     print(f"  password hint for your notes: {hint}  (v3 stores no password; each device picks its own after the setup key)")
     print("NEXT: review `git status` in the repo, commit p/%s/ and push. Then EVERY device that opens this portfolio must enter" % pid)
     print("      the NEW setup key once (the old one and the old device setup no longer decrypt anything); the old secret dir")
-    print(f"      ({old_sec}) can be archived once every device is done. Update the routines/tools that hold the old public key if any.")
+    print(f"      ({old_sec}) can be archived once every device is done.")
     return {"pid": pid, "rewritten": rewritten, "checks": checks, "new_secret_dir": new_sec}
 
 

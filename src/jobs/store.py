@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Encrypted document store for a portfolio ENGINE repository (one private repo per portfolio).
 
-The engine repo mirrors the old Claude page database 1:1, one encrypted file per document:
+One encrypted file per document (the same documents the site's page reads: portfolio/settings, ledger/y2026, ...):
 
     config.json                      plain: {portfolioId, name, siteRepo, siteFolder, timezone}
     db/<collection>/<doc>.enc.json   one "portfolio-file-v1" envelope per document
 
 ======================================================================================================================
-API CONTRACT (Tracks B and C code to this; keep it stable)
+API CONTRACT (the jobs, publish.py and the site's editing all rely on it; keep it stable)
 ======================================================================================================================
 Envelope (the bytes on disk), exactly what tools/encrypt_file.py writes, as one line of compact JSON plus "\\n":
     {"v":1,"name":"<doc>.json","bytes":<plaintext length>,"epk":b64,"iv":b64,"ct":b64}
@@ -51,7 +51,7 @@ the key around to avoid repeating the 600k-iteration PBKDF2; `keys_json` is a pa
         Returns {"ok": True, "changed": [repo-relative paths written or removed], "results": [{"collection", "doc_id",
         "op", "status": created|updated|deleted|unchanged|absent, "version"}]}  -- no document data in it.
     migrate(export_dir, engine_dir, keys_json, config=None, overwrite=False, now=None, skip=("tools",))
-        ArtifactData export (<coll>/<doc>.json, raw data or {..., "data": {...}, "version"?}) -> db/ files. Version is
+        plain export folder (<coll>/<doc>.json, raw data or {..., "data": {...}, "version"?}) -> db/ files. Version is
         the export's own "version" when the file is wrapped and has one, else 1. Only the PUBLIC key is used. Refuses a
         non-empty db/ unless overwrite=True. config (dict) is written to config.json when given.
     verify(engine_dir, keys_json, secret, against=None)
@@ -275,7 +275,7 @@ def strip_markers(v):
 
 
 def deep_merge(base, patch):
-    """ArtifactData 'update' semantics. Objects merge recursively; arrays, scalars and null replace; an object value with
+    """'update' semantics (as the page's database uses them). Objects merge recursively; arrays, scalars and null replace; an object value with
     "__delete__": true removes the key. A non-object patch replaces base; a patch object over a non-object starts from {}."""
     if not isinstance(patch, dict):
         return _copy(patch)
@@ -421,7 +421,7 @@ def _unwrap_export(x):
 
 
 def read_export(export_dir, skip=("tools",)):
-    """-> {(coll, doc): (data, version)} for every <coll>/<doc>.json in an ArtifactData export."""
+    """-> {(coll, doc): (data, version)} for every <coll>/<doc>.json in a plain export folder."""
     out = {}
     for c in sorted(os.listdir(export_dir)):
         cd = os.path.join(export_dir, c)

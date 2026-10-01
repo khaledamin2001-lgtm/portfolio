@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
-"""Daily market update for ONE portfolio's engine repository (the Claude routine "Portfolio: EGX close market update",
-turned into code), then a site refresh for that portfolio (the old 3:38 PM "refresh live site" routine).
+"""Daily market update for ONE portfolio (its folder in the engine repository): today's closing prices, the index, the
+macro fields, then a refresh of that portfolio on the site.
 
     python3 run_market.py --engine DIR [--code DIR] [--manual] [--force-publish] [--prices out.json] [--now ISO]
                           [--no-publish] [--site-remote URL|PATH]
 
-Schedule: the workflow fires at 15:10 Cairo in both UTC offsets (12:10 and 13:10 UTC, Sun-Thu); the job runs only
-when plan.js says it is an EGX weekday (Sun-Thu), the Cairo time is 15:10 or later, and jobs.json has no market run
-for today. --manual (workflow_dispatch, e.g. "Refresh prices now" on the site) runs regardless and is not recorded as
-the day's scheduled run.
+Schedule: market-close.yml at 15:40 Cairo, Sunday to Thursday (started on time by cron-job.org; GitHub's own timer is a
+late backup). The job goes ahead only when plan.js says it is an EGX weekday, the Cairo time is 15:10 or later, and
+jobs.json has no market run for today. --manual (the site's "Update prices" button, Run workflow) always runs and is not
+recorded as the day's run.
 
-Steps (routine step numbers):
- 1-2. Decrypt this portfolio's documents. Prices are fetched for THIS portfolio's assets only (the routine's union
-      with the other portfolio's list is gone: the portfolios never mix).
+Steps:
+ 1-2. Decrypt this portfolio's documents. Prices are fetched for THIS portfolio's assets only (portfolios never mix).
  3.   python3 src/jobs/fetch_prices.py <assets> > out.json, retried 3 times 30 s apart (--prices uses a saved file).
       fillErrors are not a failure.
  4.   One all-or-nothing write, every document pinned to the version just read (if_version):
@@ -28,9 +27,11 @@ Steps (routine step numbers):
       e. portfolio/assets update {"items": entries} for out.newAssets names not already in the assets (watch entries).
       Ledger, settings, imports and sync documents are never written. If someone saved meanwhile (version conflict
       or rejected push) the patches are recomputed on the fresh documents once with the same prices.
- 5.   Publish this portfolio's site folder (publish.py). Then jobs.json records the run.
- 6.   Scheduled runs only, unless config.json "marketEmail" is false: the "Portfolio: market updated <close date>" email, market figures only (never holdings, cash,
-      values or anything from the ledger, marks or settings). A failure to send it is logged, not a job failure.
+ 5.   Publish this portfolio's site folder (publish.py), then record the run in jobs.json.
+ 6.   Scheduled runs only, unless config.json "marketEmail" is false: the "Portfolio: market updated <close date>" email
+      (src/jobs/emails.py market), market figures only (never holdings, cash, values or anything from the ledger,
+      marks or settings). It goes out after the run is recorded, so a late backup run never repeats it. A failure to
+      send it is logged, not a job failure.
 Output: one line of counts. Any failure: email "Portfolio: market FAILED <date>" and exit 1.
 """
 import os, sys, json, time, argparse, shutil
@@ -49,7 +50,7 @@ def isnum(v):
 
 
 def marks_patch(marks, out):
-    """The routine's step 4d. marks = portfolio/marks data; returns the {"months": ...} patch dict (possibly empty)."""
+    """Step 4d. marks = portfolio/marks data; returns the {"months": ...} patch dict (possibly empty)."""
     months = (marks or {}).get("months") or {}
     patch = {}
     pm = out.get("prevMonth") or {}

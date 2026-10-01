@@ -5,7 +5,7 @@
                        [--exports DIR --index FILE]
 
 1. Decrypts the engine repo's documents into a temporary folder (store.materialize) and encrypts them for the site
-   with tools/export.py (the same bundle the Claude routines published), unless the documents are unchanged since the
+   with tools/export.py (the bundle the site decrypts), unless the documents are unchanged since the
    last publish (<siteFolder>/data.fingerprint; --force re-encrypts anyway).
 2. Clones the site repository (config.siteRepo, main) over HTTPS with SITE_TOKEN (sent as an HTTP header, never in a
    URL or a log), writes ONLY <siteFolder>/data.enc.json, <siteFolder>/data.fingerprint and, with --exports,

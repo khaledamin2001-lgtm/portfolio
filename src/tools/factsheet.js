@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /* Render a monthly factsheet with the page's own code.
-   node factsheet.js --page <published page html> --data <ArtifactData export dir> [--overlay <plan dir>/write] --month YYYY-MM --out <file.html> [--pdf <file.pdf>] [--summary <file.json>]
+   node factsheet.js --page <published page html> --data <plain export folder: <coll>/<doc>.json> [--overlay <plan dir>/write] --month YYYY-MM --out <file.html> [--pdf <file.pdf>] [--summary <file.json>]
    The page runs headless with its database replaced by the exported documents (plus any planned writes).
    --out writes the email HTML; --pdf also prints that same HTML to an A4 PDF (Playwright page.pdf, backgrounds on,
    12 mm margins). At least one of the two is required. --summary also writes the headline figures (value, month / year /

@@ -1,119 +1,114 @@
-# Source of the portfolio desk pages, the live site and the scheduled jobs
+# src/: everything the site and the jobs run
 
-Everything the tracker runs is built from this directory. The repository is public and already publishes the whole built
-page (`../index.html`), so nothing here is secret — but **no data or keys ever go here** (see "Secrets" below).
+Every file the tracker runs is built from this folder. The repository is public, so nothing here is secret, and **no
+data or keys ever go here** (see "Secrets" at the end). The root `README.md` explains how the parts fit together; this
+file lists every file and how to build and test.
 
-## What each file is
+## The page (the app people see)
 
 | File | What it is |
 |---|---|
-| `app.html` | The desk page: markup, styles and the UI code, with four placeholders `/*ENGINE*/ /*ENGINE2*/ /*STATEMENT*/ /*APP2*/` that the build fills in. |
-| `engine.js` | Pure portfolio engine: ledger average cost, monthly Modified-Dietz return chain, period stats, XIRR, positions, checks. No DOM, no network. |
-| `engine2.js` | Second engine layer: price book from the daily history, daily valuation, Brinson attribution, income, trailing returns, `holdingsAt`. |
-| `statement.js` | Thndr statement reader: PDF text → statement/snapshot rows → reconciliation against the ledger, and the account lock (`ownerCheck`). |
-| `app2.js` | The rest of the page's UI code (tabs, reports, settings, factsheet rendering). |
-| `build.py` | Builds `portfolio-desk.html` (Khaled) and `yassin-desk.html` (Yassin) from the five files above and stamps them with `<meta name="pd-build">` (12 hex of the SHA-256 over the inputs + UTC build time). |
-| `tools/sync.js` | Unattended Thndr inbox sync (invoices, requested and monthly statements, marks, alerts, e-mail summary). |
-| `tools/excel.js`, `tools/excel.py` | Month-end Excel workbook: `excel.js` shapes the page's figures into JSON, `excel.py` writes the `.xlsx`. |
-| `tools/factsheet.js` | Renders the monthly factsheet HTML with the page's own code (headless, database replaced by an export). |
-| `tools/engine.js`, `tools/engine2.js`, `tools/statement.js` | **Copies** of the three root files, because `sync.js` and `excel.js` `require('./…')` them next to themselves (the jobs run all tools from one directory). Keep them identical to the root files: `build_tooldocs.py` warns when they drift; re-copy with `cp engine.js engine2.js statement.js tools/`. |
-| `tools/build_tooldocs.py` | Builds the `tools/<id>` documents each page keeps in its database (see "How the jobs get their code"). |
-| `site/build_site.py` | Wraps the built desk page (read-only mode) with the lock layer into the site's `index.html`, and writes `portfolios.json`, the web manifest and the icons. |
-| `site/lock.js`, `site/lock.css` | The lock screen and the crypto layer of the live site (setup key → wrapped private key, password, Face ID, data decryption, TradingView live prices). |
-| `site/make_keys.py` | Generates a portfolio's key pair: `keys.json` for the repo plus the setup key and private key into a secret directory. |
-| `site/rotate_keys.py` | Rekey runbook for one portfolio: new pair + setup key, re-encrypts `data.enc.json` and every published export with the new public key, swaps the files into the repo only after everything verifies (nothing committed). |
-| `jobs/fetch_prices.py` | The daily market job (scanner snapshot + a 10-session daily-bar backfill). **The same file as `../tools/fetch_prices.py` at the repository root** — that is the path the routine downloads; keep the two identical (`cmp jobs/fetch_prices.py ../tools/fetch_prices.py`). |
-| `tests/test.js` | Excel-parity check: engine vs the original workbook. Needs the two private fixtures `seed.json` (the ledger) and `expected.json` (the workbook's headline figures) — neither is in the repository, see Tests. |
-| `tests/test_dietz.js` | Modified-Dietz, Bonus, round-trip and same-day-ordering checks. The synthetic sections always run; the sections on the real database exports run only when `KHALED_EXPORT` / `YASSIN_EXPORT` (and `EXPECTED_JSON`) point at private copies, otherwise they print `SKIP`. Real figures those sections pin come from `expected.json` → `pins`, never from the file itself. |
-| `tests/test_sync.js` | **Not in the repository yet.** The Thndr sync test (invoice matcher, fund convention, Bonus shares, sender verification, account lock) still quotes real statement headers and reads private raw-email fixtures; it stays private until those are replaced by synthetic ones. |
-| `tests/run_all.sh` | The one entry point for the automatic checks (syntax, public-mode tests, tools on synthetic data, builds, private-data guard) — what GitHub Actions runs on every push; see "Automatic checks". |
-| `tests/fixtures/make_synthetic.js` | Writes a made-up database export ("Demo Portfolio", invented prices and amounts, real EGX tickers only) for the tool smoke tests. Deterministic. |
-| `tests/crypto_roundtrip.py` | Encrypts the synthetic export with `../tools/export.py` and a file with `../tools/encrypt_file.py` to a throwaway key, and decrypts both the way `site/lock.js` does. |
-| `tests/site_smoke.js` | Headless-Chromium check of the published `../index.html`: portfolio picker, setup-key screen, a wrong key refused, no console errors, no CSP violations, no request leaving the site. Never unlocks. |
-| `tests/check_private.py` | Private-data guard: fails on files or text that look like private data (see "Automatic checks"). Holds patterns only, no real value. |
+| `app.html` | The page: markup, styles and the UI code (tabs, charts, settings, editing). Four placeholders `/*ENGINE*/ /*ENGINE2*/ /*STATEMENT*/ /*APP2*/` are filled in by `build.py`. It reads its data through `window.pdHost.use('db')`, which the site layer provides. |
+| `app2.js` | The rest of the UI: analytics pages, attribution, income, the factsheet (also used headless by `tools/factsheet.js` through `window.pdFactsheet`), statement upload and review. |
+| `engine.js` | The core maths, no DOM and no network: the ledger with average cost, the monthly Modified-Dietz return chain, period statistics, XIRR, positions, data checks. |
+| `engine2.js` | The second layer: the price book from the daily history, daily valuation, Brinson attribution, income, trailing returns, `holdingsAt`, heads-up alerts. |
+| `statement.js` | Thndr PDF statements: PDF text → statement rows and the positions snapshot → matching against the ledger (`reconcile`), plus the account lock (`ownerCheck`: only a portfolio's own Thndr account is ever applied). |
+| `build.py` | Builds `portfolio-desk.html` and `yassin-desk.html` (the same page, different title) from the five files above, stamped `<meta name="pd-build" content="<12 hex> <UTC time>">`. They are build outputs (gitignored). |
+| `docs/SCHEMA.md` | The data: every document, its shape and who writes it. |
 
-## Build the desk pages
+## The site layer (`site/`)
 
-    cd src
-    python3 build.py            # → portfolio-desk.html, yassin-desk.html; prints both sizes and the pd-build stamp
-
-Each page is then published as its owner's Claude artifact (Khaled's and Yassin's pages are the same file with a different
-`<title>`). The stamp is visible in the page source (`<meta name="pd-build" …>`) so you can tell which build is live.
-
-## Build the live site
-
-    cd src/site
-    python3 build_site.py <path to this repository>   # reads ../portfolio-desk.html, writes index.html, portfolios.json, manifest, icons
-
-The site itself never holds plain data: `../tools/export.py` encrypts a page's database export into `p/<id>/data.enc.json`
-with that portfolio's public key, and `../tools/publish_site.py` is the one deterministic export → encrypt → commit → push
-step the scheduled jobs use.
-
-## Run the tests
-
-    cd src
-    node tests/test_dietz.js          # PASS/FAIL lines, exit 1 on any failure; the real-export sections print SKIP
-    node tests/test.js                # prints "seed.json not present …" and exits 0 unless the private fixtures are available
-
-With the private fixtures (kept outside the repository; `tests/seed.json`, `tests/expected.json` and `private/` are
-gitignored if you copy them in):
-
-    SEED_JSON=<seed.json> EXPECTED_JSON=<expected.json> node tests/test.js        # 39 stats + MV + unrealized; exit 1 on any BAD
-    KHALED_EXPORT=<export-khaled> YASSIN_EXPORT=<export-yassin> EXPECTED_JSON=<expected.json> node tests/test_dietz.js
-
-`seed.json` is Khaled's ledger as extracted from the workbook; `expected.json` holds the workbook's headline figures
-(`{stats:{twr,…}, mvTotal, unreal, sameDay:{name, realized, outcome}, pins:{rebates2026ThroughAug, workbookGapAug}}`; a missing
-`pins` entry only skips that one pinned value). No real figure is written into any test file —
-the public tests only carry the comparison logic. `tests/test_sync.js` is not staged yet (see the table above).
-
-## Automatic checks (GitHub Actions)
-
-Every push to `main` and every pull request runs `.github/workflows/checks.yml` (about 2–3 minutes). A failure puts a red ✗ on
-the commit in GitHub and e-mails whoever pushed it; the Actions tab shows which step failed and why. It does **not** stop
-GitHub Pages from publishing — it tells you something is broken so you can fix it. Nothing in it uses secrets or private
-data. Run the same checks locally from the repository root:
-
-    bash src/tests/run_all.sh                 # steps 1–4 and 6; or name steps: run_all.sh tools build
-    node src/tests/site_smoke.js              # step 5 (needs Playwright + Chromium)
-
-| Step | What fails it |
+| File | What it is |
 |---|---|
-| 1. Syntax | `node --check` on every `.js` under `src/`, `py_compile` on every `.py` under `src/` and `tools/`. |
-| 2. Engine tests | `tests/test_dietz.js` or `tests/test.js` failing in public mode (the private sections print `SKIP`, `test.js` exits 0 without its fixtures). |
-| 3. Tools on synthetic data | `tests/fixtures/make_synthetic.js` writes a made-up export; then `tools/plan.js`, `tools/weekly.js --week-ending 2026-09-10`, `tools/excel.js` + `excel.py` (workbook read back with openpyxl), `tools/sync.js` with an empty inbox (heads-up digest runs, nothing is sent), `tools/build_tooldocs.py`, `../tools/fetch_prices.py --help` and the `export.py` / `encrypt_file.py` round trip must all exit 0 with the expected output. |
-| 4. Build | the tool copies differ from the root files (`engine.js`, `engine2.js`, `statement.js`, `fetch_prices.py`); `build.py` or `site/build_site.py` fails; the site lacks the CSP meta or the `pd-build` stamp or still links Google Fonts; or the committed `../index.html` (and `portfolios.json`, manifest, icons, fonts) is not what `src/` builds today — commit the rebuilt site together with the `src/` change. |
-| 5. Live site | `tests/site_smoke.js` against the repository root served by `python3 -m http.server`, desktop and phone size. |
-| 6. Private-data guard | `tests/check_private.py` over every tracked file: private files (`seed.json`, `expected.json`, exports, sync folders, plain workbooks/PDFs, keys), anything under `p/<id>/` that is not encrypted, e-mail addresses outside a short allowlist, runs of 7+ digits (account codes, phone numbers), money-looking figures (`N,NNN.NN`, `NNNN.NN`, `N,NNN EGP`), a Unified Code or account-holder value, API tokens and private keys. Hits print masked. To also search for the real names and figures, keep them one per line in a file **outside** the repository and run `PRIVATE_MARKERS=<that file> python3 src/tests/check_private.py`. A deliberate synthetic value on a line can be marked `private-scan: synthetic`. |
+| `site/build_site.py` | Wraps the built page into the live site: the root `index.html` (the page + `lock.js` + `lock.css`, self-hosted fonts, the Content-Security-Policy), `portfolios.json`, the web manifest, icons, `vendor/` and `sw.js`. Run it after any change under `src/` and commit the outputs. |
+| `site/lock.js` | Everything specific to the website: the lock screen, keys and encryption (setup key, device password, Face ID / fingerprint), loading and decrypting the data, editing from the site (GitHub API), accounts (Firebase Auth + Firestore), friends and shared copies, the admin screen, email-update settings, live prices from TradingView, the offline copy. Each section starts with a comment saying what it does. |
+| `site/lock.css` | Styles for the lock screen and the site's own bars and screens. |
+| `site/store.js` | The site editor's write rules, the JavaScript twin of `jobs/store.py` (merge, markers, all-or-nothing batch), pinned by `jobs/merge_vectors.json`. |
+| `site/make_keys.py` | Makes a portfolio's key pair: `keys.json` for the repo, and the setup key and private key into a secret folder (never committed). |
+| `site/rotate_keys.py` | Re-keying runbook for one portfolio (lost setup key, compromised device): new keys, re-encrypt everything, swap in only after it verifies. |
+| `site/pwa/` | The installable app: `sw.js` (the service worker: an offline copy of the site's files and of the encrypted data) and the icons (`make_icons.py` draws them). |
+| `site/fonts/`, `site/vendor/` | Self-hosted fonts (`fonts.json` lists each face) and pdf.js 3.11.174 (reads statement PDFs in the browser). |
+| `cloud/firestore.rules` | Firestore security rules for accounts: who may read or write which encrypted document. Paste into the Firebase console to publish (the owner's email goes in place of `owner@example.com`). |
 
-## Secrets — never in the repository
+## The scheduled jobs (`jobs/`, Python)
 
-- Setup keys, private keys (`private.pk8`) and passwords live only in the owner's secret directory (created by
-  `site/make_keys.py`); the repository holds only `p/<id>/keys.json` (public key, the private key **wrapped** under the
-  setup key, and the password hash).
-- Database exports (`sync-*/`, `export-*/`), `seed.json`, month-end workbooks and any ledger data stay outside the repo;
-  `.gitignore` in this directory blocks the usual names. The only data that is committed is encrypted (`p/*/data.enc.json`,
-  `p/*/exports/*.enc.json`).
-- Rekeying (lost setup key, compromised device): `python3 site/rotate_keys.py <id> <old secret dir> <new secret dir>
-  <repo dir> <export dir> -` — the runbook at the top of that file is the reference; it generates the new pair, re-encrypts
-  `data.enc.json` and the published exports, replaces the repo files only after they verify with the new key, and never
-  commits. Then hand the new setup key to the owner out of band and have every device enter it (the owner's guide page,
-  Settings → "Keys and passwords", says the same in plain words).
+Run by the workflows in the private `portfolio-engine` repository as `python3 src/jobs/<job>.py --engine <its checkout>
+--code <this checkout>`. Each file's docstring explains its steps in detail.
 
-## How the routines fetch their code
+| File | What it is |
+|---|---|
+| `jobs_common.py` | Shared plumbing: `Ctx` (config, keys, today in Cairo, decrypting a portfolio into a temp folder), the time gate, engine commits, `jobs.json`, failure reporting, log masking. Read this first. |
+| `store.py` | The encrypted document store in the engine repo: one encrypted file per document, all-or-nothing writes pinned to the versions read. |
+| `run_market.py` | The daily market update for one portfolio: prices (`fetch_prices.py`), history, index, macro fields, then a site refresh and the "market updated" email. |
+| `run_shared_market.py` | The whole EGX market once a day for every account, published sealed to the members' key as `m/market.enc.json`. |
+| `run_sync.py` | The owner's Thndr inbox sync: new emails from Gmail (`imap_fetch.py`) → `tools/sync.js` → one write → the inbox email, the weekly summary, the month-end report, a site refresh. |
+| `run_account_mail.py` | Every opted-in site account: its Thndr emails from its own Gmail, "Build it from my Thndr emails", heads-up alerts, the weekly summary, the month-end report, friend requests, friends' copies, new sign-ups for the owner. Each email goes to that account's own address only. |
+| `run_reports.py` | Month-end reports for a portfolio without an inbox sync (Yassin's). |
+| `publish.py` | Encrypts a portfolio's documents (`../tools/export.py`) and pushes them to this repo's `p/<id>/`. |
+| `fetch_prices.py` | Prices from TradingView's public scanner plus a short daily-bar backfill. |
+| `imap_fetch.py` | Reads Thndr emails from Gmail over IMAP, read-only, into an inbox folder. |
+| `emails.py` | Every email's content (market, inbox, month-end, reminders, failures, the friends' emails). |
+| `mail_html.py` | The one email design (card, title, number tiles, notes, button) and its plain-text twin. |
+| `mail_send.py` | Sends through Gmail SMTP, only ever to the portfolio's own address; also the workflows' last-resort failure email. |
+| `account_alerts.js` | The heads-up items for an account (Node, uses `engine2.js`). |
+| `kick_new_accounts.py` | The every-5-minutes watcher (`.github/workflows/new-accounts.yml`): starts the account job for a brand-new account; warns before the on-time alarm key expires. |
+| `alarm_key.py` | The "alarm key expires soon" email. |
+| `email_samples.py` | One sample of every email, from made-up data, to the owner (engine workflow "Email samples"). |
+| `history_check.py` | Read-only check of "Build it from my Thndr emails" on the owner's real emails. |
+| `merge_vectors.json` | Test vectors for the store's write rules, shared by `store.py` and `site/store.js`. |
 
-- **Inbox sync, factsheet, Excel** (Claude Code Remote routines, fresh session each time) read their code from the
-  `tools/*` documents in each page's database (`tools/engine_js`, `engine2_js`, `statement`, `sync`, `excel_js`, `excel_py`,
-  `factsheet`, each `{filename, content, sha256, builtAt}`). After changing any of those files rebuild the documents and save
-  them with ArtifactData "set":
+## The Node tools (`tools/`)
 
-      cd src
-      python3 tools/build_tooldocs.py --out /tmp/tooldocs [--live <dir holding tools/<id>.json exported from the page>]
+Run by the jobs on a plain export folder (one `<collection>/<doc>.json` file per document, as `jobs_common.Ctx`
+materializes it).
 
-  The manifest it prints (id, filename, sha256, bytes) shows what changed against the live copies; the `sha256` inside each
-  document lets a job verify what it loaded.
-- **Market update** (`jobs/fetch_prices.py`) is downloaded by the routine from the repository:
-  `https://raw.githubusercontent.com/khaledamin2001-lgtm/portfolio/main/tools/fetch_prices.py`, then run as
-  `python3 fetch_prices.py merged_assets.json` (needs `pip install websocket-client`). It prints one JSON object; the routine
-  merges each entry of `histories` into `history/<month>` with "update" and writes `market/latest`, `bench/egx30` and the
-  market fields of the marks to both pages. `--no-fill` skips the backfill, `--fill N` changes its depth, `--help` explains
-  the output.
+| File | What it is |
+|---|---|
+| `tools/sync.js` | Applies Thndr emails (invoices, requested and monthly statements) to the ledger; prints the writes to make and the inbox email. Holds a statement for review unless the month reconciles exactly. |
+| `tools/history_seed.js` | "Build it from my Thndr emails": a whole portfolio from the monthly statements since 2019. |
+| `tools/weekly.js` | The Thursday weekly summary email (HTML + text). |
+| `tools/excel.js` + `tools/excel.py` | The month-end Excel workbook (`excel.js` shapes the figures, `excel.py` writes the `.xlsx`). |
+| `tools/factsheet.js` | Renders the monthly factsheet with the page's own code, headless (Playwright): HTML, PDF and the headline figures. |
+| `tools/plan.js` | Today's dates in Cairo for the jobs (weekday, last month, Gmail search start). |
+| `tools/engine.js`, `tools/engine2.js`, `tools/statement.js` | **Copies** of the files in `src/` (the tools `require('./…')` them from their own folder, and the jobs copy `tools/` on its own). Keep them identical: `cp engine.js engine2.js statement.js tools/` after a change; the build check fails when they differ. |
+
+`../tools/export.py` and `../tools/encrypt_file.py` (repository root) encrypt a portfolio's documents and a report file
+with only the public key; `jobs/publish.py` and `jobs/run_sync.py` call them.
+
+## Tests (`tests/`)
+
+| File | What it checks |
+|---|---|
+| `tests/run_all.sh` | The one entry point (what GitHub Actions runs on every push): syntax, unit tests, tools on synthetic data, the builds, the private-data guard. |
+| `tests/test_dietz.js` | Modified Dietz, bonus shares, round trips, same-day ordering. Sections on the real data run only with private exports (`KHALED_EXPORT`, `YASSIN_EXPORT`, `EXPECTED_JSON`), otherwise `SKIP`. |
+| `tests/test.js` | Excel parity against the original workbook; needs two private fixtures, otherwise exits 0. |
+| `tests/test_statement.js` | Statement reading and matching (the right ledger row, quiet months). |
+| `tests/test_owner.js` | The account lock: a statement is used only for its own holder / Thndr account. |
+| `tests/test_jobs.py` | The jobs' rules: market patches, sync writes, the time gate, recipients, unsent emails, the watcher, the alarm key. |
+| `tests/test_account_mail.py` | The account job end to end with a fake Firebase and mailer: alerts, weekly, Gmail import, history import, reports, friends, impostor links. `DUMP_EMAILS=<dir>` writes every email out. |
+| `tests/test_history_seed.py` | Building a portfolio from statements: gaps, names vs tickers, funds, an empty start, two Thndr accounts. |
+| `tests/test_store.py`, `tests/js_compat.mjs`, `tests/test_site_store.js` | The store's encryption and write rules, in Python and in the browser's JavaScript. |
+| `tests/crypto_roundtrip.py` | Encrypt with `export.py` / `encrypt_file.py`, decrypt the way `lock.js` does. |
+| `tests/site_smoke.js`, `tests/site_edit.js`, `tests/site_cloud.js` | Browser tests (Playwright): the locked site, editing, accounts and friends against a fake Firebase. No console errors, no CSP violations, no request leaving the site. |
+| `tests/check_private.py` | The private-data guard: fails on anything that looks like real data or a secret. A deliberate made-up value on a line can be marked `private-scan: synthetic`. |
+| `tests/fixtures/` | `make_synthetic.js` (a made-up "Demo Portfolio"), `make_statement_pdf.py` (made-up Thndr statement PDFs). |
+
+## Build and test
+
+From the repository root:
+
+    cd src && python3 build.py && cd site && python3 build_site.py ../..   # then commit index.html, sw.js etc. with the src/ change
+    bash src/tests/run_all.sh            # all automatic checks (needs node 20+, python 3.11+ with openpyxl, pillow, cryptography)
+    node src/tests/site_smoke.js         # and site_edit.js, site_cloud.js: the browser tests (need Playwright + Chromium)
+
+`run_all.sh` installs pdf.js into a temp folder unless `PDFJS_NODE_MODULES` points at a `node_modules` that has it.
+A failing check puts a red ✗ on the commit in GitHub; it does not stop GitHub Pages from publishing.
+
+## Secrets: never in the repository
+
+- Setup keys, private keys and passwords live only with the owner (`site/make_keys.py` writes them to a secret folder).
+  The repository holds only `p/<id>/keys.json`: the public key and the private key **wrapped** under the setup key.
+- Database exports, `seed.json` / `expected.json`, plain workbooks and PDFs stay outside the repository; `.gitignore`
+  blocks the usual names and `tests/check_private.py` fails the build on anything that looks like them. The only data
+  committed is encrypted (`p/*/data.enc.json`, `p/*/exports/*.enc.json`, `m/market.enc.json`).
+- The jobs' secrets (setup keys, Gmail app password, site token) are GitHub Actions secrets in the private repository.

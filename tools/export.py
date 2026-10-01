@@ -2,7 +2,7 @@
 """Encrypt a portfolio database export for the live site.
 Usage: python3 export.py <export dir> <keys.json> <out data.enc.json>
 <export dir> holds one folder per collection (portfolio, ledger, market, history, bench, imports), each with <doc id>.json
-files as saved by ArtifactData. Only the site's PUBLIC key is used: this script can encrypt but never decrypt.
+files (a plain export folder, as the jobs materialize it). Only the site's PUBLIC key is used: this script can encrypt but never decrypt.
 Scheme: ephemeral ECDH P-256 with the site key -> HKDF-SHA256 -> AES-256-GCM over gzipped JSON. Needs: pip install cryptography"""
 import sys, os, json, gzip, base64, datetime
 from cryptography.hazmat.primitives.asymmetric import ec

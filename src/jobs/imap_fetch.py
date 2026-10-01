@@ -3,13 +3,13 @@
 
     python3 imap_fetch.py --after YYYY/MM/DD --out <inbox dir> [--state <sync/state.json>]
 
-Same search the Claude routine ran through the Gmail connector, as Gmail's own X-GM-RAW search over All Mail:
+The search, as Gmail's own X-GM-RAW search over All Mail:
     from:no-reply@system.thndr.app (subject:Invoice OR subject:E-statement) -subject:"US Market" after:<after>
 keeping only subjects that start with "Your Thndr Invoice", "Your requested E-statement" or "Your monthly E-statement"
 and whose id is not already a key of sync/state.seen. Unlike a thread search, IMAP returns every message, so later
 messages in a thread are never missed.
 
-Writes, in exactly the shape the Gmail connector produced (so sync.js is unchanged):
+Writes (the inbox folder sync.js and history_seed.js read):
     <out>/<id>.json      {"id", "raw": base64url RFC 822 bytes, "internalDate": "<ms since epoch>"}
     <out>/manifest.json  [{"id", "subject", "date": internalDate}]   ([] when nothing is new)
 The id is the Gmail API message id = lowercase hex of IMAP X-GM-MSGID, so the ids already in sync/state.seen match.

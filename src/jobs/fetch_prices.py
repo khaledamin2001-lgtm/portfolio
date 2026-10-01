@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Daily market update for the portfolio pages, from TradingView's public scanner (15-min delayed) plus a short daily-bar
+"""Prices for the market jobs (run_market.py, run_shared_market.py), from TradingView's public scanner (15-min delayed) plus a short daily-bar
 backfill from TradingView's chart websocket so a missed run never leaves a hole in the price history.
 
 Usage: python3 fetch_prices.py <assets.json> [--fill N] [--no-fill] [--all]
-    <assets.json>  a portfolio/assets document as saved by ArtifactData ({items:{name:{symbol,...}}}, optionally wrapped
-                   in {id, version, data}); the routine merges both pages' documents into one file first.
+    <assets.json>  a portfolio/assets document ({items:{name:{symbol,...}}}, optionally wrapped in {id, version, data})
     --fill N       fill the last N EGX sessions (default 10; N+5 daily bars are fetched per symbol, at least 15)
     --no-fill      scanner snapshot only (history for the latest session, nothing older)
     --all          daily history for EVERY EGX-listed stock, not just the assets file's symbols (the shared market job
@@ -13,22 +12,21 @@ Usage: python3 fetch_prices.py <assets.json> [--fill N] [--no-fill] [--all]
 Prints ONE JSON object:
     latest        market/latest — a quote for EVERY EGX-listed stock, the four indices, USD/EGP and gold
     histories     [{month, days:{'YYYY-MM-DD': {SYM: close, ...}}}, ...] one entry per month touched, oldest first; the
-                  routine merges each into history/<month> with "update" (set when the document does not exist yet).
+                  market job merges each into history/<month> with "update" (set when the document does not exist yet).
                   Days cover the last N sessions for the portfolios' own symbols, the EGX30 members, the four indices,
                   USDEGP and GOLD24K; for the latest session the scanner close wins (it is the most recent).
-    historyMonth  month of the latest session (kept for older routine text); history = the histories entry for that month
+    historyMonth  month of the latest session; history = the histories entry for that month
     fillErrors    {SYM: error} symbols whose daily bars could not be fetched after retries (they are simply skipped)
     fill          {sessions, symbols, bars, seconds} statistics of the backfill
     prevMonth     EGX30 Capped close of the previous month; bench: bench/egx30 members plus divYield (the index's estimated
                   annual dividend yield, a fraction: capped member weight x dividend yield) and divYieldAsOf; newAssets:
                   index members not in the asset list (as watch entries); macro: Egypt CPI month-on-month, USD/EGP
                   month-end closes and cashRate {YYYY-MM: CBE policy rate in force that month, as a fraction} for the last
-                  18 months (the routine fills marks[M].cashRate/cashRateSource for closed months lacking it, like cpi).
+                  18 months (the market job fills marks[M].cashRate/cashRateSource for closed months lacking it, like cpi).
     Each quote carries price, chg, date, prevMonthClose, name, dy (dividend yield %), exDate/divUp, exRecent/divRecent and
     the valuation fields pe (P/E ttm), pb (P/B), roe (return on equity %), mcap (market cap, EGP), hi52/lo52 (52-week
     high/low); any of them may be null. latest.rates.policy = {rate (fraction), date YYYY-MM, source}.
-Needs: pip install websocket-client. The same file is committed as tools/fetch_prices.py in the site repository
-(khaledamin2001-lgtm/portfolio) and the routine curls it from there; keep the two identical."""
+Needs: pip install websocket-client."""
 import json, sys, urllib.request, datetime, zoneinfo, time, re, random, string, os, argparse
 from concurrent.futures import ThreadPoolExecutor
 

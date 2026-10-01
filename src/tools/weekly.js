@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* Weekly portfolio email: one EGX week of P/L for one portfolio, from an ArtifactData export, with the page's own engine.
+/* Weekly portfolio email: one EGX week of P/L for one portfolio, from a plain export folder (<coll>/<doc>.json), with the page's own engine.
      node weekly.js --data <export dir> [--overlay <plan dir>/write] [--week-ending YYYY-MM-DD] --out <email.html>
                     [--text <email.txt>] [--json <summary.json>] [--today YYYY-MM-DD]
    Week: the EGX sessions (Sun–Thu, Africa/Cairo) from the session after the previous week's last close through the
@@ -299,7 +299,7 @@ function main() {
   const argv = process.argv.slice(2), args = {};
   for (let i = 0; i < argv.length; i++) if (argv[i].startsWith('--')) { const k = argv[i].slice(2), v = argv[i + 1]; args[k] = v != null && !v.startsWith('--') ? (i++, v) : true; }
   const fail = (code, o) => { console.log(JSON.stringify({ ok: false, ...o })); process.exit(code); };
-  if (typeof args.data !== 'string') fail(1, { error: 'give --data <ArtifactData export dir>' });
+  if (typeof args.data !== 'string') fail(1, { error: 'give --data <export folder>' });
   if (typeof args.out !== 'string') fail(1, { error: 'give --out <email.html>' });
   for (const k of ['week-ending', 'today']) if (args[k] != null && !(typeof args[k] === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(args[k]) && !isNaN(Date.parse(args[k])))) fail(1, { error: `--${k} must be YYYY-MM-DD` });
   let s;
