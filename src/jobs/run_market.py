@@ -119,8 +119,6 @@ def build_writes(data_dir, out):
 
 def fetch_prices(ctx, assets_path, out_path):
     script = os.path.join(ctx.code, "src", "jobs", "fetch_prices.py")
-    if not os.path.exists(script):
-        script = os.path.join(ctx.code, "tools", "fetch_prices.py")
     last = None
     for attempt in range(4):
         if attempt:
@@ -162,7 +160,7 @@ def main(argv=None):
         if not slot:
             jc.log(f"market: skipped ({why}; Cairo {plan['nowCairo'][11:16]})")
             return 0
-        jc.log(f"market: {why}, {plan['today']} Cairo {plan['nowCairo'][11:16]}, mode {ctx.mode}")
+        jc.log(f"market: {why}, {plan['today']} Cairo {plan['nowCairo'][11:16]}")
         work = ctx.workdir()
         data = os.path.join(work, "data")
         step = "decrypt"
@@ -201,8 +199,8 @@ def main(argv=None):
         r = None
         if not a.no_publish:
             import publish
-            r = publish.publish(ctx, f"Daily data update {plan['today']}", push=ctx.live, remote=a.site_remote, force=a.force_publish)
-            jc.log(f"publish: {'pushed' if r['pushed'] else 'committed locally (shadow)' if r['committed'] else 'nothing to publish'}"
+            r = publish.publish(ctx, f"Daily data update {plan['today']}", push=True, remote=a.site_remote, force=a.force_publish)
+            jc.log(f"publish: {'pushed' if r['pushed'] else 'nothing to publish'}"
                    f"{', data unchanged' if r['dataUnchanged'] else ''}, head {r['head']}, {len(r['files'])} files")
         step = "record"
         state = jc.jobs_state(ctx)
@@ -213,7 +211,7 @@ def main(argv=None):
         jc.save_jobs_state(ctx, state)
         for attempt in range(3):
             try:
-                jc.engine_commit(ctx, ["jobs.json"] + list(getattr(ctx, "outbox_files", [])), f"jobs: market {plan['today']}")
+                jc.engine_commit(ctx, ["jobs.json"], f"jobs: market {plan['today']}")
                 break
             except jc.PushRejected:
                 jc.engine_refresh(ctx)

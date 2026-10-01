@@ -327,7 +327,7 @@ def main(argv=None):
         if not slot:
             jc.log(f"sync: skipped ({why}; Cairo {plan0['nowCairo'][11:16]})")
             return 0
-        jc.log(f"sync: {why}, {plan0['today']} Cairo {plan0['nowCairo'][11:16]}, mode {ctx.mode}")
+        jc.log(f"sync: {why}, {plan0['today']} Cairo {plan0['nowCairo'][11:16]}")
         work = ctx.workdir()
         data, inbox, run = (os.path.join(work, x) for x in ("data", "inbox", "run"))
         # [1,2] documents and PLAN
@@ -435,9 +435,9 @@ def main(argv=None):
             import publish
             idx = entries or None
             pr = publish.publish(ctx, f"Thndr sync {plan['today']}", exports=exports_dir if entries else None,
-                                 index_entries=idx, push=ctx.live, remote=a.site_remote, force=a.force_publish)
+                                 index_entries=idx, push=True, remote=a.site_remote, force=a.force_publish)
             published = True
-            jc.log(f"publish: {'pushed' if pr['pushed'] else 'committed locally (shadow)' if pr['committed'] else 'nothing to publish'}"
+            jc.log(f"publish: {'pushed' if pr['pushed'] else 'nothing to publish'}"
                    f"{', data unchanged' if pr['dataUnchanged'] else ''}, head {pr['head']}, {len(pr['files'])} files")
         # [12b] stamp only after the publish succeeded
         step = "stamp reports"
@@ -479,7 +479,7 @@ def main(argv=None):
             j2["sync"] = rec
             jc.save_jobs_state(ctx, j2)
             try:
-                jc.engine_commit(ctx, ["jobs.json"] + list(getattr(ctx, "outbox_files", [])), f"jobs: sync {plan['today']} {slot}")
+                jc.engine_commit(ctx, ["jobs.json"], f"jobs: sync {plan['today']} {slot}")
                 break
             except jc.PushRejected:
                 jc.engine_refresh(ctx)

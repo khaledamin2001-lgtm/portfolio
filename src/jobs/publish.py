@@ -6,7 +6,7 @@
 
 1. Decrypts the engine repo's documents into a temporary folder (store.materialize) and encrypts them for the site
    with tools/export.py (the same bundle the Claude routines published), unless the documents are unchanged since the
-   last publish (<siteFolder>/data.fingerprint, same fingerprint as tools/publish_site.py; --force re-encrypts anyway).
+   last publish (<siteFolder>/data.fingerprint; --force re-encrypts anyway).
 2. Clones the site repository (config.siteRepo, main) over HTTPS with SITE_TOKEN (sent as an HTTP header, never in a
    URL or a log), writes ONLY <siteFolder>/data.enc.json, <siteFolder>/data.fingerprint and, with --exports,
    <siteFolder>/exports/<name>.enc.json + <siteFolder>/exports/index.json (--index = a JSON list of entries; each
@@ -17,7 +17,7 @@
    rejected (someone pushed meanwhile) or the network fails, it re-clones the state of origin/main, re-writes the
    files and tries again (waits 2, 4, 8, 16 s).
 Only this portfolio's folder is ever touched; the other portfolio's files are never read or written.
---no-push (and shadow mode) stops after the local commit. --remote overrides the clone source (tests: a local bare repo).
+--no-push stops after the local commit. --remote overrides the clone source (tests: a local bare repo).
 Prints ONE JSON line {"ok", "committed", "pushed", "dataUnchanged", "head", "files"}; exit 1 with {"ok": false, "error"}.
 """
 import os, re, sys, json, time, base64, shutil, argparse, importlib.util, subprocess
@@ -44,12 +44,19 @@ def is_envelope(path):
 
 
 def fingerprint(ctx, src):
-    """tools/publish_site.py's fingerprint, loaded from the code checkout so both publishers agree byte for byte."""
-    p = os.path.join(ctx.code, "tools", "publish_site.py")
-    spec = importlib.util.spec_from_file_location("publish_site", p)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.fingerprint(src)
+    """sha256 of the export's documents (as tools/export.py reads them), key-sorted; version stamps are ignored. Equal
+    fingerprints mean the published data would not change, so nothing is re-encrypted or pushed."""
+    import hashlib
+    docs = {}
+    for c in COLLECTIONS:
+        d = os.path.join(src, c)
+        if not os.path.isdir(d):
+            continue
+        for f in sorted(os.listdir(d)):
+            if f.endswith(".json"):
+                x = json.load(open(os.path.join(d, f)))
+                docs[f"{c}/{f[:-5]}"] = x.get("data", x) if isinstance(x, dict) else x
+    return hashlib.sha256(json.dumps(docs, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def _auth_env():
@@ -199,10 +206,8 @@ def main(argv=None):
         jc.engine_refresh(ctx)      # publish the newest data, not the checkout as it was when this workflow started
         plan = ctx.plan()
         idx = json.load(open(a.index)) if a.index else None
-        push = not a.no_push and ctx.live
+        push = not a.no_push
         r = publish(ctx, a.message or f"Data update {plan['today']}", a.exports, idx, push=push, remote=a.remote, force=a.force)
-        if not push and not a.no_push:
-            r["shadow"] = True
         st = jc.jobs_state(ctx)
         st.setdefault("publish", {}).update({"lastRun": plan["today"], "at": jc.now_iso(), "status": "ok", "head": r.get("head")})
         jc.save_jobs_state(ctx, st)

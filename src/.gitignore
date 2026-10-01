@@ -10,7 +10,6 @@ secret/
 # build outputs (the site publishes index.html; the desk pages are published as Claude artifacts)
 portfolio-desk.html
 yassin-desk.html
-tooldocs/
 # tests/test_dietz.js writes its Excel-shape scratch files (real data) under fix2/ fix3/ fix4/ when run with the private
 # exports (gitignore has no end-of-line comments: a comment must be on its own line)
 /fix[0-9]*/

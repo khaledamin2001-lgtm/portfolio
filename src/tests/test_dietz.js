@@ -173,7 +173,7 @@ if (fs.existsSync(fixK) && fs.existsSync(fixY)) {
   check('Khaled: every closed name\'s trips add up to its row (realized and dividends)', offRows.length === 0, offRows.map((r) => r.name).join(', ') || 'all match');
   check('Khaled: S.realized unchanged between modes', sN.realized === sT.realized, `${sT.realized}`);
   // 9d. workbook cut-off (tools/excel.js run as a child process)
-  const xlOut = path.join(SP, 'fix3', 'tmp', 'engine', 'xl_test.json');
+  const xlOut = path.join(require('os').tmpdir(), 'pd-test-dietz', 'xl_test.json')   // scratch output stays out of the repository;
   try {
     fs.mkdirSync(path.dirname(xlOut), { recursive: true });
     require('child_process').execFileSync(process.execPath, ['excel.js', '--data', fixK, '--month', '2026-08', '--out', xlOut], { cwd: path.join(SP, 'tools'), stdio: 'pipe' });
@@ -248,7 +248,7 @@ if (fs.existsSync(fixK)) {
 
 // 11. Excel workbook (tools/excel.js + excel.py) for Aug-26: Monthly holds values, the formulas moved to the last sheet
 if (fs.existsSync(fixK)) {
-  const T = path.join(SP, 'fix3', 'tmp', 'engine'), cp = require('child_process');
+  const T = path.join(require('os').tmpdir(), 'pd-test-dietz'), cp = require('child_process');   // scratch output stays out of the repository
   const J0 = (f) => { const x = JSON.parse(fs.readFileSync(f)); return x.data || x; };
   try {
     fs.mkdirSync(T, { recursive: true });

@@ -8,14 +8,14 @@ Nothing here holds private data, and nothing any job prints carries a portfolio 
 statuses only. Plaintext documents exist only in a temporary work directory that is removed when the job ends.
 
 config.json (plain, in the engine repo):
-    {"portfolioId", "name", "siteRepo", "siteFolder", "timezone", "mode"?, "recipient"?, "marketEmail"?}
-    recipient     the one address every email goes to (default: portfolio/settings.factsheetEmail)
-    marketEmail   false = the market job sends no "market updated" email (default true)
-    mode "live"   emails go out through Gmail and the site is pushed;
-         "shadow" (the default when absent) the job does everything else - fetches, writes and commits the engine
-                  repo's own data, builds reports, prepares the site commit - but sends no email (each one is saved
-                  encrypted under outbox/ in the engine repo instead) and never pushes the site. Used for the side-by-side
-                  weeks; switching over = setting "mode": "live". Env JOBS_MODE overrides (tests).
+    {"portfolioId", "name", "siteRepo", "siteFolder", "timezone", "recipient"?, "failureRecipient"?, "marketEmail"?,
+     "reportEmail"?, "weeklyEmail"?}
+    recipient         the one address the portfolio's emails go to (default: portfolio/settings.factsheetEmail)
+    failureRecipient  where its job FAILED notices go (default: recipient) - the platform owner, for a portfolio run
+                      for someone else
+    marketEmail       false = no "market updated" email (default true)
+    reportEmail       false = no month-end report email (default true); the reports are still published
+    weeklyEmail       true/false = the Thursday summary (default: on for portfolioId "khaled" only)
 jobs.json (plain, in the engine repo): when each scheduled job last ran (dates and statuses only, never figures).
 
 Times: every Cairo date/hour comes from src/tools/plan.js (env JOBS_NOW / --now overrides the clock, tests only).
@@ -93,9 +93,6 @@ class Ctx:
                 raise JobError("config", f"config.json has no {k}")
         if not re.match(r"^p/[a-z0-9_-]+$", self.config["siteFolder"]):
             raise JobError("config", "config.json siteFolder must look like p/<id>")
-        self.mode = (os.environ.get("JOBS_MODE") or self.config.get("mode") or "shadow").strip().lower()
-        if self.mode not in ("live", "shadow"):
-            raise JobError("config", "mode must be live or shadow")
         self.keys_path = os.path.join(self.code, *self.config["siteFolder"].split("/"), "keys.json")
         if not os.path.exists(self.keys_path):
             raise JobError("config", f"{self.config['siteFolder']}/keys.json not found in the code checkout")
@@ -103,10 +100,6 @@ class Ctx:
         self._priv = None
         self.tmp = None
         self.plan_cache = None
-
-    @property
-    def live(self):
-        return self.mode == "live"
 
     @property
     def priv(self):
@@ -279,13 +272,13 @@ def engine_refresh(ctx):
 
 
 def engine_commit(ctx, paths, message):
-    """Commit the given engine-repo paths (db files, jobs.json, outbox) and push. Returns the short head or None when
+    """Commit the given engine-repo paths (db files, jobs.json) and push. Returns the short head or None when
     there was nothing to commit. Raises PushRejected when origin moved meanwhile (the caller redoes its work)."""
     paths = sorted(set(paths))
     if not paths:
         return None
     for p in paths:
-        if not (p.startswith("db/") or p == "jobs.json" or p.startswith("outbox/")):
+        if not (p.startswith("db/") or p == "jobs.json"):
             raise JobError("git", f"refusing to commit {p} to the engine repository")
     git(ctx.engine, "add", "-A", "--", *paths)
     if not git(ctx.engine, "diff", "--cached", "--name-only").stdout.strip():

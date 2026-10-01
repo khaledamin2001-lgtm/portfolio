@@ -11,10 +11,8 @@ own month-end files (workbook and PDF factsheet). run_account_mail.py uses build
         emailed its own failure (marker file, see jobs_common.failure_mark). When the settings cannot be decrypted
         (e.g. the setup key itself is the problem) it falls back to GMAIL_ADDRESS - the sender's own mailbox.
 
-Shadow mode (config.json "mode" is not "live"): nothing is sent; the message is saved encrypted (site public key) as
-outbox/<Cairo date>/<time>-<n>.enc.json in the engine repo, for comparing with what the Claude jobs sent.
 Env for tests: SMTP_HOST, SMTP_PORT, SMTP_SSL=0 (plain SMTP). Prints one status line, never the message or a secret."""
-import os, re, sys, ssl, json, time, smtplib, argparse, datetime
+import os, re, sys, ssl, time, smtplib, argparse
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
 
@@ -22,7 +20,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import jobs_common as jc  # noqa: E402
-import store  # noqa: E402
 
 ADDR = re.compile(r"^[^@\s,;<>\"']+@[^@\s,;<>\"']+\.[A-Za-z]{2,}$")
 
@@ -81,31 +78,14 @@ def smtp_send(msg, sender, pw, to):
     raise jc.JobError("email", f"SMTP failed after retries: {type(last).__name__}: {jc.redact(last)[:200]}")
 
 
-def _outbox(ctx, to, subject, text, html):
-    """Shadow mode: keep an encrypted copy of what would have been sent."""
-    day = ctx.today()
-    d = os.path.join(ctx.engine, "outbox", day)
-    os.makedirs(d, exist_ok=True)
-    n = len([f for f in os.listdir(d) if f.endswith(".enc.json")]) + 1
-    name = f"{datetime.datetime.utcnow().strftime('%H%M%S')}-{n:02d}"
-    body = json.dumps({"to": to, "subject": subject, "text": text, "html": html, "at": jc.now_iso()}, ensure_ascii=False).encode("utf-8")
-    with open(os.path.join(d, name + ".enc.json"), "wb") as f:
-        f.write(store.seal(ctx.keys, body, name + ".json"))
-    return f"outbox/{day}/{name}.enc.json"
-
-
 def send(ctx, subject, text, html=None, to=None, attachments=None):
-    """Send to settings.factsheetEmail. `to`, when given, must be that same address. Returns a short status string
-    ('sent', or 'shadow: outbox/...'); the caller commits outbox files in shadow mode (jobs collect them)."""
+    """Send to the portfolio's one allowed address (ctx.recipient()). `to`, when given, must be that same address.
+    Returns 'sent'."""
     allowed = ctx.recipient()
     if to is not None and to.strip().lower() != allowed.lower():
         raise jc.JobError("email", "refusing to email anyone but settings.factsheetEmail")
     if not subject or "\n" in subject or "\r" in subject:
         raise jc.JobError("email", "bad subject")
-    if not ctx.live:
-        path = _outbox(ctx, allowed, subject, text, html)
-        ctx.__dict__.setdefault("outbox_files", []).append(path)
-        return "shadow: saved to " + path
     sender, pw = _sender()
     smtp_send(build(sender, allowed, subject, text, html, attachments), sender, pw, allowed)
     return "sent"
@@ -118,8 +98,6 @@ def send_failure(ctx, engine, code, subject, body, html=None):
             ctx = jc.Ctx(engine, code)
         except Exception:
             ctx = None
-    if ctx is not None and not ctx.live and not (ctx.config.get("failureEmails") is True):
-        return "shadow: failure email not sent (GitHub's own failure notice still goes out)"
     sender, pw = _sender()
     to = None
     if ctx is not None:

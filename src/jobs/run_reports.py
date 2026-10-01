@@ -82,8 +82,8 @@ def main(argv=None):
         if not a.no_publish:
             import publish
             pr = publish.publish(ctx, f"Month-end reports {jc.short(M)}", exports=exports_dir, index_entries=[r["entry"]],
-                                 push=ctx.live, remote=a.site_remote)
-            jc.log(f"publish: {'pushed' if pr['pushed'] else 'committed locally (shadow)' if pr['committed'] else 'nothing to publish'}, "
+                                 push=True, remote=a.site_remote)
+            jc.log(f"publish: {'pushed' if pr['pushed'] else 'nothing to publish'}, "
                    f"head {pr['head']}, {len(pr['files'])} files")
         step = "record"
         for attempt in range(3):
@@ -91,7 +91,7 @@ def main(argv=None):
             st.setdefault("reports", {}).update({"at": jc.now_iso(), "status": "ok", "lastMonth": M})
             jc.save_jobs_state(ctx, st)
             try:
-                jc.engine_commit(ctx, ["jobs.json"] + list(getattr(ctx, "outbox_files", [])), f"jobs: reports {M}")
+                jc.engine_commit(ctx, ["jobs.json"], f"jobs: reports {M}")
                 break
             except jc.PushRejected:
                 jc.engine_refresh(ctx)

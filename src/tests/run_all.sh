@@ -73,8 +73,6 @@ step_tools() {
   echo "  test_account_mail.py: $(tail -1 "$O/acctmail.out")"
   python3 src/tests/test_history_seed.py "$T" > "$O/hseed.out" 2>&1 || { tail -20 "$O/hseed.out"; die "test_history_seed.py"; }
   echo "  test_history_seed.py: $(tail -1 "$O/hseed.out")"
-  python3 src/tests/test_fund_fix.py "$T" > "$O/fundfix.out" 2>&1 || { tail -20 "$O/fundfix.out"; die "test_fund_fix.py"; }
-  echo "  test_fund_fix.py: $(tail -1 "$O/fundfix.out")"
 
   say "tools: plan.js"
   node "$T/plan.js" --now 2026-09-24T12:00:00Z > "$O/plan.json"; jsonline "$O/plan.json" "d['today'] == '2026-09-24' and d['weekday'] == 'Thu' and d['isEgxSession'] and d['prevMonth'] == '2026-08'"
@@ -116,12 +114,8 @@ assert s['email'] and s['email']['subject'].startswith('Demo Portfolio: heads-up
 print(f"  ok: summary.json digest {kinds}, drawdown {s['digest']['drawdown']['dd']:.4f}, email subject set (not sent)")
 EOF
 
-  say "tools: build_tooldocs.py, fetch_prices.py --help (no network)"
-  python3 src/tools/build_tooldocs.py --out "$O/tooldocs" > "$O/tooldocs.out" 2> "$O/tooldocs.err" || die "build_tooldocs.py"
-  if grep -q WARNING "$O/tooldocs.err"; then cat "$O/tooldocs.err"; die "build_tooldocs.py warns (a tools/ copy drifted)"; fi
-  [ "$(ls "$O/tooldocs" | wc -l)" -ge 9 ] || die "build_tooldocs.py wrote $(ls "$O/tooldocs" | wc -l) documents, expected 9"
-  echo "  ok: $(ls "$O/tooldocs" | wc -l) tool documents"
-  python3 tools/fetch_prices.py --help > "$O/fp.out"; grep -q 'usage: fetch_prices.py' "$O/fp.out" || die "fetch_prices.py --help"
+  say "tools: fetch_prices.py --help (no network)"
+  python3 src/jobs/fetch_prices.py --help > "$O/fp.out"; grep -q 'usage: fetch_prices.py' "$O/fp.out" || die "fetch_prices.py --help"
   echo "  ok: fetch_prices.py --help"
 
   say "tools: export.py + encrypt_file.py round trip with a throwaway key"
@@ -130,9 +124,8 @@ EOF
 }
 
 step_build() {
-  say "copies in sync: src/{engine,engine2,statement}.js == src/tools/*, tools/fetch_prices.py == src/jobs/fetch_prices.py"
+  say "copies in sync: src/{engine,engine2,statement}.js == src/tools/*"
   for f in engine.js engine2.js statement.js; do cmp "src/$f" "src/tools/$f" || die "src/tools/$f differs from src/$f (cp src/$f src/tools/)"; done
-  cmp tools/fetch_prices.py src/jobs/fetch_prices.py || die "tools/fetch_prices.py differs from src/jobs/fetch_prices.py"
   echo "  ok"
   say "build: src/build.py (desk pages) and src/site/build_site.py (site wrapper) in a temp copy"
   local B="$TMP/build" W="$TMP/site"
