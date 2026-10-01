@@ -487,6 +487,15 @@ function renderTape(){
 // ---------- period selector ----------
 // plain-English labels; the values stay the engine's period types
 const PT = [['Month','This month'],['Quarter','This quarter'],['YTD','This year'],['Year','Calendar year'],['Last 12 Months','Last 12 months'],['Since Inception','All time'],['Custom','Custom']];
+// the picked period for the site's friends ranking (site/lock.js): the selector's value and a short label for it
+window.pdPeriod = () => {
+  const r = S.R && S.R.range, t = S.sel.type;
+  let label = (PT.find(p=>p[0]===t)||[0,'All time'])[1];
+  if(r && t==='Custom') label = `${M(r.from)} – ${M(r.to)}`;
+  else if(r && t==='Year') label = `Calendar ${String(r.asOf||r.to).slice(0,4)}`;
+  else if(r && S.sel.asOf) label += ` to ${M(r.asOf)}`;
+  return { sel: S.sel, label };
+};
 function renderPeriod(){
   const R=S.R; const months=R.months.filter(r=>r.has).map(r=>r.month).reverse();
   const asOf = R.range.asOf;

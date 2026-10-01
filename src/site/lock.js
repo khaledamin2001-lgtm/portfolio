@@ -1735,13 +1735,18 @@
       editBar(); open(); toast('Signed out of the site account on this device. Your portfolio is unchanged.');
     };
   }
-  /* ---------- the friends hub (the top-left menu) ----------
-     You and your friends, ranked by this year's return, with this month and all-time: each row's figures are computed
-     here with the page's own engine (PE.run, PA) from the same documents the full view would show (a friend's copy plus
-     the shared market data), so tapping a row opens exactly those numbers. Your other portfolios on this device and
-     "Another portfolio" sit below. Friends' figures are kept in memory only, refreshed every 10 minutes. */
-  const HUB = { you: null, youAt: 0, friends: {}, market: null, marketAt: 0, busy: false };
-  function summarize(docs) {
+  /* ---------- the friends hub (the top-left menu) and the Overview's friends cards ----------
+     You and your friends, ranked by the return over the period picked at the top of the page (This month, This year,
+     All time, ... : the page's own period selector, window.pdPeriod), with this month / this year / all time underneath.
+     Every figure is computed here with the page's own engine (PE.run, PA) from the same documents the full view would
+     show (a friend's copy plus the shared market data), so tapping a row opens exactly those numbers. A friend's
+     documents are kept in memory only (refreshed every 10 minutes); the figures are recomputed when the period changes.
+     Your other portfolios on this device and "Another portfolio" sit below. */
+  const HUB = { you: null, youData: null, friends: {}, market: null, marketAt: 0, busy: false };
+  // the page's period: { sel: {type, asOf, from, to}, label } (app.html pdPeriod); All time when the page has none
+  const period = () => (window.pdPeriod && window.pdPeriod()) || { sel: { type: 'Since Inception' }, label: 'All time' };
+  const periodKey = (sel) => JSON.stringify([sel.type, sel.asOf || null, sel.from || null, sel.to || null]);
+  function summarize(docs, sel) {
     const E = window.PE, A = window.PA, st0 = docs && docs['portfolio/settings'];
     if (!E || !A || !st0 || !st0.inception) return null;
     try {
@@ -1755,42 +1760,58 @@
       let market = docs['market/latest'] || null;
       if (market && LIVE && Date.parse(LIVE.asOf) > Date.parse(market.asOf || 0)) market = Object.assign({}, market, LIVE);
       const data = { settings: st0, marks, assets, tx, market, bench: docs['bench/egx30'] || null };
-      const run = (type) => { try { return E.run(data, { type }, { fallback, daily: D || undefined }); } catch (e) { return null; } };
+      const run = (q) => { try { return E.run(data, q, { fallback, daily: D || undefined }); } catch (e) { return null; } };
       const tw = (R) => (R && R.stats && R.stats.n ? (R.stats.headlineTwr != null ? R.stats.headlineTwr : R.stats.twr) : null);
-      const Ra = run('Since Inception');
-      return { name: st0.name || '', month: tw(run('Month')), ytd: tw(run('YTD')), all: tw(Ra), value: Ra ? (Ra.liveCash != null ? Ra.liveCash : Ra.settings.cash) + Ra.pos.mvTotal : null };
+      const Ra = run({ type: 'Since Inception' });
+      return { name: st0.name || '', month: tw(run({ type: 'Month' })), ytd: tw(run({ type: 'YTD' })), all: tw(Ra),
+        picked: sel ? tw(run(sel)) : tw(Ra), value: Ra ? (Ra.liveCash != null ? Ra.liveCash : Ra.settings.cash) + Ra.pos.mvTotal : null };
     } catch (e) { console.warn('summary', e); return null; }
+  }
+  // one portfolio's figures for the current period, recomputed only when its documents or the period change
+  function figures(h, docs, sel) {
+    const k = periodKey(sel);
+    if (!h.s || h.k !== k || h.docs !== docs) { h.s = summarize(docs, sel); h.k = k; h.docs = docs; }
+    return h.s;
   }
   async function hubMarket() {
     if (!HUB.market || Date.now() - HUB.marketAt > 600e3) { HUB.market = (await fetchMarket().catch(() => ({ docs: {} }))).docs || {}; HUB.marketAt = Date.now(); }
     return HUB.market;
   }
-  async function friendSummary(f) {
+  // a friend's documents (their shared copy, plus the shared market data unless the copy carries its own)
+  async function friendDocs(f) {
     const j = await fsReq('GET', `shares/${f.uid}/to/${CLOUD.uid}`);
     const snapObj = JSON.parse(await gunzip(await unseal(JSON.parse(fStr(j, 'pkg')), SHARE_LABEL, acctKey())));
     const docs = Object.assign({}, snapObj.full ? {} : await hubMarket(), snapObj.docs || {});
     macroMarks(docs);
-    return Object.assign(summarize(docs) || {}, { at: snapObj.at });
+    return docs;
   }
-  const pctH = (x) => (x == null || !isFinite(x) ? '—' : (x > 0 ? '+' : x < 0 ? '−' : '') + (Math.abs(x) * 100).toFixed(1) + '%');
+  const pctH = (x) => { if (x == null || !isFinite(x)) return '—'; const t = (Math.abs(x) * 100).toFixed(1); return (t === '0.0' ? '' : x > 0 ? '+' : '−') + t + '%'; };
   const toneH = (x) => (x == null || Math.abs(x) < 0.0005 ? '' : x > 0 ? 'pos' : 'neg');
   const egpH = (x) => (x == null || !isFinite(x) ? '' : new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(x) + ' EGP');
   const hasAcct = () => !!(CLOUD && PK8 && CUR && (CUR.cloud || LINK));
+  // you first, then your friends; ranked by the return over the picked period (a row still loading goes last)
   function hubRows() {
-    const you = HUB.you || {};
-    const rows = [{ uid: 'me', me: true, name: you.name || CUR.name, s: HUB.you }].concat(((hasAcct() && FRIENDS) || []).filter((f) => f.status === 'friends')
-      .map((f) => ({ uid: f.uid, name: f.name, s: (HUB.friends[f.uid] || {}).s, err: (HUB.friends[f.uid] || {}).err })));
-    return rows.sort((a, b) => ((b.s && b.s.ytd != null ? b.s.ytd : -1e9) - (a.s && a.s.ytd != null ? a.s.ytd : -1e9)));
+    const sel = period().sel;
+    if (!VIEW && HUB.youData !== DATA_AT) { HUB.you = {}; HUB.youData = DATA_AT; }    // your own documents changed
+    // while a friend's portfolio is open, DOCS are theirs: your row keeps using your own documents from before
+    const mine = !VIEW ? figures(HUB.you || (HUB.you = {}), DOCS, sel) : HUB.you && HUB.you.docs ? figures(HUB.you, HUB.you.docs, sel) : null;
+    const rows = [{ uid: 'me', me: true, name: (mine && mine.name) || CUR.name, s: mine }].concat(((hasAcct() && FRIENDS) || []).filter((f) => f.status === 'friends')
+      .map((f) => { const h = HUB.friends[f.uid] || {}; return { uid: f.uid, name: f.name, s: h.docs ? figures(h, h.docs, sel) : null, err: h.err }; }));
+    const v = (r) => (r.s && r.s.picked != null ? r.s.picked : -1e9);
+    return rows.sort((a, b) => v(b) - v(a));
   }
+  // under the big number: the other standard periods (the picked one is already the big number)
+  const otherPeriods = (s, sel) => [['Month', 'Month', s.month], ['YTD', 'This year', s.ytd], ['Since Inception', 'All time', s.all]]
+    .filter(([t]) => t !== sel.type || sel.asOf || sel.from).map(([, l, x]) => `${l} ${pctH(x)}`).join(' · ');
   // the Overview section: the same ranking as cards
   function panelInner() {
-    const rows = hubRows(), viewing = VIEW ? VIEW.uid : 'me', inc = incoming();
+    const rows = hubRows(), viewing = VIEW ? VIEW.uid : 'me', inc = incoming(), P = period();
     const card = (r, i) => `<button type="button" class="pdf-card${r.uid === viewing ? ' cur' : ''}" data-hub="view" data-uid="${esc(r.uid)}" data-testid="panel-${r.me ? 'me' : 'friend'}">
         <span class="pdf-top"><span class="pdf-rank">#${i + 1}</span><b>${esc(r.name || '')}</b></span>
-        <span class="pdf-ytd ${toneH(r.s && r.s.ytd)}">${pctH(r.s && r.s.ytd)}</span><small>this year</small>
-        <small>${r.err ? esc(r.err) : r.s ? `Month ${pctH(r.s.month)} · All-time ${pctH(r.s.all)}` : 'Loading…'}</small>
+        <span class="pdf-ytd ${toneH(r.s && r.s.picked)}" data-testid="panel-picked">${pctH(r.s && r.s.picked)}</span><small>${esc(P.label)}</small>
+        <small>${r.err ? esc(r.err) : r.s ? otherPeriods(r.s, P.sel) : 'Loading…'}</small>
         <small class="pdf-tag">${r.me ? (viewing === 'me' ? 'You' : 'You · tap to go back') : r.uid === viewing ? 'Viewing now' : 'Tap to view'}</small></button>`;
-    return `<div class="pdf-head"><h3>Friends · this year</h3><button type="button" class="pdf-add" data-hub="friends" data-testid="panel-add">+ Add friend</button></div>
+    return `<div class="pdf-head"><h3>Friends · ${esc(P.label)}</h3><button type="button" class="pdf-add" data-hub="friends" data-testid="panel-add">+ Add friend</button></div>
       ${inc ? `<button type="button" class="pdf-note" data-hub="friends" data-testid="panel-requests">${inc} friend request${inc > 1 ? 's' : ''} waiting: tap to answer</button>` : ''}
       <div class="pdf-cards">${rows.map(card).join('')}</div>
       ${rows.length === 1 ? '<p class="pdf-empty">Add friends to see their portfolios here and compare returns. They need an account on this site first: send them the link.</p>' : ''}`;
@@ -1803,15 +1824,15 @@
       + `<section class="pd-friends" id="pd-friends" data-testid="friends-panel">${panelInner()}</section>`;
   };
   function hubHTML() {
-    const acct = hasAcct(), rows = hubRows();
+    const acct = hasAcct(), rows = hubRows(), P = period();
     const viewing = VIEW ? VIEW.uid : 'me';
     const row = (r, i) => `<button type="button" class="hub-row${r.uid === viewing ? ' cur' : ''}" data-hub="view" data-uid="${esc(r.uid)}" data-testid="hub-${r.me ? 'me' : 'friend'}">
         <span class="hub-rank">${i + 1}</span>
-        <span class="hub-who"><b>${esc(r.name || '')}</b><small>${r.me ? 'You' + (viewing === 'me' ? ' · open now' : ' · back to yours') : r.uid === viewing ? 'Viewing now' : r.err ? esc(r.err) : r.s ? `Month ${pctH(r.s.month)} · All-time ${pctH(r.s.all)}` : 'Loading…'}</small>${r.me && r.s ? `<small>Month ${pctH(r.s.month)} · All-time ${pctH(r.s.all)}</small>` : ''}</span>
-        <span class="hub-num ${toneH(r.s && r.s.ytd)}">${pctH(r.s && r.s.ytd)}<small>this year</small></span></button>`;
+        <span class="hub-who"><b>${esc(r.name || '')}</b><small>${r.me ? 'You' + (viewing === 'me' ? ' · open now' : ' · back to yours') : r.uid === viewing ? 'Viewing now' : r.err ? esc(r.err) : r.s ? otherPeriods(r.s, P.sel) : 'Loading…'}</small>${r.me && r.s ? `<small>${otherPeriods(r.s, P.sel)}</small>` : ''}</span>
+        <span class="hub-num ${toneH(r.s && r.s.picked)}">${pctH(r.s && r.s.picked)}<small>${esc(P.label)}</small></span></button>`;
     const others = allPortfolios().filter((p) => p.id !== CUR.id && (p.cloud || !!ls.get('pd.dev.' + p.id)));
     const inc = acct ? incoming() : 0;
-    return `<div class="hub-head"><span>Friends · this year</span>${acct ? '<button type="button" class="hub-add" data-hub="friends" data-testid="hub-add">+ Add friend</button>' : ''}</div>
+    return `<div class="hub-head"><span>Friends · ${esc(P.label)}</span>${acct ? '<button type="button" class="hub-add" data-hub="friends" data-testid="hub-add">+ Add friend</button>' : ''}</div>
       ${inc ? `<button type="button" class="hub-note" data-hub="friends" data-testid="hub-requests">${inc} friend request${inc > 1 ? 's' : ''} waiting</button>` : ''}
       ${rows.map(row).join('')}
       ${!acct ? `<button type="button" class="hub-note" data-hub="link" data-testid="hub-signin">See your friends here<small>${CUR.cloud ? 'sign in again to load them' : 'sign in with your site account'}</small></button>`
@@ -1821,7 +1842,6 @@
   }
   async function refreshHub(m, fromPanel) {
     const draw = () => { if (m && !m.hidden) m.innerHTML = hubHTML(); const p = document.getElementById('pd-friends'); if (p) p.innerHTML = panelInner(); };
-    if (!VIEW && (!HUB.you || Date.now() - HUB.youAt > 60e3 || HUB.youData !== DATA_AT)) { HUB.you = summarize(DOCS); HUB.youAt = Date.now(); HUB.youData = DATA_AT; }
     if (m && !fromPanel) m.innerHTML = hubHTML();   // drawn now; the page shows the menu right after this returns
     if (fromPanel) draw();
     if (HUB.busy || !(CLOUD && PK8 && (CUR.cloud || LINK))) return;
@@ -1830,7 +1850,7 @@
       await listFriends().catch(() => {}); draw();
       for (const f of (FRIENDS || []).filter((x) => x.status === 'friends')) {
         const h = HUB.friends[f.uid]; if (h && Date.now() - h.t < 600e3) continue;
-        try { HUB.friends[f.uid] = { s: await friendSummary(f), t: Date.now() }; }
+        try { HUB.friends[f.uid] = { docs: await friendDocs(f), t: Date.now() }; }
         catch (e) { HUB.friends[f.uid] = { err: e.code === 'not_found' ? 'not shared yet' : 'could not load', t: Date.now() }; }
         draw();
       }

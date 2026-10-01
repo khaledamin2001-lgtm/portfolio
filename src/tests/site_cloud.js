@@ -531,11 +531,11 @@ print(r.seal_json(json.load(open(${JSON.stringify(path.join(TMP, 'snap.json'))})
     check("from the main portfolio, a friend's portfolio opens under the banner", /Omar/.test(await G.page.locator('#pf-name-text').textContent()) && await G.$t('view-banner').isVisible());
     await G.$t('view-back').click(); await G.page.waitForTimeout(800);
     check('"Back to mine" returns to the main portfolio', /Demo Portfolio/.test(await G.page.locator('#pf-name-text').textContent()));
-    // the top-left menu is the friends hub: you and your friends ranked by this year's return, tap to view
+    // the top-left menu is the friends hub: you and your friends ranked by the return over the page's period, tap to view
     await G.page.click('#pf-name'); await G.$t('hub-me').waitFor({ timeout: 10000 });
     await G.page.waitForFunction(() => { const f = document.querySelector('[data-testid=hub-friend]'); return f && /Month/.test(f.textContent); }, null, { timeout: 30000 }).catch(() => {});
     const hubText = await G.page.locator('#pf-menu').textContent();
-    check('the hub lists you and your friend, each with this year, this month and all-time returns', /Demo Portfolio/.test(hubText) && /Omar/.test(hubText) && /this year/.test(hubText) && /%/.test(await G.$t('hub-friend').textContent()) && /Month/.test(await G.$t('hub-me').textContent()), hubText.slice(0, 200));
+    check('the hub lists you and your friend, ranked over the picked period (All time), with this month and this year', /Demo Portfolio/.test(hubText) && /Omar/.test(hubText) && /Friends · All time/.test(hubText) && /%/.test(await G.$t('hub-friend').textContent()) && /Month .*This year/.test(await G.$t('hub-me').textContent()), hubText.slice(0, 200));
     await G.shot('hub');
     await G.$t('hub-friend').click(); await G.page.waitForTimeout(800);
     check("tapping a friend in the hub opens their portfolio", /Omar/.test(await G.page.locator('#pf-name-text').textContent()) && await G.$t('view-banner').isVisible());
@@ -544,8 +544,16 @@ print(r.seal_json(json.load(open(${JSON.stringify(path.join(TMP, 'snap.json'))})
     // the same ranking on the Overview tab
     await G.page.click('#tab-overview'); await G.$t('friends-panel').waitFor({ timeout: 10000 });
     await G.page.waitForFunction(() => { const f = document.querySelector('[data-testid=panel-friend]'); return f && /Month/.test(f.textContent); }, null, { timeout: 30000 }).catch(() => {});
-    check('the Overview tab shows the friends ranking with returns', /Omar/.test(await G.$t('panel-friend').textContent()) && /%/.test(await G.$t('panel-friend').textContent()) && /this year/.test(await G.$t('panel-me').textContent()));
+    check('the Overview tab shows the friends ranking with returns', /Omar/.test(await G.$t('panel-friend').textContent()) && /%/.test(await G.$t('panel-friend').textContent()) && /All time/.test(await G.$t('panel-me').textContent()));
     await G.shot('overview-friends');
+    // the cards follow the period picked at the top: This year's figure (shown underneath) becomes the big number
+    const ytdBelow = ((await G.$t('panel-me').textContent()).match(/This year ([+−]?[\d.]+%|—)/) || [])[1];
+    await G.page.click('#period [data-pt="YTD"]'); await G.$t('friends-panel').waitFor({ timeout: 10000 });
+    await G.page.waitForFunction(() => /Friends · This year/.test((document.getElementById('pd-friends') || {}).textContent || ''), null, { timeout: 15000 }).catch(() => {});
+    const picked = await G.page.locator('[data-testid=panel-me] [data-testid=panel-picked]').textContent();
+    check('picking This year at the top switches the friends cards to this year (the big number is the year-to-date return)',
+      /Friends · This year/.test(await G.$t('friends-panel').textContent()) && ytdBelow && picked.trim() === ytdBelow && /All time/.test(await G.$t('panel-me').textContent()), `${ytdBelow} vs ${picked}`);
+    await G.page.click('#period [data-pt="Since Inception"]'); await G.page.waitForTimeout(500);
     await G.$t('panel-friend').click(); await G.page.waitForTimeout(1000);
     check('tapping a friend card on the Overview opens their portfolio', /Omar/.test(await G.page.locator('#pf-name-text').textContent()) && await G.$t('view-banner').isVisible());
     await G.$t('panel-me').click(); await G.page.waitForTimeout(1000);
