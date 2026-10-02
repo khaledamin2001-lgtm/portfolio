@@ -265,6 +265,46 @@ def leaderboard(name, month_label, rows, bench, best, foot):
     return f"{month_label} leaderboard: {head}", text, html
 
 
+def morning(name, b, foot=None):
+    """The morning brief (tools/brief.js, engine2.js morningBrief), before the EGX opens: the last session, each holding's
+    move, the week ahead (ex-dividend, earnings), holdings near their target or stop, unusual volume, limits, a 5% drop."""
+    import datetime as _dt
+    dlabel = lambda d: _dt.date.fromisoformat(d).strftime("%a %-d %b") if d else ""
+    sess = dlabel(b.get("session")) if b.get("session") else "the last session"
+    tiles = [("Value", egp(b.get("value")), f"at the close {sess}", None),
+             ("Last session", (("+" if (b.get("pl") or 0) >= 0 else "−") + f"{abs(b.get('pl') or 0):,.0f}") if b.get("pl") is not None else "—",
+              pct(b.get("ret"), 2) if b.get("ret") is not None else "", tone_of(b.get("pl"))),
+             ("EGX30 Capped", pct(b.get("index"), 2), f"{b['indexClose']:,.1f}" if b.get("indexClose") is not None else "", tone_of(b.get("index")))]
+    blocks = [("tiles", tiles)]
+    mv = [m for m in b.get("movers") or [] if m.get("fresh", True)]
+    if mv:
+        blocks += [("h", "Your holdings", f"{sess}, best to worst"),
+                   ("table", ["Stock", "Move", "EGP"], [[m["s"], (pct(m["chg"], 2), tone_of(m["chg"])), (f"{m['pl']:+,.0f}".replace("-", "−"), tone_of(m["pl"]))] for m in mv], ["l", "r", "r"])]
+    up = b.get("upcoming") or []
+    if up:
+        blocks += [("h", "This week", "held and watch-list stocks"),
+                   ("list", [f"{dlabel(u['d'])}: {u['s']}{'' if u.get('held') else ' (watch list)'} " +
+                             (f"goes ex-dividend" + (f", {u['divUp']:g} EGP a share" if u.get("divUp") is not None else "") if u["kind"] == "exdiv" else "reports earnings")
+                             for u in up])]
+    lv = b.get("levels") or []
+    if lv:
+        blocks.append(("box", "warn", "Near your levels", [
+            f"{x['s']} at {x['price']:,.2f}: " + (("past" if x["gap"] <= 0 else f"{x['gap'] * 100:.1f}% below") + f" its target {x['level']:,.2f}" if x["kind"] == "target"
+                                                  else ("past" if x["gap"] >= 0 else f"{-x['gap'] * 100:.1f}% above") + f" its stop {x['level']:,.2f}") for x in lv]))
+    vol = b.get("volume") or []
+    if vol:
+        blocks.append(("box", "info", "Unusual volume", [f"{v['s']}{'' if v.get('held') else ' (watch list)'}: {v['x']:.1f}× its usual volume on {dlabel(v['d'])}, {pct((v.get('chg') or 0) / 100, 1)}" for v in vol]))
+    if b.get("limits"):
+        blocks.append(("box", "bad", "Over your limits", [f"{(x.get('s') or x['n']) if x['kind'] == 'stock' else 'The ' + x['n'] + ' sector'} is {x['w'] * 100:.1f}% (limit {x['limit'] * 100:g}%)" for x in b["limits"]]))
+    if b.get("stress"):
+        st = b["stress"]
+        blocks.append(("p", f"If the EGX30 Capped fell 5% today, the portfolio would likely fall about {abs(st['drop5']) * 100:.1f}% ({egp(abs(st['egp5']))}); its beta is {st['beta']:.2f}."))
+    text, html = email(name, "Morning brief", blocks, subtitle=f"Before the open · {dlabel(b.get('today'))}", button=("Open Today", SITE + "?today"), foot=foot,
+                       preheader=f"{sess}: {pct(b.get('ret'), 2)} vs index {pct(b.get('index'), 2)}" + (f" · {len(up)} event{'s' if len(up) != 1 else ''} this week" if up else ""))
+    head = f"{pct(b.get('ret'), 1)} {sess}" if b.get("ret") is not None else "before the open"
+    return f"{name}: morning brief · {head}", text, html
+
+
 def card_empty(card):
     """A report card with nothing in it (no sale, no return, no activity in the month or the one before): not sent."""
     a = card.get("activity") or {}

@@ -751,7 +751,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
     const syms = [...new Set(Object.values(items).map((a) => (a.symbol || '').toUpperCase()).filter((s) => s && s !== 'SAVINGS' && s !== 'THNDRGOLD'))].sort();
     const idx = ['EGX30CAPPED', 'EGX30', 'EGX70EWI', 'EGX100EWI'], today = cairoDay(Date.now() / 1000);
     const cols = ['close', 'change', 'time', 'close[1]|1M', 'description', 'dividends_yield_current', 'ex_dividend_date_upcoming', 'dividend_amount_upcoming', 'ex_dividend_date_recent', 'dividend_amount_recent',
-      'price_earnings_ttm', 'price_book_fq', 'return_on_equity', 'market_cap_basic', 'price_52_week_high', 'price_52_week_low'];   // valuation for the watchlist
+      'price_earnings_ttm', 'price_book_fq', 'return_on_equity', 'market_cap_basic', 'price_52_week_high', 'price_52_week_low', 'volume', 'average_volume_30d_calc', 'earnings_release_next_date'];   // valuation for the watchlist
     // every stock listed on the EGX in one call, plus the indices, plus USD/EGP and gold. Only the stock scan is required: a failed
     // index or FX/gold call keeps the saved values (each carries its own date), and asOf is the time the stock scan came back.
     let scanAt = null;
@@ -766,7 +766,8 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
     const prev = DOCS['market/latest'] || {}, quotes = {}, index = {}, missing = [], carried = [];
     const put = (s, d) => { quotes[s] = { price: d[0], chg: +(d[1] || 0).toFixed(4), date: d[2] ? cairoDay(d[2]) : today, prevMonthClose: d[3], name: d[4], dy: d[5] == null ? null : +d[5].toFixed(4),
       exDate: d[6] ? cairoDay(d[6]) : null, divUp: d[7] ?? null, exRecent: d[8] ? cairoDay(d[8]) : null, divRecent: d[9] ?? null,
-      pe: num(d[10], 2), pb: num(d[11], 2), roe: num(d[12], 2), mcap: d[13] == null ? null : Math.round(d[13]), hi52: d[14] ?? null, lo52: d[15] ?? null }; };
+      pe: num(d[10], 2), pb: num(d[11], 2), roe: num(d[12], 2), mcap: d[13] == null ? null : Math.round(d[13]), hi52: d[14] ?? null, lo52: d[15] ?? null,
+      vol: d[16] == null ? null : Math.round(d[16]), avgVol: d[17] == null ? null : Math.round(d[17]), earn: d[18] ? cairoDay(d[18]) : null }; };
     const num = (x, dp) => (x == null || !isFinite(x) ? null : +(+x).toFixed(dp));
     for (const [t, d] of Object.entries(all)) { if (d && d[0] != null) put(t.replace(/^EGX:/, ''), d); }
     for (const s of syms) { if (!quotes[s]) { if (prev.quotes && prev.quotes[s]) quotes[s] = prev.quotes[s]; else missing.push(s); } }
@@ -1552,21 +1553,21 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   const sealTo = (pubB64, bytes, label) => seal(bytes, label, pubB64);
   async function writeMail(prefs) {
     const mk = await (await fetch('p/khaled/keys.json', { cache: 'no-store' })).json();
-    const pkg = { v: 1, uid: CLOUD.uid, email: prefs.email, refresh: CLOUD.refresh, pk8: b64big(acctKey()), prefs: { alerts: !!prefs.alerts, weekly: !!prefs.weekly, reports: !!prefs.reports, leaderboard: prefs.leaderboard !== false, reportCard: prefs.reportCard !== false, gmail: !!prefs.gmail, shareMain: !!prefs.shareMain }, at: new Date().toISOString() };
+    const pkg = { v: 1, uid: CLOUD.uid, email: prefs.email, refresh: CLOUD.refresh, pk8: b64big(acctKey()), prefs: { alerts: !!prefs.alerts, weekly: !!prefs.weekly, reports: !!prefs.reports, leaderboard: prefs.leaderboard !== false, reportCard: prefs.reportCard !== false, morning: !!prefs.morning, gmail: !!prefs.gmail, shareMain: !!prefs.shareMain }, at: new Date().toISOString() };
     const env = Object.assign({ v: 1 }, await sealTo(mk.pub, enc.encode(JSON.stringify(pkg)), MAIL_LABEL));
     await fsReq('PATCH', `mail/${CLOUD.uid}`, { fields: { pkg: { stringValue: JSON.stringify(env) }, at: { stringValue: pkg.at } } });
     ls.set(mailLS(), Object.assign({}, prefs, { ref: await sha(CLOUD.refresh) }));
   }
   // nothing left on: the package is deleted, so the job no longer opens the portfolio
   async function setMail(prefs) {
-    if (prefs.alerts || prefs.weekly || prefs.reports || prefs.leaderboard || prefs.reportCard || prefs.gmail || prefs.shareMain) return writeMail(prefs);
+    if (prefs.alerts || prefs.weekly || prefs.reports || prefs.leaderboard || prefs.reportCard || prefs.morning || prefs.gmail || prefs.shareMain) return writeMail(prefs);
     await fsReq('DELETE', `mail/${CLOUD.uid}`); ls.del(mailLS());
   }
   // the job signs in with the saved refresh token: after a password change (which ends old sessions) it is sealed again
   async function resealMail() { const m = mailPrefs(); if (m && CLOUD && CLOUD.refresh && m.ref !== (await sha(CLOUD.refresh))) await writeMail(m); }
   function mailScreen(note) {
     const on = mailOn(), m = on ? mailPrefs() : Object.assign({ email: CUR.email || (CLOUD && CLOUD.email) || '' }, mailPrefs() || {}, { alerts: true, weekly: true, reports: true, leaderboard: true, reportCard: true });
-    screen(`<h1>Email updates</h1><p>Get an email when something needs your attention (a dividend coming up, a target or stop reached, a big drop), a summary every Thursday evening, your month-end report (Excel workbook + PDF factsheet) when each monthly statement is posted, and early each month a report card on your trading and how you ranked among your friends (percentages only).</p>
+    screen(`<h1>Email updates</h1><p>Get an email when something needs your attention (a dividend coming up, a target or stop reached, a big drop), a summary every Thursday evening, your month-end report (Excel workbook + PDF factsheet) when each monthly statement is posted, early each month a report card on your trading and how you ranked among your friends (percentages only), and if you like a short brief before the market opens.</p>
       <p class="lk-tip">To write these, the site owner's email job has to open your portfolio, so while this is on your figures are not private from that job. Switch it off any time: nothing is kept after that.</p>
       <form id="lk-ml" autocomplete="off"><input id="lk-ml-email" type="email" data-testid="mail-address" value="${esc(m.email)}" placeholder="Email address" aria-label="Email address">
       <label class="lk-check"><input type="checkbox" id="lk-ml-alerts" data-testid="mail-alerts" ${m.alerts ? 'checked' : ''}> Heads-up alerts</label>
@@ -1574,22 +1575,23 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
       <label class="lk-check"><input type="checkbox" id="lk-ml-reports" data-testid="mail-reports" ${m.reports ? 'checked' : ''}> Month-end report (Excel + PDF)</label>
       <label class="lk-check"><input type="checkbox" id="lk-ml-leaderboard" data-testid="mail-leaderboard" ${m.leaderboard !== false ? 'checked' : ''}> Friends leaderboard (1st of the month)</label>
       <label class="lk-check"><input type="checkbox" id="lk-ml-card" data-testid="mail-report-card" ${m.reportCard !== false ? 'checked' : ''}> Trading report card (early each month)</label>
+      <label class="lk-check"><input type="checkbox" id="lk-ml-morning" data-testid="mail-morning" ${m.morning ? 'checked' : ''}> Morning brief (Sunday to Thursday, about 9 am, before the market opens)</label>
       <button class="lk-btn" id="lk-ml-go" data-testid="mail-on">${on ? 'Save' : 'Turn on email updates'}</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>
       ${on ? '<button class="lk-btn ghost" id="lk-ml-off" data-testid="mail-off">Turn off email updates</button>' : ''}
       <div class="lk-links"><button type="button" class="lk-link" id="lk-ml-back" data-testid="mail-back">Back</button></div>`);
     $l('#lk-ml-back').onclick = accountScreen;
     $l('#lk-ml').onsubmit = async (ev) => {
-      ev.preventDefault(); const email = $l('#lk-ml-email').value.trim(), alerts = $l('#lk-ml-alerts').checked, weekly = $l('#lk-ml-weekly').checked, reports = $l('#lk-ml-reports').checked, leaderboard = $l('#lk-ml-leaderboard').checked, reportCard = $l('#lk-ml-card').checked;
+      ev.preventDefault(); const email = $l('#lk-ml-email').value.trim(), alerts = $l('#lk-ml-alerts').checked, weekly = $l('#lk-ml-weekly').checked, reports = $l('#lk-ml-reports').checked, leaderboard = $l('#lk-ml-leaderboard').checked, reportCard = $l('#lk-ml-card').checked, morning = $l('#lk-ml-morning').checked;
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return err('Enter an email address.');
-      if (!alerts && !weekly && !reports && !leaderboard && !reportCard) return err('Pick at least one kind of email, or turn email updates off.');
+      if (!alerts && !weekly && !reports && !leaderboard && !reportCard && !morning) return err('Pick at least one kind of email, or turn email updates off.');
       const b = $l('#lk-ml-go'); b.disabled = true; err('Saving…');
-      try { await writeMail(Object.assign({}, mailPrefs() || {}, { email, alerts, weekly, reports, leaderboard, reportCard, gmail: gmailOn() })); open(); toast('Email updates are on. The first ones come after the next market close.'); }
+      try { await writeMail(Object.assign({}, mailPrefs() || {}, { email, alerts, weekly, reports, leaderboard, reportCard, morning, gmail: gmailOn() })); open(); toast('Email updates are on. The first ones come after the next market close.'); }
       catch (e) { console.error(e); b.disabled = false; err(e.message || String(e)); }
     };
     const off = $l('#lk-ml-off');
     if (off) off.onclick = async () => {
       off.disabled = true;
-      try { await setMail(Object.assign({}, mailPrefs(), { alerts: false, weekly: false, reports: false, leaderboard: false, reportCard: false })); open(); toast('Email updates are off.'); }
+      try { await setMail(Object.assign({}, mailPrefs(), { alerts: false, weekly: false, reports: false, leaderboard: false, reportCard: false, morning: false })); open(); toast('Email updates are off.'); }
       catch (e) { console.error(e); off.disabled = false; err(e.message || String(e)); }
     };
   }
@@ -2469,7 +2471,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   })();
 })();
 </script>
-<meta name="pd-build" content="59a9ba8765fc 2026-10-02 04:01">
+<meta name="pd-build" content="e39cf70ecc0c 2026-10-02 04:25">
 <style>
 :root{
   /* Apple-style system: SF (the system font on iPhone and Mac) for everything, quiet greys, one blue accent, green / red
@@ -2648,6 +2650,19 @@ td.wrap{white-space:normal;min-width:180px;padding:8px 10px;margin:0;max-width:n
 .bar{height:6px;border-radius:3px;background:var(--surface-2);position:relative;min-width:60px}
 .bar i{position:absolute;inset:0 auto 0 0;border-radius:3px;background:var(--s1)}
 .wcell{display:flex;align-items:center;gap:8px}.wcell .bar{flex:1}.wcell .num{min-width:3.4em;text-align:right;font-size:12.5px}
+#today{position:fixed;inset:0;z-index:45;overflow-y:auto;background:var(--bg);padding:calc(14px + env(safe-area-inset-top,0px)) 16px calc(24px + env(safe-area-inset-bottom,0px))}
+body.today-on{overflow:hidden}
+.td-in{max-width:520px;margin:0 auto;display:grid;gap:14px}
+.td-top{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:15px}.td-feed{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-3)}
+.td-hero{background:var(--surface);border-radius:20px;padding:20px;box-shadow:var(--shadow);display:grid;gap:4px}
+.td-v{font-size:40px;line-height:1.1;font-weight:700;letter-spacing:-.03em}.td-v small{font-size:15px;font-weight:600;color:var(--ink-3);margin-left:6px}
+.td-pl{font-size:19px;font-weight:600}
+.td-list{background:var(--surface);border-radius:20px;padding:4px 16px;box-shadow:var(--shadow)}
+.td-row{display:grid;grid-template-columns:1fr auto 76px 64px;gap:10px;align-items:center;padding:12px 0;border-top:.5px solid var(--hair);font-size:15px}.td-row:first-child{border-top:0}.td-row .num{text-align:right}
+.td-heads{background:var(--surface);border-radius:20px;padding:12px 16px;box-shadow:var(--shadow);margin:0}
+.td-act{display:grid;grid-template-columns:1fr 1fr;gap:10px}.td-act .btn{justify-content:center;padding:12px}
+.td-pin{display:flex;align-items:center;gap:8px;justify-content:center;font-size:13.5px;color:var(--ink-2)}
+.corr-tbl th,.corr-tbl td{padding:7px 8px;font-size:12.5px}.corr-tbl td.cm{font-variant-numeric:tabular-nums;font-weight:600}
 .lim-rows{display:grid;gap:14px}.lim-top{display:flex;justify-content:space-between;gap:12px;margin-bottom:6px;font-size:14px}
 .lim-bar{height:8px;overflow:visible}.lim-row.over .lim-bar i{background:var(--neg)}
 .lim-bar em{position:absolute;top:-4px;bottom:-4px;width:2px;margin-left:-1px;border-radius:1px;background:var(--ink)}
@@ -2834,6 +2849,7 @@ button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.pl
   <div class="period" id="period"></div>
   <main id="main"><div class="empty"><h2>Opening your portfolio…</h2><p>Connecting to the portfolio database.</p></div></main>
 </div>
+<div id="today" data-testid="today" hidden></div>
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
 <script>
@@ -3931,6 +3947,118 @@ button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.pl
     const peak = pts.reduce((a, p) => (p.idx > a.idx ? p : a)), now = pts[pts.length - 1];
     return { dd: now.idx / peak.idx - 1, peak: { d: peak.d, idx: peak.idx }, now: { d: now.d, value: now.value, live: !!now.live }, points: pts.length, basis };
   }
+  // ---------- unusual volume ----------
+  // Held and watch-list stocks (assets with watch: true) whose latest session (market/latest quote: vol, avgVol = the
+  // 30-session average, date within the last 4 days) traded VOL_X times the average or more, biggest first.
+  const VOL_X = 3;
+  const volTxt = (x) => (x >= 1e6 ? `${(x / 1e6).toFixed(1)}M` : x >= 1e3 ? `${Math.round(x / 1e3)}K` : String(Math.round(x)));
+  function volumeSpikes(tx, assets, quotes, today) {
+    const syms = new Map();
+    heldStocks(tx, assets).forEach((h) => syms.set(h.sym, true));
+    Object.values(assets || {}).forEach((a) => { if (a && a.watch === true && a.symbol && !syms.has(String(a.symbol).toUpperCase())) syms.set(String(a.symbol).toUpperCase(), false); });
+    const out = [];
+    syms.forEach((held, s) => {
+      const q = (quotes || {})[s];
+      if (!q || !(q.vol > 0) || !(q.avgVol > 0) || !q.date || q.date < addDays(today, -4) || q.date > today) return;
+      const x = q.vol / q.avgVol;
+      if (x >= VOL_X) out.push({ s, held, d: q.date, x, vol: q.vol, avg: q.avgVol, chg: q.chg || 0 });
+    });
+    return out.sort((a, b) => b.x - a.x);
+  }
+
+  // ---------- how the holdings move: correlation, beta and a stress test ----------
+  // From the daily closes (history) of the last `days` EGX sessions: each holding's daily returns (its own symbol, or its
+  // proxy, e.g. a gold fund on GOLD24K; cash-like funds count as cash), its beta to the EGX30 Capped, the correlation of
+  // every pair, the portfolio's beta (weights of the whole portfolio with cash; a holding without enough prices counts
+  // as not moving), what an index drop of 5 / 10 / 20% would likely do, and a replay of the index's worst day in the window
+  // on today's holdings. R: a PE.run result (pos.open, liveCash). Returns null without history.
+  //   {days, from, to, total, beta, holdings: [{s, n, sec, w, beta, corrIdx, vol, obs}], corr: {syms, m}, pairs: [{a, b, c}]
+  //    (every pair, most alike first), avgCorr, stress: [{x, port, egp, rows: [{s, move, egp}]}], worst: {d, idx, port}}
+  function riskModel(R, assets, history, o) {
+    o = o || {};
+    const N = o.days || 120, MIN = 30;
+    const snap = {}; Object.keys(history || {}).forEach((m) => Object.assign(snap, (history[m] && history[m].days) || {}));
+    const days = Object.keys(snap).filter((d) => snap[d] && snap[d].EGX30CAPPED != null && (!o.today || d <= o.today)).sort().slice(-(N + 1));
+    if (days.length < MIN + 1) return null;
+    const rets = (key) => days.slice(1).map((d, i) => { const a = snap[days[i]][key], b = snap[d][key]; return a > 0 && b > 0 ? b / a - 1 : null; });
+    const idx = rets('EGX30CAPPED');
+    const byName = {}; Object.values(assets || {}).forEach((a) => { if (a && a.name) byName[a.name] = a; });
+    const cash = Math.max(0, R.liveCash != null ? R.liveCash : (R.settings && R.settings.cash) || 0), total = (R.pos.mvTotal || 0) + cash;
+    const pairStats = (x, y) => {
+      const xs = [], ys = []; x.forEach((v, i) => { if (v != null && y[i] != null) { xs.push(v); ys.push(y[i]); } });
+      if (xs.length < MIN) return null;
+      const mx = mean(xs), my = mean(ys);
+      let sxy = 0, sxx = 0, syy = 0; xs.forEach((v, i) => { sxy += (v - mx) * (ys[i] - my); sxx += (v - mx) ** 2; syy += (ys[i] - my) ** 2; });
+      return { n: xs.length, cov: sxy / (xs.length - 1), vx: sxx / (xs.length - 1), vy: syy / (xs.length - 1), c: sxx && syy ? sxy / Math.sqrt(sxx * syy) : null };
+    };
+    const hold = (total > 0 ? R.pos.open : []).filter((p) => (p.mv || 0) > 0 && !CASH_LIKE.has(p.sector)).map((p) => {
+      const a = byName[p.name] || {}, sym = (p.symbol || a.symbol || '').toUpperCase();
+      const key = sym && snap[days[days.length - 1]] && Object.prototype.hasOwnProperty.call(snap[days[days.length - 1]], sym) ? sym : a.proxy && days.some((d) => snap[d][a.proxy] != null) ? a.proxy : sym;
+      const r = key ? rets(key) : days.slice(1).map(() => null);
+      const st = pairStats(r, idx), own = r.filter((v) => v != null);
+      return { s: sym || p.name, n: p.name, sec: p.sector || 'Unclassified', w: p.mv / total, r, obs: own.length,
+        beta: st && st.vy ? st.cov / st.vy : null, corrIdx: st ? st.c : null, vol: own.length >= MIN ? Math.sqrt(own.reduce((s2, v) => s2 + (v - mean(own)) ** 2, 0) / (own.length - 1)) * Math.sqrt(250) : null };
+    }).sort((a, b) => b.w - a.w);
+    const beta = sum(hold.map((h) => h.w * (h.beta || 0)));
+    const m = hold.map((a) => hold.map((b) => (a === b ? 1 : (pairStats(a.r, b.r) || {}).c ?? null)));
+    const pairs = [];
+    hold.forEach((a, i) => hold.forEach((b, j) => { if (j > i && m[i][j] != null) pairs.push({ a: a.s, b: b.s, c: m[i][j] }); }));
+    pairs.sort((x, y) => y.c - x.c);
+    const off = []; m.forEach((row, i) => row.forEach((c, j) => { if (j > i && c != null) off.push(c); }));
+    const stress = [-0.05, -0.1, -0.2].map((x) => {
+      const rows = hold.map((h) => ({ s: h.s, move: (h.beta || 0) * x, egp: h.w * total * (h.beta || 0) * x }));
+      return { x, port: beta * x, egp: total * beta * x, rows };
+    });
+    let wi = -1; idx.forEach((v, i) => { if (v != null && (wi < 0 || v < idx[wi])) wi = i; });
+    const worst = wi >= 0 ? { d: days[wi + 1], idx: idx[wi], port: sum(hold.map((h) => h.w * (h.r[wi] || 0))) } : null;
+    return { days: days.length - 1, from: days[0], to: days[days.length - 1], total, beta, avgCorr: off.length ? mean(off) : null,
+      holdings: hold.map(({ r, ...h }) => h), corr: { syms: hold.map((h) => h.s), m }, pairs, stress, worst };
+  }
+
+  // ---------- the morning brief (the email before the EGX opens, Sun-Thu) ----------
+  // From the latest close (market/latest): the portfolio's last session (value, P/L, the index), every holding's move,
+  // what is coming in the next 7 days for held and watch-list stocks (ex-dividend, earnings), holdings near (within 5%)
+  // or past their target / stop, unusual volume, your limits, and what a 5% index drop would likely do. run: portfolioRun.
+  function morningBrief(run, o) {
+    o = o || {};
+    const R = run.R, today = o.today || run.today, mk = run.data.market || {}, quotes = mk.quotes || {};
+    const byName = {}; Object.values(run.data.assets || {}).forEach((a) => { if (a && a.name) byName[a.name] = a; });
+    const open = R.pos.open.filter((p) => (p.mv || 0) > 0);
+    const cash = Math.max(0, R.liveCash != null ? R.liveCash : R.settings.cash || 0), value = R.pos.mvTotal + cash;
+    const ix = (mk.index || {}).EGX30CAPPED || {};
+    const session = ix.date || Object.values(quotes).reduce((d, q) => (q && q.date && q.date > d ? q.date : d), '') || null;
+    const movers = open.filter((p) => !CASH_LIKE.has(p.sector) && p.chg != null).map((p) => {
+      const q = quotes[(p.symbol || '').toUpperCase()] || {};
+      const fresh = !session || !q.date || q.date === session;
+      return { s: p.symbol || p.name, n: p.name, chg: fresh ? p.chg / 100 : 0, pl: fresh ? p.mv - p.mv / (1 + p.chg / 100) : 0, w: value ? p.mv / value : 0, fresh };
+    }).sort((a, b) => b.chg - a.chg);
+    const pl = sum(movers.map((x) => x.pl));
+    const upcoming = [], until = addDays(today, 7);
+    const seen = new Set();
+    const consider = (sym, held) => {
+      if (!sym || seen.has(sym)) return; seen.add(sym);
+      const q = quotes[sym]; if (!q) return;
+      if (q.exDate && q.exDate >= today && q.exDate <= until) upcoming.push({ kind: 'exdiv', s: sym, d: q.exDate, held, divUp: q.divUp != null ? q.divUp : null });
+      if (q.earn && q.earn >= today && q.earn <= until) upcoming.push({ kind: 'earnings', s: sym, d: q.earn, held });
+    };
+    heldStocks(run.data.tx || [], run.data.assets).forEach((h) => consider(h.sym, true));
+    Object.values(run.data.assets || {}).forEach((a) => { if (a && a.watch === true && a.symbol) consider(String(a.symbol).toUpperCase(), false); });
+    upcoming.sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : 0));
+    const levels = [];
+    open.forEach((p) => {
+      const a = byName[p.name] || {}, px = p.price, s = p.symbol || p.name;
+      if (!(px > 0)) return;
+      const tg = Number(a.target), sp = Number(a.stop);
+      if (a.target != null && a.target !== '' && tg > 0 && tg / px - 1 <= 0.05) levels.push({ kind: 'target', s, price: px, level: tg, gap: tg / px - 1 });
+      if (a.stop != null && a.stop !== '' && sp > 0 && 1 - sp / px <= 0.05) levels.push({ kind: 'stop', s, price: px, level: sp, gap: sp / px - 1 });
+    });
+    let risk = null; try { risk = riskModel(R, run.data.assets, o.history || run.data.history || {}, { today }); } catch (e) { risk = null; }
+    const lim = limitCheck(R, R.settings.limits);
+    return { today, session, value, pl, ret: value - pl > 0 ? pl / (value - pl) : null, index: ix.chg != null ? ix.chg / 100 : null, indexClose: ix.close != null ? ix.close : null,
+      movers, upcoming, levels, volume: volumeSpikes(run.data.tx || [], run.data.assets, quotes, today), limits: lim ? lim.over : null,
+      stress: risk ? { beta: risk.beta, drop5: risk.stress[0].port, egp5: risk.stress[0].egp } : null };
+  }
+
   // ---------- your limits (settings.limits) ----------
   // limits = {on, stock, sector}: the most one stock and one sector may be of the WHOLE portfolio (holdings at the latest
   // prices + cash; cash-like funds count as cash, never as a stock or a sector), as fractions (0.2 = 20%); a missing or
@@ -3972,6 +4100,11 @@ button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.pl
       if (h.asset.target != null && h.asset.target !== '' && tg > 0 && px >= tg) items.push({ kind: 'target', key: `target:${h.sym}:${tg}`, text: `${h.sym} reached its target: ${hFmt(px)} vs target ${hFmt(tg)}` });
       if (h.asset.stop != null && h.asset.stop !== '' && sp > 0 && px <= sp) items.push({ kind: 'stop', key: `stop:${h.sym}:${sp}`, text: `${h.sym} is at or below its stop: ${hFmt(px)} vs stop ${hFmt(sp)}` });
     });
+    // unusual volume: a held or watch-list stock whose last session traded VOL_X times its 30-session average or more
+    try {
+      volumeSpikes(o.tx || [], o.assets, quotes, o.today).forEach((v) => items.push({ kind: 'volume', key: `volume:${v.s}:${v.d}`,
+        text: `${v.s}${v.held ? '' : ' (watch list)'} traded ${v.x.toFixed(1)}× its usual volume on ${dayLbl(v.d)}: ${volTxt(v.vol)} shares vs ${volTxt(v.avg)} a day, ${v.chg >= 0 ? '+' : '−'}${Math.abs(v.chg).toFixed(1)}% that day` }));
+    } catch (e) { errors.push('volume: ' + (e.message || e)); }
     try {
       const L = o.settings && o.settings.limits;
       if (L && L.on && o.settings.inception) {
@@ -4092,7 +4225,7 @@ button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.pl
     const fallback = (name) => { const p = pricer(name, today); return p ? { p: p.p, d: pb.last } : null; };
     let D = null; try { D = daily(st0, led, assets, pb, marks0, today); } catch (e) { D = null; }
     let marks = marks0; try { if (Object.keys(history).length) marks = estimateMarks(st0, marks0, led, assets, pb, today); } catch (e) { marks = marks0; }
-    const data = { settings: st0, marks, assets, tx, market: o.market || docs['market/latest'] || null, bench: docs['bench/egx30'] || null };
+    const data = { settings: st0, marks, assets, tx, market: o.market || docs['market/latest'] || null, bench: docs['bench/egx30'] || null, history };
     return { R: PE.run(data, sel || { type: 'Since Inception' }, { fallback, daily: D || undefined, today }), data, today };
   }
 
@@ -4205,7 +4338,7 @@ button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.pl
     return { r: r - 1, b: bOk ? b - 1 : null, from: rg.from, to: rg.to };
   }
 
-  const api = { headsUp, drawdownCheck, limitCheck, limitText, reportCard, heldStocks, priceBook, makePricer, daily, dailyStats, dailyTwr, capWeights, benchWeights, holdingsAt, estimateMarks, attribution, activeWeights, tradeChecks, tradingHabits, portfolioRun, friendProfile, profilePeriod, income, trailing, calendar, TRADING_DAYS, TRADING_NOTE };
+  const api = { headsUp, drawdownCheck, limitCheck, limitText, reportCard, volumeSpikes, riskModel, morningBrief, heldStocks, priceBook, makePricer, daily, dailyStats, dailyTwr, capWeights, benchWeights, holdingsAt, estimateMarks, attribution, activeWeights, tradeChecks, tradingHabits, portfolioRun, friendProfile, profilePeriod, income, trailing, calendar, TRADING_DAYS, TRADING_NOTE };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.PA = api;
 })(this);
 
@@ -4692,7 +4825,10 @@ const S = {
   get readOnly(){ return !(window.pdCanEdit && window.pdCanEdit()); }, set readOnly(v){}, bench:null, imports:{}, sync:null, stmt:{list:null, busy:false, error:null, review:null}, fsMonth:null, fallback:null, heads:null,
   D:undefined, exportsList:null,
 };
-if(location.hash && /^#[a-z]+$/.test(location.hash)) S.tab = location.hash.slice(1);
+if(location.hash && /^#[a-z]+$/.test(location.hash) && location.hash!=='#today') S.tab = location.hash.slice(1);
+// Today: the home-screen view (value, today's P/L, every holding's move, heads-up). Opened by ?today or #today, by the
+// "Today" button, or on every launch once "Open the app on this screen" is ticked (pd.openToday; ?full skips it once).
+S.today = /[?&]today\b/.test(location.search) || location.hash==='#today' || (ls.get('pd.openToday',false)===true && !/[?&]full\b/.test(location.search));
 
 window.pdToast = (m, k) => toast(m, k);   // site/lock.js shows its notices through the page's toast
 function toast(msg, kind){ const t=$('#toast'); t.textContent=msg; t.className='toast'+(kind?' '+kind:''); t.hidden=false; clearTimeout(toast._t); toast._t=setTimeout(()=>t.hidden=true, Math.max(kind==='error'?6000:2800, 60*String(msg).length)); }
@@ -4772,7 +4908,28 @@ function renderTab(force){
   const views = TAB_VIEWS[S.tab];
   const nav = views.length>1 ? `<nav class="subnav" aria-label="On this page"><span class="muted">On this page</span>${views.map(([id,label])=>`<a href="#${id}" data-sec="${id}" data-testid="sec-${id}">${esc(label)}</a>`).join('')}</nav>` : '';
   $('#main').innerHTML = `<section class="view">${nav}${views.map(([id,label,fn],i)=>`<div class="tsec" id="sec-${id}">${views.length>1&&i>0?`<h2 class="secttl">${esc(label)}</h2>`:''}${fn()}</div>`).join('')}</section>`;
-  mountCharts(); disableReadOnlyForms(); markScrollables(); liveShown=pricesLive(); watchLiveState();
+  mountCharts(); disableReadOnlyForms(); markScrollables(); liveShown=pricesLive(); watchLiveState(); renderToday();
+}
+function renderToday(){ const el=$('#today'); if(!el) return; document.body.classList.toggle('today-on', !!S.today); el.hidden=!S.today; if(!S.today) return;
+  if(!S.R){ el.innerHTML='<div class="td-in"><p class="muted">Opening your portfolio…</p></div>'; return; }
+  const R=S.R, cash=R.liveCash??R.settings.cash, value=Math.max(0,cash)+R.pos.mvTotal, dp=dayPL(), ix=((S.market||{}).index||{}).EGX30CAPPED||{}, fs=feedStatus();
+  const day=ix.date||((S.market||{}).asOf||'').slice(0,10), when=day===PE.cairoToday()?'today':day?'on '+new Date(day+'T12:00:00Z').toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short',timeZone:'UTC'}):'';
+  const rows=R.pos.open.filter(r=>(r.mv||0)>0).slice().sort((a,b)=>(b.chg??-1e9)-(a.chg??-1e9));
+  const heads=(()=>{ const dg=S.sync&&S.sync.digest, live=(S.heads&&S.heads.items)||[], job=dg&&Array.isArray(dg.items)?dg.items.filter(x=>x&&x.text&&(x.kind==='statement'||!S.heads)):[]; const seen=new Set(); return [...live,...job].filter(x=>x&&x.text&&!seen.has(x.key||x.text)&&seen.add(x.key||x.text)); })();
+  const pinned=ls.get('pd.openToday',false)===true;
+  el.innerHTML=`<div class="td-in">
+    <div class="td-top"><b>${esc(S.settings.name||'Portfolio')}</b><span class="td-feed"><span class="dot ${fs.cls}"></span>${esc(fs.text)}</span></div>
+    <div class="td-hero"><div class="eyebrow">Total value</div><div class="td-v num" data-testid="today-value">${egp(value)}<small>EGP</small></div>
+      <div class="td-pl num ${sgn(dp.pl)}" data-testid="today-pl">${dp.pct!=null?`${dp.pl>=0?'+':'−'}${egp(Math.abs(dp.pl))} EGP · ${pct(dp.pct,2)} ${when}`:'No session move yet'}</div>
+      <div class="muted">EGX30 Capped ${ix.chg!=null?`<span class="${sgn(ix.chg)}">${pct(ix.chg/100,2)}</span>`:'—'}${ix.close!=null?` · ${num(ix.close,1)}`:''}</div></div>
+    <div class="td-list" data-testid="today-holdings">${rows.map(r=>{ const pl=r.chg!=null&&r.mv?r.mv-r.mv/(1+r.chg/100):null; return `<div class="td-row"><span class="sym">${esc(r.symbol||r.name)}</span><span class="num muted">${r.price!=null?num(r.price,2):''}</span><span class="num ${sgn(r.chg)}">${r.chg!=null?pct(r.chg/100,2):'—'}</span><span class="num ${sgn(pl)}">${pl!=null?short(pl):''}</span></div>`; }).join('')}</div>
+    ${heads.length?`<ul class="heads td-heads" data-testid="today-heads">${heads.map(x=>{ const k=HEADS[x.kind]||['Note','man']; return `<li><span class="pill ${k[1]}">${k[0]}</span><span>${esc(x.text)}</span></li>`; }).join('')}</ul>`:''}
+    <div class="td-act">${window.pdRefreshPrices?'<button class="btn" id="td-refresh" data-testid="today-refresh">Refresh prices</button>':''}<button class="btn primary" id="td-full" data-testid="today-full">Full portfolio</button></div>
+    <label class="td-pin"><input type="checkbox" id="td-pin" data-testid="today-pin" ${pinned?'checked':''}> Open the app on this screen</label>
+  </div>`;
+  $('#td-full').onclick=()=>{ S.today=false; if(/[?&]today\b/.test(location.search)||location.hash==='#today') history.replaceState(null,'',location.pathname); renderToday(); window.scrollTo(0,0); };
+  const rb=$('#td-refresh'); if(rb) rb.onclick=()=>refreshNow(rb);
+  $('#td-pin').onchange=(e)=>{ ls.set('pd.openToday', e.target.checked); toast(e.target.checked?'The app now opens on Today':'The app opens on the full portfolio again'); };
 }
 // Wide tables on a phone: flag every .tbl that overflows its container so CSS can show a "swipe →" hint; the hint goes once scrolled.
 function markScrollables(){
@@ -4802,7 +4959,9 @@ function renderTape(){
     item('s','EGX70 EWI',ix.EGX70EWI&&ix.EGX70EWI.close,ix.EGX70EWI&&ix.EGX70EWI.chg,1)+
     item('f','USD/EGP',m.fx&&m.fx.USDEGP&&m.fx.USDEGP.price,m.fx&&m.fx.USDEGP&&m.fx.USDEGP.chg,2)+
     item('g','GOLD 24K /g',m.gold&&m.gold.gram24kEgp,null,0);
-  $('#feed').innerHTML = `<span class="dot ${fs.cls}" data-testid="feed-dot" data-live="${pricesLive()?1:0}"></span><span class="muted">${esc(fs.text)}</span>${window.pdRefreshPrices?` <button class="btn sm" id="refresh-prices" data-testid="refresh-prices" title="Fetch the latest prices, EGX30 Capped, USD/EGP and gold now">Refresh now</button>`:''}`;
+  $('#feed').innerHTML = `<span class="dot ${fs.cls}" data-testid="feed-dot" data-live="${pricesLive()?1:0}"></span><span class="muted">${esc(fs.text)}</span>${window.pdRefreshPrices?` <button class="btn sm" id="refresh-prices" data-testid="refresh-prices" title="Fetch the latest prices, EGX30 Capped, USD/EGP and gold now">Refresh now</button>`:''} <button class="btn sm" id="open-today" data-testid="open-today" title="A quick view for the home screen: value, today's move, alerts">Today</button>`;
+  const ot=$('#open-today'); if(ot) ot.onclick=()=>{ S.today=true; renderToday(); };
+  renderToday();
 }
 
 // ---------- period selector ----------
@@ -6221,8 +6380,38 @@ function vAnalysis(){
     ${H.map(h=>`<tr><td><span class="sym">${esc(h.sym)}</span></td><td class="n">${pct(h.w,1,false)}</td><td class="n">${h.beta!=null?num(h.beta):'—'}</td><td class="n">${h.vol!=null?pct(h.vol,0,false):'—'}</td><td class="n ${sgn(h.unreal)}">${egp(h.unreal)} <span class="muted">${pct(h.unrealPct)}</span></td><td class="n ${h.fromHigh<-0.1?'neg':''}">${pct(h.fromHigh)}</td></tr>`).join('')}
     </tbody></table></div>
     <p class="note" style="margin-top:10px">Beta: how much the stock moves for a 1% move in EGX30 Capped. Volatility: how wide its swings are over a year.</p>
-  </div>`;
+  </div>
+  ${stressPanel()}`;
 }
+
+// ---------- If the market falls / which holdings move together (PA.riskModel: the last 120 sessions of daily closes) ----------
+function riskNow(){ try{ return PA.riskModel(S.R, S.assets, S.history||{}, { today:S.R.today }); }catch(e){ console.error(e); return null; } }
+const CORR_WORD=(c)=>c>=0.7?'very closely':c>=0.5?'closely':c>=0.3?'somewhat':c>=0?'hardly':'in opposite directions';
+function stressPanel(){ const K=riskNow();
+  if(!K||!K.holdings.length) return `<div class="panel" data-testid="stress"><div class="phead"><div><h2>If the market falls</h2><div class="sub">Needs at least 30 sessions of daily closes and an open position</div></div></div></div>`;
+  const s10=K.stress[1], H=K.holdings, few=H.filter(h=>h.beta==null);
+  const cell=(c)=>{ if(c==null) return '<td class="n muted">—</td>'; const a=Math.min(1,Math.abs(c)); return `<td class="n cm" style="background:${c>=0?`rgba(0,113,227,${(a*0.75).toFixed(2)})`:`rgba(215,0,21,${(a*0.6).toFixed(2)})`};color:${a>0.65?'#fff':'var(--ink)'}">${c.toFixed(2)}</td>`; };
+  const top=K.pairs.slice(0,3), low=K.pairs.length>3?K.pairs.slice(-2).reverse():[];
+  const spread=K.avgCorr==null?'':K.avgCorr<0.3?'well spread: they mostly move on their own':K.avgCorr<0.5?'moderately spread':'not very spread: they tend to move as one';
+  return `<div class="panel" data-testid="stress"><div class="phead"><div><h2>If the market falls</h2><div class="sub">From the last ${K.days} sessions of daily closes (${dfmt(K.from)} to ${dfmt(K.to)}) · today's holdings, cash included in the weights</div></div></div>
+    <div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr))">
+      ${kpi('Portfolio beta', num(K.beta), 'daily · 1.0 moves with the index, cash counts as 0')}
+      ${K.stress.map(x=>kpi(`EGX30 Capped ${pct(x.x,0)}`, `<span class="neg">${pct(x.port,1)}</span>`, `about ${egp(Math.abs(x.egp))} EGP down`, '', '', `stress-${Math.round(-x.x*100)}`)).join('')}
+    </div>
+    ${K.worst?`<p class="note" style="margin-top:10px" data-testid="stress-worst">The index's worst day in the window was ${dfmt(K.worst.d)} (${pct(K.worst.idx,1)}). Today's holdings would have moved <b class="${sgn(K.worst.port)}">${pct(K.worst.port,1)}</b> that day.</p>`:''}
+    <div class="tbl" style="margin-top:10px"><table data-testid="stress-table"><thead><tr><th>Stock</th><th class="n">Weight</th><th class="n">Beta</th><th class="n">If the index falls 10%</th></tr></thead><tbody>
+      ${H.map((h,i)=>`<tr><td><span class="sym">${esc(h.s)}</span></td><td class="n">${pct(h.w,1,false)}</td><td class="n">${h.beta!=null?num(h.beta):'—'}</td><td class="n ${sgn(s10.rows[i].move)}">${h.beta!=null?`${pct(s10.rows[i].move,1)} <span class="muted">${short(s10.rows[i].egp)}</span>`:'—'}</td></tr>`).join('')}
+    </tbody></table></div>
+    <p class="note" style="margin-top:10px">A likely move, not a promise: each stock's beta (how much it has moved for a 1% move in the index) times the drop.${few.length?` ${few.map(h=>esc(h.s)).join(', ')} ${few.length>1?'have':'has'} too few daily prices and ${few.length>1?'count':'counts'} as not moving.`:''}</p>
+  </div>
+  <div class="panel" data-testid="corr"><div class="phead"><div><h2>Which holdings move together</h2><div class="sub">Correlation of daily returns over the same ${K.days} sessions · 1 = always together, 0 = unrelated</div></div></div>
+    ${H.length<2?'<p class="note">Needs two or more holdings.</p>':`
+    ${K.avgCorr!=null?`<p data-testid="corr-summary">On average your holdings move together <b>${K.avgCorr.toFixed(2)}</b>: ${spread}.</p>`:''}
+    ${top.length?`<ul class="heads" style="margin-top:8px" data-testid="corr-pairs">${top.map(x=>`<li><span class="pill ${x.c>=0.5?'loss':'man'}">${x.c.toFixed(2)}</span><span><b>${esc(x.a)}</b> and <b>${esc(x.b)}</b> move ${CORR_WORD(x.c)} together${x.c>=0.7?': holding both is close to holding one bigger position':''}</span></li>`).join('')}${low.map(x=>`<li><span class="pill win">${x.c.toFixed(2)}</span><span><b>${esc(x.a)}</b> and <b>${esc(x.b)}</b> move ${CORR_WORD(x.c)} together: they spread the risk</span></li>`).join('')}</ul>`:''}
+    <div class="tbl corr-tbl" style="margin-top:10px"><table data-testid="corr-matrix"><thead><tr><th></th>${H.slice(0,10).map(h=>`<th class="n">${esc(h.s)}</th>`).join('')}</tr></thead><tbody>
+      ${H.slice(0,10).map((h,i)=>`<tr><td><span class="sym">${esc(h.s)}</span></td>${H.slice(0,10).map((_,j)=>i===j?'<td class="n muted">·</td>':cell(K.corr.m[i][j])).join('')}</tr>`).join('')}
+    </tbody></table></div>`}
+  </div>`; }
 
 // The written review: what the numbers say, why, and what you could do about it. Suggestions only; nothing is tracked or enforced.
 function analysisPanel(c){

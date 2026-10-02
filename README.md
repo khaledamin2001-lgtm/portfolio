@@ -49,6 +49,11 @@ There are two kinds of portfolio:
 3. **Your rules.** Each portfolio can switch on its own limits (Holdings tab → Your limits: the most one stock and one
    sector may be of the whole portfolio); crossing one shows on the Overview and is emailed once. Early each month a
    trading report card email scores last month's sales next to the month before (`tools/report_card.js`).
+4. **Before the open and on the go.** Sunday to Thursday at 9:00 Cairo a morning brief email (`jobs/run_morning.py`):
+   the last session, each holding's move, ex-dividend and earnings dates this week, holdings near their levels, unusual
+   volume (also a heads-up alert: 3× the 30-session average), limits and a 5% stress line. Analysis shows what an index
+   drop would likely do (beta) and which holdings move together (correlation); **Today** (`?today`, or the app's
+   long-press shortcut) is a one-screen view for the phone's home screen.
 
 ## What runs when (all times Cairo)
 

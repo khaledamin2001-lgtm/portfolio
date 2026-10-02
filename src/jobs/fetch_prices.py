@@ -25,7 +25,8 @@ Prints ONE JSON object:
                   18 months (the market job fills marks[M].cashRate/cashRateSource for closed months lacking it, like cpi).
     Each quote carries price, chg, date, prevMonthClose, name, dy (dividend yield %), exDate/divUp, exRecent/divRecent and
     the valuation fields pe (P/E ttm), pb (P/B), roe (return on equity %), mcap (market cap, EGP), hi52/lo52 (52-week
-    high/low); any of them may be null. latest.rates.policy = {rate (fraction), date YYYY-MM, source}.
+    high/low), vol / avgVol (the session's volume in shares and the 30-session average) and earn (the next earnings
+    release date, when TradingView has one); any of them may be null. latest.rates.policy = {rate (fraction), date YYYY-MM, source}.
 Needs: pip install websocket-client."""
 import json, sys, urllib.request, datetime, zoneinfo, time, re, random, string, os, argparse
 from concurrent.futures import ThreadPoolExecutor
@@ -33,7 +34,8 @@ from concurrent.futures import ThreadPoolExecutor
 UA = {"User-Agent": "Mozilla/5.0", "Content-Type": "application/json"}
 CAIRO = zoneinfo.ZoneInfo("Africa/Cairo")
 COLS = ["close", "change", "time", "close[1]|1M", "description", "dividends_yield_current", "ex_dividend_date_upcoming", "dividend_amount_upcoming", "ex_dividend_date_recent", "dividend_amount_recent",
-        "price_earnings_ttm", "price_book_fq", "return_on_equity", "market_cap_basic", "price_52_week_high", "price_52_week_low"]
+        "price_earnings_ttm", "price_book_fq", "return_on_equity", "market_cap_basic", "price_52_week_high", "price_52_week_low",
+        "volume", "average_volume_30d_calc", "earnings_release_next_date"]
 TV_SECTOR = {"Finance": "Financial Services", "Technology Services": "Technology & Fintech", "Process Industries": "Basic Resources",
              "Non-Energy Minerals": "Basic Resources", "Consumer Non-Durables": "Food & Beverage", "Health Technology": "Healthcare & Pharma",
              "Health Services": "Healthcare & Pharma", "Communications": "Telecom", "Energy Minerals": "Energy", "Transportation": "Transport & Logistics",
@@ -159,7 +161,11 @@ def day(ts):
 def quote(d, today):
     return {"price": d[0], "chg": round(d[1] or 0, 4), "date": day(d[2]) or today, "prevMonthClose": d[3], "name": d[4], "dy": round(d[5], 4) if d[5] is not None else None,
             "exDate": day(d[6]), "divUp": d[7], "exRecent": day(d[8]), "divRecent": d[9],
-            "pe": rnd(d[10], 4), "pb": rnd(d[11], 4), "roe": rnd(d[12], 4), "mcap": rnd(d[13], 0), "hi52": d[14], "lo52": d[15]}
+            "pe": rnd(d[10], 4), "pb": rnd(d[11], 4), "roe": rnd(d[12], 4), "mcap": rnd(d[13], 0), "hi52": d[14], "lo52": d[15],
+            "vol": rnd(at(d, 16), 0), "avgVol": rnd(at(d, 17), 0), "earn": day(at(d, 18))}
+
+def at(d, i):
+    return d[i] if len(d) > i else None
 
 def rnd(x, n):
     return None if x is None else (int(round(x)) if n == 0 else round(x, n))

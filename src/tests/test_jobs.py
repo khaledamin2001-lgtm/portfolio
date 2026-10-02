@@ -281,6 +281,18 @@ try:
     check("alarm key: only once a day", kna.key_check(at10, "k") == "alarm key: expires 2026-10-15; reminder already sent today" and not [c for c in calls if c[0] == "POST"])
     _fake("2026-10-20 00:00:00 UTC"); calls.clear()
     check("alarm key: 12 days before, no email", kna.key_check(at10, "k") == "alarm key: valid until 2026-10-20" and not [c for c in calls if c[0] == "POST"])
+    # the morning brief: Sunday to Thursday, 9:00-9:59 Cairo, once a day
+    at9 = datetime.datetime(2026, 10, 8, 6, 0, tzinfo=datetime.timezone.utc)       # Thursday 9:00 Cairo (summer time)
+    _fake(None); calls.clear()
+    out = kna.morning_check(at9, "k"); post = [c for c in calls if c[0] == "POST"]
+    check("morning brief: at 9:00 on a weekday the workflow is started", out == "morning brief: started" and len(post) == 1 and post[0][1].endswith("/actions/workflows/morning.yml/dispatches"))
+    _fake(None, ["2026-10-08T06:00:20Z"]); calls.clear()
+    check("morning brief: only once a day", kna.morning_check(at9 + datetime.timedelta(minutes=5), "k") == "morning brief: already started today" and not [c for c in calls if c[0] == "POST"])
+    _fake(None); calls.clear()
+    check("morning brief: not before 9:00, not after 9:59, not on Friday or Saturday, not without a key",
+          kna.morning_check(at9 - datetime.timedelta(minutes=1), "k") is None and kna.morning_check(at9 + datetime.timedelta(minutes=60), "k") is None
+          and kna.morning_check(at9 + datetime.timedelta(days=1), "k") is None and kna.morning_check(at9 + datetime.timedelta(days=2), "k") is None
+          and kna.morning_check(at9, "") is None and not calls)
     # a new account while the scheduled email run is going: wait (both would email the same account), start it after
     import io, contextlib
     os.environ["ENGINE_TOKEN"] = "k"

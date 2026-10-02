@@ -59,6 +59,8 @@ step_tests() {
   echo "  test_limits.js: $(tail -1 "$TMP/limits.out")"
   node src/tests/test_report_card.js > "$TMP/card.out" || { cat "$TMP/card.out"; die "test_report_card.js"; }
   echo "  test_report_card.js: $(tail -1 "$TMP/card.out")"
+  node src/tests/test_brief.js > "$TMP/brief.out" || { cat "$TMP/brief.out"; die "test_brief.js"; }
+  echo "  test_brief.js: $(tail -1 "$TMP/brief.out")"
   (cd "$TMP/tsrc" && node tests/test.js > "$TMP/test.out") || { cat "$TMP/test.out"; die "test.js"; }
   echo "  test.js: $(head -c 160 "$TMP/test.out")"
   (cd "$TMP/tsrc" && node tests/test_site_store.js > "$TMP/sitestore.out") || { cat "$TMP/sitestore.out"; die "test_site_store.js"; }

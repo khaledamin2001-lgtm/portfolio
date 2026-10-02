@@ -180,6 +180,19 @@ td.wrap{white-space:normal;min-width:180px;padding:8px 10px;margin:0;max-width:n
 .bar{height:6px;border-radius:3px;background:var(--surface-2);position:relative;min-width:60px}
 .bar i{position:absolute;inset:0 auto 0 0;border-radius:3px;background:var(--s1)}
 .wcell{display:flex;align-items:center;gap:8px}.wcell .bar{flex:1}.wcell .num{min-width:3.4em;text-align:right;font-size:12.5px}
+#today{position:fixed;inset:0;z-index:45;overflow-y:auto;background:var(--bg);padding:calc(14px + env(safe-area-inset-top,0px)) 16px calc(24px + env(safe-area-inset-bottom,0px))}
+body.today-on{overflow:hidden}
+.td-in{max-width:520px;margin:0 auto;display:grid;gap:14px}
+.td-top{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:15px}.td-feed{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--ink-3)}
+.td-hero{background:var(--surface);border-radius:20px;padding:20px;box-shadow:var(--shadow);display:grid;gap:4px}
+.td-v{font-size:40px;line-height:1.1;font-weight:700;letter-spacing:-.03em}.td-v small{font-size:15px;font-weight:600;color:var(--ink-3);margin-left:6px}
+.td-pl{font-size:19px;font-weight:600}
+.td-list{background:var(--surface);border-radius:20px;padding:4px 16px;box-shadow:var(--shadow)}
+.td-row{display:grid;grid-template-columns:1fr auto 76px 64px;gap:10px;align-items:center;padding:12px 0;border-top:.5px solid var(--hair);font-size:15px}.td-row:first-child{border-top:0}.td-row .num{text-align:right}
+.td-heads{background:var(--surface);border-radius:20px;padding:12px 16px;box-shadow:var(--shadow);margin:0}
+.td-act{display:grid;grid-template-columns:1fr 1fr;gap:10px}.td-act .btn{justify-content:center;padding:12px}
+.td-pin{display:flex;align-items:center;gap:8px;justify-content:center;font-size:13.5px;color:var(--ink-2)}
+.corr-tbl th,.corr-tbl td{padding:7px 8px;font-size:12.5px}.corr-tbl td.cm{font-variant-numeric:tabular-nums;font-weight:600}
 .lim-rows{display:grid;gap:14px}.lim-top{display:flex;justify-content:space-between;gap:12px;margin-bottom:6px;font-size:14px}
 .lim-bar{height:8px;overflow:visible}.lim-row.over .lim-bar i{background:var(--neg)}
 .lim-bar em{position:absolute;top:-4px;bottom:-4px;width:2px;margin-left:-1px;border-radius:1px;background:var(--ink)}
@@ -366,6 +379,7 @@ button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.pl
   <div class="period" id="period"></div>
   <main id="main"><div class="empty"><h2>Opening your portfolio…</h2><p>Connecting to the portfolio database.</p></div></main>
 </div>
+<div id="today" data-testid="today" hidden></div>
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
 <script>
@@ -417,7 +431,10 @@ const S = {
   get readOnly(){ return !(window.pdCanEdit && window.pdCanEdit()); }, set readOnly(v){}, bench:null, imports:{}, sync:null, stmt:{list:null, busy:false, error:null, review:null}, fsMonth:null, fallback:null, heads:null,
   D:undefined, exportsList:null,
 };
-if(location.hash && /^#[a-z]+$/.test(location.hash)) S.tab = location.hash.slice(1);
+if(location.hash && /^#[a-z]+$/.test(location.hash) && location.hash!=='#today') S.tab = location.hash.slice(1);
+// Today: the home-screen view (value, today's P/L, every holding's move, heads-up). Opened by ?today or #today, by the
+// "Today" button, or on every launch once "Open the app on this screen" is ticked (pd.openToday; ?full skips it once).
+S.today = /[?&]today\b/.test(location.search) || location.hash==='#today' || (ls.get('pd.openToday',false)===true && !/[?&]full\b/.test(location.search));
 
 window.pdToast = (m, k) => toast(m, k);   // site/lock.js shows its notices through the page's toast
 function toast(msg, kind){ const t=$('#toast'); t.textContent=msg; t.className='toast'+(kind?' '+kind:''); t.hidden=false; clearTimeout(toast._t); toast._t=setTimeout(()=>t.hidden=true, Math.max(kind==='error'?6000:2800, 60*String(msg).length)); }
@@ -497,7 +514,28 @@ function renderTab(force){
   const views = TAB_VIEWS[S.tab];
   const nav = views.length>1 ? `<nav class="subnav" aria-label="On this page"><span class="muted">On this page</span>${views.map(([id,label])=>`<a href="#${id}" data-sec="${id}" data-testid="sec-${id}">${esc(label)}</a>`).join('')}</nav>` : '';
   $('#main').innerHTML = `<section class="view">${nav}${views.map(([id,label,fn],i)=>`<div class="tsec" id="sec-${id}">${views.length>1&&i>0?`<h2 class="secttl">${esc(label)}</h2>`:''}${fn()}</div>`).join('')}</section>`;
-  mountCharts(); disableReadOnlyForms(); markScrollables(); liveShown=pricesLive(); watchLiveState();
+  mountCharts(); disableReadOnlyForms(); markScrollables(); liveShown=pricesLive(); watchLiveState(); renderToday();
+}
+function renderToday(){ const el=$('#today'); if(!el) return; document.body.classList.toggle('today-on', !!S.today); el.hidden=!S.today; if(!S.today) return;
+  if(!S.R){ el.innerHTML='<div class="td-in"><p class="muted">Opening your portfolio…</p></div>'; return; }
+  const R=S.R, cash=R.liveCash??R.settings.cash, value=Math.max(0,cash)+R.pos.mvTotal, dp=dayPL(), ix=((S.market||{}).index||{}).EGX30CAPPED||{}, fs=feedStatus();
+  const day=ix.date||((S.market||{}).asOf||'').slice(0,10), when=day===PE.cairoToday()?'today':day?'on '+new Date(day+'T12:00:00Z').toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short',timeZone:'UTC'}):'';
+  const rows=R.pos.open.filter(r=>(r.mv||0)>0).slice().sort((a,b)=>(b.chg??-1e9)-(a.chg??-1e9));
+  const heads=(()=>{ const dg=S.sync&&S.sync.digest, live=(S.heads&&S.heads.items)||[], job=dg&&Array.isArray(dg.items)?dg.items.filter(x=>x&&x.text&&(x.kind==='statement'||!S.heads)):[]; const seen=new Set(); return [...live,...job].filter(x=>x&&x.text&&!seen.has(x.key||x.text)&&seen.add(x.key||x.text)); })();
+  const pinned=ls.get('pd.openToday',false)===true;
+  el.innerHTML=`<div class="td-in">
+    <div class="td-top"><b>${esc(S.settings.name||'Portfolio')}</b><span class="td-feed"><span class="dot ${fs.cls}"></span>${esc(fs.text)}</span></div>
+    <div class="td-hero"><div class="eyebrow">Total value</div><div class="td-v num" data-testid="today-value">${egp(value)}<small>EGP</small></div>
+      <div class="td-pl num ${sgn(dp.pl)}" data-testid="today-pl">${dp.pct!=null?`${dp.pl>=0?'+':'−'}${egp(Math.abs(dp.pl))} EGP · ${pct(dp.pct,2)} ${when}`:'No session move yet'}</div>
+      <div class="muted">EGX30 Capped ${ix.chg!=null?`<span class="${sgn(ix.chg)}">${pct(ix.chg/100,2)}</span>`:'—'}${ix.close!=null?` · ${num(ix.close,1)}`:''}</div></div>
+    <div class="td-list" data-testid="today-holdings">${rows.map(r=>{ const pl=r.chg!=null&&r.mv?r.mv-r.mv/(1+r.chg/100):null; return `<div class="td-row"><span class="sym">${esc(r.symbol||r.name)}</span><span class="num muted">${r.price!=null?num(r.price,2):''}</span><span class="num ${sgn(r.chg)}">${r.chg!=null?pct(r.chg/100,2):'—'}</span><span class="num ${sgn(pl)}">${pl!=null?short(pl):''}</span></div>`; }).join('')}</div>
+    ${heads.length?`<ul class="heads td-heads" data-testid="today-heads">${heads.map(x=>{ const k=HEADS[x.kind]||['Note','man']; return `<li><span class="pill ${k[1]}">${k[0]}</span><span>${esc(x.text)}</span></li>`; }).join('')}</ul>`:''}
+    <div class="td-act">${window.pdRefreshPrices?'<button class="btn" id="td-refresh" data-testid="today-refresh">Refresh prices</button>':''}<button class="btn primary" id="td-full" data-testid="today-full">Full portfolio</button></div>
+    <label class="td-pin"><input type="checkbox" id="td-pin" data-testid="today-pin" ${pinned?'checked':''}> Open the app on this screen</label>
+  </div>`;
+  $('#td-full').onclick=()=>{ S.today=false; if(/[?&]today\b/.test(location.search)||location.hash==='#today') history.replaceState(null,'',location.pathname); renderToday(); window.scrollTo(0,0); };
+  const rb=$('#td-refresh'); if(rb) rb.onclick=()=>refreshNow(rb);
+  $('#td-pin').onchange=(e)=>{ ls.set('pd.openToday', e.target.checked); toast(e.target.checked?'The app now opens on Today':'The app opens on the full portfolio again'); };
 }
 // Wide tables on a phone: flag every .tbl that overflows its container so CSS can show a "swipe →" hint; the hint goes once scrolled.
 function markScrollables(){
@@ -527,7 +565,9 @@ function renderTape(){
     item('s','EGX70 EWI',ix.EGX70EWI&&ix.EGX70EWI.close,ix.EGX70EWI&&ix.EGX70EWI.chg,1)+
     item('f','USD/EGP',m.fx&&m.fx.USDEGP&&m.fx.USDEGP.price,m.fx&&m.fx.USDEGP&&m.fx.USDEGP.chg,2)+
     item('g','GOLD 24K /g',m.gold&&m.gold.gram24kEgp,null,0);
-  $('#feed').innerHTML = `<span class="dot ${fs.cls}" data-testid="feed-dot" data-live="${pricesLive()?1:0}"></span><span class="muted">${esc(fs.text)}</span>${window.pdRefreshPrices?` <button class="btn sm" id="refresh-prices" data-testid="refresh-prices" title="Fetch the latest prices, EGX30 Capped, USD/EGP and gold now">Refresh now</button>`:''}`;
+  $('#feed').innerHTML = `<span class="dot ${fs.cls}" data-testid="feed-dot" data-live="${pricesLive()?1:0}"></span><span class="muted">${esc(fs.text)}</span>${window.pdRefreshPrices?` <button class="btn sm" id="refresh-prices" data-testid="refresh-prices" title="Fetch the latest prices, EGX30 Capped, USD/EGP and gold now">Refresh now</button>`:''} <button class="btn sm" id="open-today" data-testid="open-today" title="A quick view for the home screen: value, today's move, alerts">Today</button>`;
+  const ot=$('#open-today'); if(ot) ot.onclick=()=>{ S.today=true; renderToday(); };
+  renderToday();
 }
 
 // ---------- period selector ----------

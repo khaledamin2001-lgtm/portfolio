@@ -746,8 +746,38 @@ function vAnalysis(){
     ${H.map(h=>`<tr><td><span class="sym">${esc(h.sym)}</span></td><td class="n">${pct(h.w,1,false)}</td><td class="n">${h.beta!=null?num(h.beta):'—'}</td><td class="n">${h.vol!=null?pct(h.vol,0,false):'—'}</td><td class="n ${sgn(h.unreal)}">${egp(h.unreal)} <span class="muted">${pct(h.unrealPct)}</span></td><td class="n ${h.fromHigh<-0.1?'neg':''}">${pct(h.fromHigh)}</td></tr>`).join('')}
     </tbody></table></div>
     <p class="note" style="margin-top:10px">Beta: how much the stock moves for a 1% move in EGX30 Capped. Volatility: how wide its swings are over a year.</p>
-  </div>`;
+  </div>
+  ${stressPanel()}`;
 }
+
+// ---------- If the market falls / which holdings move together (PA.riskModel: the last 120 sessions of daily closes) ----------
+function riskNow(){ try{ return PA.riskModel(S.R, S.assets, S.history||{}, { today:S.R.today }); }catch(e){ console.error(e); return null; } }
+const CORR_WORD=(c)=>c>=0.7?'very closely':c>=0.5?'closely':c>=0.3?'somewhat':c>=0?'hardly':'in opposite directions';
+function stressPanel(){ const K=riskNow();
+  if(!K||!K.holdings.length) return `<div class="panel" data-testid="stress"><div class="phead"><div><h2>If the market falls</h2><div class="sub">Needs at least 30 sessions of daily closes and an open position</div></div></div></div>`;
+  const s10=K.stress[1], H=K.holdings, few=H.filter(h=>h.beta==null);
+  const cell=(c)=>{ if(c==null) return '<td class="n muted">—</td>'; const a=Math.min(1,Math.abs(c)); return `<td class="n cm" style="background:${c>=0?`rgba(0,113,227,${(a*0.75).toFixed(2)})`:`rgba(215,0,21,${(a*0.6).toFixed(2)})`};color:${a>0.65?'#fff':'var(--ink)'}">${c.toFixed(2)}</td>`; };
+  const top=K.pairs.slice(0,3), low=K.pairs.length>3?K.pairs.slice(-2).reverse():[];
+  const spread=K.avgCorr==null?'':K.avgCorr<0.3?'well spread: they mostly move on their own':K.avgCorr<0.5?'moderately spread':'not very spread: they tend to move as one';
+  return `<div class="panel" data-testid="stress"><div class="phead"><div><h2>If the market falls</h2><div class="sub">From the last ${K.days} sessions of daily closes (${dfmt(K.from)} to ${dfmt(K.to)}) · today's holdings, cash included in the weights</div></div></div>
+    <div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr))">
+      ${kpi('Portfolio beta', num(K.beta), 'daily · 1.0 moves with the index, cash counts as 0')}
+      ${K.stress.map(x=>kpi(`EGX30 Capped ${pct(x.x,0)}`, `<span class="neg">${pct(x.port,1)}</span>`, `about ${egp(Math.abs(x.egp))} EGP down`, '', '', `stress-${Math.round(-x.x*100)}`)).join('')}
+    </div>
+    ${K.worst?`<p class="note" style="margin-top:10px" data-testid="stress-worst">The index's worst day in the window was ${dfmt(K.worst.d)} (${pct(K.worst.idx,1)}). Today's holdings would have moved <b class="${sgn(K.worst.port)}">${pct(K.worst.port,1)}</b> that day.</p>`:''}
+    <div class="tbl" style="margin-top:10px"><table data-testid="stress-table"><thead><tr><th>Stock</th><th class="n">Weight</th><th class="n">Beta</th><th class="n">If the index falls 10%</th></tr></thead><tbody>
+      ${H.map((h,i)=>`<tr><td><span class="sym">${esc(h.s)}</span></td><td class="n">${pct(h.w,1,false)}</td><td class="n">${h.beta!=null?num(h.beta):'—'}</td><td class="n ${sgn(s10.rows[i].move)}">${h.beta!=null?`${pct(s10.rows[i].move,1)} <span class="muted">${short(s10.rows[i].egp)}</span>`:'—'}</td></tr>`).join('')}
+    </tbody></table></div>
+    <p class="note" style="margin-top:10px">A likely move, not a promise: each stock's beta (how much it has moved for a 1% move in the index) times the drop.${few.length?` ${few.map(h=>esc(h.s)).join(', ')} ${few.length>1?'have':'has'} too few daily prices and ${few.length>1?'count':'counts'} as not moving.`:''}</p>
+  </div>
+  <div class="panel" data-testid="corr"><div class="phead"><div><h2>Which holdings move together</h2><div class="sub">Correlation of daily returns over the same ${K.days} sessions · 1 = always together, 0 = unrelated</div></div></div>
+    ${H.length<2?'<p class="note">Needs two or more holdings.</p>':`
+    ${K.avgCorr!=null?`<p data-testid="corr-summary">On average your holdings move together <b>${K.avgCorr.toFixed(2)}</b>: ${spread}.</p>`:''}
+    ${top.length?`<ul class="heads" style="margin-top:8px" data-testid="corr-pairs">${top.map(x=>`<li><span class="pill ${x.c>=0.5?'loss':'man'}">${x.c.toFixed(2)}</span><span><b>${esc(x.a)}</b> and <b>${esc(x.b)}</b> move ${CORR_WORD(x.c)} together${x.c>=0.7?': holding both is close to holding one bigger position':''}</span></li>`).join('')}${low.map(x=>`<li><span class="pill win">${x.c.toFixed(2)}</span><span><b>${esc(x.a)}</b> and <b>${esc(x.b)}</b> move ${CORR_WORD(x.c)} together: they spread the risk</span></li>`).join('')}</ul>`:''}
+    <div class="tbl corr-tbl" style="margin-top:10px"><table data-testid="corr-matrix"><thead><tr><th></th>${H.slice(0,10).map(h=>`<th class="n">${esc(h.s)}</th>`).join('')}</tr></thead><tbody>
+      ${H.slice(0,10).map((h,i)=>`<tr><td><span class="sym">${esc(h.s)}</span></td>${H.slice(0,10).map((_,j)=>i===j?'<td class="n muted">·</td>':cell(K.corr.m[i][j])).join('')}</tr>`).join('')}
+    </tbody></table></div>`}
+  </div>`; }
 
 // The written review: what the numbers say, why, and what you could do about it. Suggestions only; nothing is tracked or enforced.
 function analysisPanel(c){

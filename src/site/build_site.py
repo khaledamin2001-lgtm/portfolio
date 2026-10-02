@@ -53,6 +53,9 @@ ICONS = ['icon-180.png', 'icon-192.png', 'icon-512.png', 'icon-maskable-192.png'
 for f in ICONS: shutil.copyfile(os.path.join('pwa', f), os.path.join(REPO, f))
 MANIFEST = {"id": "./", "name": "Portfolio Desk", "short_name": "Portfolio", "description": "Encrypted stock portfolio tracker", "lang": "en",
             "start_url": "./", "scope": "./", "display": "standalone", "background_color": "#F2F2F7", "theme_color": "#F2F2F7",
+            # long-press the app icon (Android, desktop): straight to Today, the quick view (app.html renderToday)
+            "shortcuts": [{"name": "Today", "short_name": "Today", "description": "Value, today's move and alerts", "url": "./?today",
+                           "icons": [{"src": "icon-192.png", "sizes": "192x192", "type": "image/png"}]}],
             "icons": [{"src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
                       {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
                       {"src": "icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable"},

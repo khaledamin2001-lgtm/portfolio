@@ -457,6 +457,32 @@ try:
     gpk = base64.b64encode(gk.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)).decode()
     check("open_json opens what seal_json sealed", ram.open_json(gk, ram.seal_json({"v": 2, "x": [1]}, gpk, b"portfolio-share-v1"), b"portfolio-share-v1") == {"v": 2, "x": [1]})
 
+    # ---- the morning brief (run_morning.py): the owner's main portfolio, and the accounts that switched it on ----
+    import run_morning, jobs_common as jc
+    opkg = DB[f"mail/{OUID}"]["pkg"]
+    json.dump({"portfolioId": "khaled", "name": "Main", "siteRepo": "x/y", "siteFolder": "p/khaled"}, open(os.path.join(eng, "config.json"), "w"))
+    real_record = jc.record_job
+    jc.record_job = lambda ctx, section, updates, message: (lambda st: (st.setdefault(section, {}).update(updates), jc.save_jobs_state(ctx, st)))(jc.jobs_state(ctx))
+    owner_sent = []
+    def morning(now):
+        sent.clear(); owner_sent.clear()
+        run_morning.main(["--engine", eng, "--code", code, "--now", now], http=FakeHttp(), send=send, send_owner=lambda ctx, s, t, h: owner_sent.append((s, t)) or "sent")
+        return [m for m in sent if "morning brief" in m["subject"]]
+    try:
+        DB[f"mail/{UID}"]["pkg"] = seal_mail({"uid": UID, "email": "friend@example.com", "refresh": "RT1", "pk8": pk8, "prefs": {"alerts": True, "morning": True}})
+        DB[f"mail/{OUID}"]["pkg"] = seal_mail({"uid": OUID, "email": "owner@example.com", "refresh": "RT3", "pk8": opk8, "prefs": {"shareMain": True, "morning": True}})
+        ms = morning("2026-09-24T06:00:00Z")      # Thursday 9:00 Cairo
+        check("morning brief: the owner's main portfolio, to the owner's address (through the owner's mail lock)",
+              len(owner_sent) == 1 and owner_sent[0][0].startswith("Demo Portfolio: morning brief") and "YOUR HOLDINGS" in owner_sent[0][1], json.dumps([x[0] for x in owner_sent]))
+        check("morning brief: only the account that switched it on gets one, to its own address (not the owner's sign-in account, not the others)",
+              [m["to"] for m in ms] == ["friend@example.com"] and "morning brief" in ms[0]["subject"] and "YOUR HOLDINGS" in ms[0]["text"], json.dumps([[m["to"], m["subject"]] for m in ms]))
+        check("morning brief: once a day", morning("2026-09-24T06:20:00Z") == [] and owner_sent == [])
+        check("morning brief: nothing on a Friday", morning("2026-09-25T06:00:00Z") == [] and owner_sent == [])
+        check("morning brief: the next session day, again", len(morning("2026-09-27T06:00:00Z")) == 1 and len(owner_sent) == 1)
+    finally:
+        jc.record_job = real_record
+        DB[f"mail/{UID}"]["pkg"], DB[f"mail/{OUID}"]["pkg"] = upkg, opkg
+
     # ---- a friendship made by @username: the asker's side has no email until it is accepted ----
     class HandleHttp:
         DOCS = {"handles/omar": {"uid": "Uomar", "pub": "PUB-omar"}, "directory/omar@example.com": {"uid": "Uomar", "pub": "PUB-omar"}}

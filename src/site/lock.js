@@ -426,7 +426,7 @@
     const syms = [...new Set(Object.values(items).map((a) => (a.symbol || '').toUpperCase()).filter((s) => s && s !== 'SAVINGS' && s !== 'THNDRGOLD'))].sort();
     const idx = ['EGX30CAPPED', 'EGX30', 'EGX70EWI', 'EGX100EWI'], today = cairoDay(Date.now() / 1000);
     const cols = ['close', 'change', 'time', 'close[1]|1M', 'description', 'dividends_yield_current', 'ex_dividend_date_upcoming', 'dividend_amount_upcoming', 'ex_dividend_date_recent', 'dividend_amount_recent',
-      'price_earnings_ttm', 'price_book_fq', 'return_on_equity', 'market_cap_basic', 'price_52_week_high', 'price_52_week_low'];   // valuation for the watchlist
+      'price_earnings_ttm', 'price_book_fq', 'return_on_equity', 'market_cap_basic', 'price_52_week_high', 'price_52_week_low', 'volume', 'average_volume_30d_calc', 'earnings_release_next_date'];   // valuation for the watchlist
     // every stock listed on the EGX in one call, plus the indices, plus USD/EGP and gold. Only the stock scan is required: a failed
     // index or FX/gold call keeps the saved values (each carries its own date), and asOf is the time the stock scan came back.
     let scanAt = null;
@@ -441,7 +441,8 @@
     const prev = DOCS['market/latest'] || {}, quotes = {}, index = {}, missing = [], carried = [];
     const put = (s, d) => { quotes[s] = { price: d[0], chg: +(d[1] || 0).toFixed(4), date: d[2] ? cairoDay(d[2]) : today, prevMonthClose: d[3], name: d[4], dy: d[5] == null ? null : +d[5].toFixed(4),
       exDate: d[6] ? cairoDay(d[6]) : null, divUp: d[7] ?? null, exRecent: d[8] ? cairoDay(d[8]) : null, divRecent: d[9] ?? null,
-      pe: num(d[10], 2), pb: num(d[11], 2), roe: num(d[12], 2), mcap: d[13] == null ? null : Math.round(d[13]), hi52: d[14] ?? null, lo52: d[15] ?? null }; };
+      pe: num(d[10], 2), pb: num(d[11], 2), roe: num(d[12], 2), mcap: d[13] == null ? null : Math.round(d[13]), hi52: d[14] ?? null, lo52: d[15] ?? null,
+      vol: d[16] == null ? null : Math.round(d[16]), avgVol: d[17] == null ? null : Math.round(d[17]), earn: d[18] ? cairoDay(d[18]) : null }; };
     const num = (x, dp) => (x == null || !isFinite(x) ? null : +(+x).toFixed(dp));
     for (const [t, d] of Object.entries(all)) { if (d && d[0] != null) put(t.replace(/^EGX:/, ''), d); }
     for (const s of syms) { if (!quotes[s]) { if (prev.quotes && prev.quotes[s]) quotes[s] = prev.quotes[s]; else missing.push(s); } }
@@ -1227,21 +1228,21 @@
   const sealTo = (pubB64, bytes, label) => seal(bytes, label, pubB64);
   async function writeMail(prefs) {
     const mk = await (await fetch('p/khaled/keys.json', { cache: 'no-store' })).json();
-    const pkg = { v: 1, uid: CLOUD.uid, email: prefs.email, refresh: CLOUD.refresh, pk8: b64big(acctKey()), prefs: { alerts: !!prefs.alerts, weekly: !!prefs.weekly, reports: !!prefs.reports, leaderboard: prefs.leaderboard !== false, reportCard: prefs.reportCard !== false, gmail: !!prefs.gmail, shareMain: !!prefs.shareMain }, at: new Date().toISOString() };
+    const pkg = { v: 1, uid: CLOUD.uid, email: prefs.email, refresh: CLOUD.refresh, pk8: b64big(acctKey()), prefs: { alerts: !!prefs.alerts, weekly: !!prefs.weekly, reports: !!prefs.reports, leaderboard: prefs.leaderboard !== false, reportCard: prefs.reportCard !== false, morning: !!prefs.morning, gmail: !!prefs.gmail, shareMain: !!prefs.shareMain }, at: new Date().toISOString() };
     const env = Object.assign({ v: 1 }, await sealTo(mk.pub, enc.encode(JSON.stringify(pkg)), MAIL_LABEL));
     await fsReq('PATCH', `mail/${CLOUD.uid}`, { fields: { pkg: { stringValue: JSON.stringify(env) }, at: { stringValue: pkg.at } } });
     ls.set(mailLS(), Object.assign({}, prefs, { ref: await sha(CLOUD.refresh) }));
   }
   // nothing left on: the package is deleted, so the job no longer opens the portfolio
   async function setMail(prefs) {
-    if (prefs.alerts || prefs.weekly || prefs.reports || prefs.leaderboard || prefs.reportCard || prefs.gmail || prefs.shareMain) return writeMail(prefs);
+    if (prefs.alerts || prefs.weekly || prefs.reports || prefs.leaderboard || prefs.reportCard || prefs.morning || prefs.gmail || prefs.shareMain) return writeMail(prefs);
     await fsReq('DELETE', `mail/${CLOUD.uid}`); ls.del(mailLS());
   }
   // the job signs in with the saved refresh token: after a password change (which ends old sessions) it is sealed again
   async function resealMail() { const m = mailPrefs(); if (m && CLOUD && CLOUD.refresh && m.ref !== (await sha(CLOUD.refresh))) await writeMail(m); }
   function mailScreen(note) {
     const on = mailOn(), m = on ? mailPrefs() : Object.assign({ email: CUR.email || (CLOUD && CLOUD.email) || '' }, mailPrefs() || {}, { alerts: true, weekly: true, reports: true, leaderboard: true, reportCard: true });
-    screen(`<h1>Email updates</h1><p>Get an email when something needs your attention (a dividend coming up, a target or stop reached, a big drop), a summary every Thursday evening, your month-end report (Excel workbook + PDF factsheet) when each monthly statement is posted, and early each month a report card on your trading and how you ranked among your friends (percentages only).</p>
+    screen(`<h1>Email updates</h1><p>Get an email when something needs your attention (a dividend coming up, a target or stop reached, a big drop), a summary every Thursday evening, your month-end report (Excel workbook + PDF factsheet) when each monthly statement is posted, early each month a report card on your trading and how you ranked among your friends (percentages only), and if you like a short brief before the market opens.</p>
       <p class="lk-tip">To write these, the site owner's email job has to open your portfolio, so while this is on your figures are not private from that job. Switch it off any time: nothing is kept after that.</p>
       <form id="lk-ml" autocomplete="off"><input id="lk-ml-email" type="email" data-testid="mail-address" value="${esc(m.email)}" placeholder="Email address" aria-label="Email address">
       <label class="lk-check"><input type="checkbox" id="lk-ml-alerts" data-testid="mail-alerts" ${m.alerts ? 'checked' : ''}> Heads-up alerts</label>
@@ -1249,22 +1250,23 @@
       <label class="lk-check"><input type="checkbox" id="lk-ml-reports" data-testid="mail-reports" ${m.reports ? 'checked' : ''}> Month-end report (Excel + PDF)</label>
       <label class="lk-check"><input type="checkbox" id="lk-ml-leaderboard" data-testid="mail-leaderboard" ${m.leaderboard !== false ? 'checked' : ''}> Friends leaderboard (1st of the month)</label>
       <label class="lk-check"><input type="checkbox" id="lk-ml-card" data-testid="mail-report-card" ${m.reportCard !== false ? 'checked' : ''}> Trading report card (early each month)</label>
+      <label class="lk-check"><input type="checkbox" id="lk-ml-morning" data-testid="mail-morning" ${m.morning ? 'checked' : ''}> Morning brief (Sunday to Thursday, about 9 am, before the market opens)</label>
       <button class="lk-btn" id="lk-ml-go" data-testid="mail-on">${on ? 'Save' : 'Turn on email updates'}</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>
       ${on ? '<button class="lk-btn ghost" id="lk-ml-off" data-testid="mail-off">Turn off email updates</button>' : ''}
       <div class="lk-links"><button type="button" class="lk-link" id="lk-ml-back" data-testid="mail-back">Back</button></div>`);
     $l('#lk-ml-back').onclick = accountScreen;
     $l('#lk-ml').onsubmit = async (ev) => {
-      ev.preventDefault(); const email = $l('#lk-ml-email').value.trim(), alerts = $l('#lk-ml-alerts').checked, weekly = $l('#lk-ml-weekly').checked, reports = $l('#lk-ml-reports').checked, leaderboard = $l('#lk-ml-leaderboard').checked, reportCard = $l('#lk-ml-card').checked;
+      ev.preventDefault(); const email = $l('#lk-ml-email').value.trim(), alerts = $l('#lk-ml-alerts').checked, weekly = $l('#lk-ml-weekly').checked, reports = $l('#lk-ml-reports').checked, leaderboard = $l('#lk-ml-leaderboard').checked, reportCard = $l('#lk-ml-card').checked, morning = $l('#lk-ml-morning').checked;
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return err('Enter an email address.');
-      if (!alerts && !weekly && !reports && !leaderboard && !reportCard) return err('Pick at least one kind of email, or turn email updates off.');
+      if (!alerts && !weekly && !reports && !leaderboard && !reportCard && !morning) return err('Pick at least one kind of email, or turn email updates off.');
       const b = $l('#lk-ml-go'); b.disabled = true; err('Saving…');
-      try { await writeMail(Object.assign({}, mailPrefs() || {}, { email, alerts, weekly, reports, leaderboard, reportCard, gmail: gmailOn() })); open(); toast('Email updates are on. The first ones come after the next market close.'); }
+      try { await writeMail(Object.assign({}, mailPrefs() || {}, { email, alerts, weekly, reports, leaderboard, reportCard, morning, gmail: gmailOn() })); open(); toast('Email updates are on. The first ones come after the next market close.'); }
       catch (e) { console.error(e); b.disabled = false; err(e.message || String(e)); }
     };
     const off = $l('#lk-ml-off');
     if (off) off.onclick = async () => {
       off.disabled = true;
-      try { await setMail(Object.assign({}, mailPrefs(), { alerts: false, weekly: false, reports: false, leaderboard: false, reportCard: false })); open(); toast('Email updates are off.'); }
+      try { await setMail(Object.assign({}, mailPrefs(), { alerts: false, weekly: false, reports: false, leaderboard: false, reportCard: false, morning: false })); open(); toast('Email updates are off.'); }
       catch (e) { console.error(e); off.disabled = false; err(e.message || String(e)); }
     };
   }

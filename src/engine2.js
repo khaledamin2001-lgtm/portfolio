@@ -419,6 +419,118 @@
     const peak = pts.reduce((a, p) => (p.idx > a.idx ? p : a)), now = pts[pts.length - 1];
     return { dd: now.idx / peak.idx - 1, peak: { d: peak.d, idx: peak.idx }, now: { d: now.d, value: now.value, live: !!now.live }, points: pts.length, basis };
   }
+  // ---------- unusual volume ----------
+  // Held and watch-list stocks (assets with watch: true) whose latest session (market/latest quote: vol, avgVol = the
+  // 30-session average, date within the last 4 days) traded VOL_X times the average or more, biggest first.
+  const VOL_X = 3;
+  const volTxt = (x) => (x >= 1e6 ? `${(x / 1e6).toFixed(1)}M` : x >= 1e3 ? `${Math.round(x / 1e3)}K` : String(Math.round(x)));
+  function volumeSpikes(tx, assets, quotes, today) {
+    const syms = new Map();
+    heldStocks(tx, assets).forEach((h) => syms.set(h.sym, true));
+    Object.values(assets || {}).forEach((a) => { if (a && a.watch === true && a.symbol && !syms.has(String(a.symbol).toUpperCase())) syms.set(String(a.symbol).toUpperCase(), false); });
+    const out = [];
+    syms.forEach((held, s) => {
+      const q = (quotes || {})[s];
+      if (!q || !(q.vol > 0) || !(q.avgVol > 0) || !q.date || q.date < addDays(today, -4) || q.date > today) return;
+      const x = q.vol / q.avgVol;
+      if (x >= VOL_X) out.push({ s, held, d: q.date, x, vol: q.vol, avg: q.avgVol, chg: q.chg || 0 });
+    });
+    return out.sort((a, b) => b.x - a.x);
+  }
+
+  // ---------- how the holdings move: correlation, beta and a stress test ----------
+  // From the daily closes (history) of the last `days` EGX sessions: each holding's daily returns (its own symbol, or its
+  // proxy, e.g. a gold fund on GOLD24K; cash-like funds count as cash), its beta to the EGX30 Capped, the correlation of
+  // every pair, the portfolio's beta (weights of the whole portfolio with cash; a holding without enough prices counts
+  // as not moving), what an index drop of 5 / 10 / 20% would likely do, and a replay of the index's worst day in the window
+  // on today's holdings. R: a PE.run result (pos.open, liveCash). Returns null without history.
+  //   {days, from, to, total, beta, holdings: [{s, n, sec, w, beta, corrIdx, vol, obs}], corr: {syms, m}, pairs: [{a, b, c}]
+  //    (every pair, most alike first), avgCorr, stress: [{x, port, egp, rows: [{s, move, egp}]}], worst: {d, idx, port}}
+  function riskModel(R, assets, history, o) {
+    o = o || {};
+    const N = o.days || 120, MIN = 30;
+    const snap = {}; Object.keys(history || {}).forEach((m) => Object.assign(snap, (history[m] && history[m].days) || {}));
+    const days = Object.keys(snap).filter((d) => snap[d] && snap[d].EGX30CAPPED != null && (!o.today || d <= o.today)).sort().slice(-(N + 1));
+    if (days.length < MIN + 1) return null;
+    const rets = (key) => days.slice(1).map((d, i) => { const a = snap[days[i]][key], b = snap[d][key]; return a > 0 && b > 0 ? b / a - 1 : null; });
+    const idx = rets('EGX30CAPPED');
+    const byName = {}; Object.values(assets || {}).forEach((a) => { if (a && a.name) byName[a.name] = a; });
+    const cash = Math.max(0, R.liveCash != null ? R.liveCash : (R.settings && R.settings.cash) || 0), total = (R.pos.mvTotal || 0) + cash;
+    const pairStats = (x, y) => {
+      const xs = [], ys = []; x.forEach((v, i) => { if (v != null && y[i] != null) { xs.push(v); ys.push(y[i]); } });
+      if (xs.length < MIN) return null;
+      const mx = mean(xs), my = mean(ys);
+      let sxy = 0, sxx = 0, syy = 0; xs.forEach((v, i) => { sxy += (v - mx) * (ys[i] - my); sxx += (v - mx) ** 2; syy += (ys[i] - my) ** 2; });
+      return { n: xs.length, cov: sxy / (xs.length - 1), vx: sxx / (xs.length - 1), vy: syy / (xs.length - 1), c: sxx && syy ? sxy / Math.sqrt(sxx * syy) : null };
+    };
+    const hold = (total > 0 ? R.pos.open : []).filter((p) => (p.mv || 0) > 0 && !CASH_LIKE.has(p.sector)).map((p) => {
+      const a = byName[p.name] || {}, sym = (p.symbol || a.symbol || '').toUpperCase();
+      const key = sym && snap[days[days.length - 1]] && Object.prototype.hasOwnProperty.call(snap[days[days.length - 1]], sym) ? sym : a.proxy && days.some((d) => snap[d][a.proxy] != null) ? a.proxy : sym;
+      const r = key ? rets(key) : days.slice(1).map(() => null);
+      const st = pairStats(r, idx), own = r.filter((v) => v != null);
+      return { s: sym || p.name, n: p.name, sec: p.sector || 'Unclassified', w: p.mv / total, r, obs: own.length,
+        beta: st && st.vy ? st.cov / st.vy : null, corrIdx: st ? st.c : null, vol: own.length >= MIN ? Math.sqrt(own.reduce((s2, v) => s2 + (v - mean(own)) ** 2, 0) / (own.length - 1)) * Math.sqrt(250) : null };
+    }).sort((a, b) => b.w - a.w);
+    const beta = sum(hold.map((h) => h.w * (h.beta || 0)));
+    const m = hold.map((a) => hold.map((b) => (a === b ? 1 : (pairStats(a.r, b.r) || {}).c ?? null)));
+    const pairs = [];
+    hold.forEach((a, i) => hold.forEach((b, j) => { if (j > i && m[i][j] != null) pairs.push({ a: a.s, b: b.s, c: m[i][j] }); }));
+    pairs.sort((x, y) => y.c - x.c);
+    const off = []; m.forEach((row, i) => row.forEach((c, j) => { if (j > i && c != null) off.push(c); }));
+    const stress = [-0.05, -0.1, -0.2].map((x) => {
+      const rows = hold.map((h) => ({ s: h.s, move: (h.beta || 0) * x, egp: h.w * total * (h.beta || 0) * x }));
+      return { x, port: beta * x, egp: total * beta * x, rows };
+    });
+    let wi = -1; idx.forEach((v, i) => { if (v != null && (wi < 0 || v < idx[wi])) wi = i; });
+    const worst = wi >= 0 ? { d: days[wi + 1], idx: idx[wi], port: sum(hold.map((h) => h.w * (h.r[wi] || 0))) } : null;
+    return { days: days.length - 1, from: days[0], to: days[days.length - 1], total, beta, avgCorr: off.length ? mean(off) : null,
+      holdings: hold.map(({ r, ...h }) => h), corr: { syms: hold.map((h) => h.s), m }, pairs, stress, worst };
+  }
+
+  // ---------- the morning brief (the email before the EGX opens, Sun-Thu) ----------
+  // From the latest close (market/latest): the portfolio's last session (value, P/L, the index), every holding's move,
+  // what is coming in the next 7 days for held and watch-list stocks (ex-dividend, earnings), holdings near (within 5%)
+  // or past their target / stop, unusual volume, your limits, and what a 5% index drop would likely do. run: portfolioRun.
+  function morningBrief(run, o) {
+    o = o || {};
+    const R = run.R, today = o.today || run.today, mk = run.data.market || {}, quotes = mk.quotes || {};
+    const byName = {}; Object.values(run.data.assets || {}).forEach((a) => { if (a && a.name) byName[a.name] = a; });
+    const open = R.pos.open.filter((p) => (p.mv || 0) > 0);
+    const cash = Math.max(0, R.liveCash != null ? R.liveCash : R.settings.cash || 0), value = R.pos.mvTotal + cash;
+    const ix = (mk.index || {}).EGX30CAPPED || {};
+    const session = ix.date || Object.values(quotes).reduce((d, q) => (q && q.date && q.date > d ? q.date : d), '') || null;
+    const movers = open.filter((p) => !CASH_LIKE.has(p.sector) && p.chg != null).map((p) => {
+      const q = quotes[(p.symbol || '').toUpperCase()] || {};
+      const fresh = !session || !q.date || q.date === session;
+      return { s: p.symbol || p.name, n: p.name, chg: fresh ? p.chg / 100 : 0, pl: fresh ? p.mv - p.mv / (1 + p.chg / 100) : 0, w: value ? p.mv / value : 0, fresh };
+    }).sort((a, b) => b.chg - a.chg);
+    const pl = sum(movers.map((x) => x.pl));
+    const upcoming = [], until = addDays(today, 7);
+    const seen = new Set();
+    const consider = (sym, held) => {
+      if (!sym || seen.has(sym)) return; seen.add(sym);
+      const q = quotes[sym]; if (!q) return;
+      if (q.exDate && q.exDate >= today && q.exDate <= until) upcoming.push({ kind: 'exdiv', s: sym, d: q.exDate, held, divUp: q.divUp != null ? q.divUp : null });
+      if (q.earn && q.earn >= today && q.earn <= until) upcoming.push({ kind: 'earnings', s: sym, d: q.earn, held });
+    };
+    heldStocks(run.data.tx || [], run.data.assets).forEach((h) => consider(h.sym, true));
+    Object.values(run.data.assets || {}).forEach((a) => { if (a && a.watch === true && a.symbol) consider(String(a.symbol).toUpperCase(), false); });
+    upcoming.sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : 0));
+    const levels = [];
+    open.forEach((p) => {
+      const a = byName[p.name] || {}, px = p.price, s = p.symbol || p.name;
+      if (!(px > 0)) return;
+      const tg = Number(a.target), sp = Number(a.stop);
+      if (a.target != null && a.target !== '' && tg > 0 && tg / px - 1 <= 0.05) levels.push({ kind: 'target', s, price: px, level: tg, gap: tg / px - 1 });
+      if (a.stop != null && a.stop !== '' && sp > 0 && 1 - sp / px <= 0.05) levels.push({ kind: 'stop', s, price: px, level: sp, gap: sp / px - 1 });
+    });
+    let risk = null; try { risk = riskModel(R, run.data.assets, o.history || run.data.history || {}, { today }); } catch (e) { risk = null; }
+    const lim = limitCheck(R, R.settings.limits);
+    return { today, session, value, pl, ret: value - pl > 0 ? pl / (value - pl) : null, index: ix.chg != null ? ix.chg / 100 : null, indexClose: ix.close != null ? ix.close : null,
+      movers, upcoming, levels, volume: volumeSpikes(run.data.tx || [], run.data.assets, quotes, today), limits: lim ? lim.over : null,
+      stress: risk ? { beta: risk.beta, drop5: risk.stress[0].port, egp5: risk.stress[0].egp } : null };
+  }
+
   // ---------- your limits (settings.limits) ----------
   // limits = {on, stock, sector}: the most one stock and one sector may be of the WHOLE portfolio (holdings at the latest
   // prices + cash; cash-like funds count as cash, never as a stock or a sector), as fractions (0.2 = 20%); a missing or
@@ -460,6 +572,11 @@
       if (h.asset.target != null && h.asset.target !== '' && tg > 0 && px >= tg) items.push({ kind: 'target', key: `target:${h.sym}:${tg}`, text: `${h.sym} reached its target: ${hFmt(px)} vs target ${hFmt(tg)}` });
       if (h.asset.stop != null && h.asset.stop !== '' && sp > 0 && px <= sp) items.push({ kind: 'stop', key: `stop:${h.sym}:${sp}`, text: `${h.sym} is at or below its stop: ${hFmt(px)} vs stop ${hFmt(sp)}` });
     });
+    // unusual volume: a held or watch-list stock whose last session traded VOL_X times its 30-session average or more
+    try {
+      volumeSpikes(o.tx || [], o.assets, quotes, o.today).forEach((v) => items.push({ kind: 'volume', key: `volume:${v.s}:${v.d}`,
+        text: `${v.s}${v.held ? '' : ' (watch list)'} traded ${v.x.toFixed(1)}× its usual volume on ${dayLbl(v.d)}: ${volTxt(v.vol)} shares vs ${volTxt(v.avg)} a day, ${v.chg >= 0 ? '+' : '−'}${Math.abs(v.chg).toFixed(1)}% that day` }));
+    } catch (e) { errors.push('volume: ' + (e.message || e)); }
     try {
       const L = o.settings && o.settings.limits;
       if (L && L.on && o.settings.inception) {
@@ -580,7 +697,7 @@
     const fallback = (name) => { const p = pricer(name, today); return p ? { p: p.p, d: pb.last } : null; };
     let D = null; try { D = daily(st0, led, assets, pb, marks0, today); } catch (e) { D = null; }
     let marks = marks0; try { if (Object.keys(history).length) marks = estimateMarks(st0, marks0, led, assets, pb, today); } catch (e) { marks = marks0; }
-    const data = { settings: st0, marks, assets, tx, market: o.market || docs['market/latest'] || null, bench: docs['bench/egx30'] || null };
+    const data = { settings: st0, marks, assets, tx, market: o.market || docs['market/latest'] || null, bench: docs['bench/egx30'] || null, history };
     return { R: PE.run(data, sel || { type: 'Since Inception' }, { fallback, daily: D || undefined, today }), data, today };
   }
 
@@ -693,6 +810,6 @@
     return { r: r - 1, b: bOk ? b - 1 : null, from: rg.from, to: rg.to };
   }
 
-  const api = { headsUp, drawdownCheck, limitCheck, limitText, reportCard, heldStocks, priceBook, makePricer, daily, dailyStats, dailyTwr, capWeights, benchWeights, holdingsAt, estimateMarks, attribution, activeWeights, tradeChecks, tradingHabits, portfolioRun, friendProfile, profilePeriod, income, trailing, calendar, TRADING_DAYS, TRADING_NOTE };
+  const api = { headsUp, drawdownCheck, limitCheck, limitText, reportCard, volumeSpikes, riskModel, morningBrief, heldStocks, priceBook, makePricer, daily, dailyStats, dailyTwr, capWeights, benchWeights, holdingsAt, estimateMarks, attribution, activeWeights, tradeChecks, tradingHabits, portfolioRun, friendProfile, profilePeriod, income, trailing, calendar, TRADING_DAYS, TRADING_NOTE };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.PA = api;
 })(this);

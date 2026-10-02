@@ -154,6 +154,20 @@ const cleanup = [];
     check('heads-up worked out on the page: the synthetic target hit is listed', heads.some((t) => /reached its target/.test(t)), JSON.stringify(heads));
     await page.click('#tab-analysis'); await $t('trading').waitFor({ timeout: 10000 });
     check('Analysis opens on "Your trading"; with no trade closed yet it says so and still shows the open positions', await $t('trading-empty').isVisible() && /Winners held/.test(await $t('trading-open').textContent()) && (await page.locator('#sec-trading').count()) === 1);
+    const stressTxt = await $t('stress').textContent(), corrN = await page.locator('[data-testid=corr-matrix] tbody tr').count();
+    check('Analysis: "If the market falls" (beta, 5/10/20% drops) and "Which holdings move together" (a row per holding)',
+      /Portfolio beta/.test(stressTxt) && /EGX30 Capped −10%/.test(stressTxt) && corrN >= 2 && (await $t('corr-summary').isVisible()), `${corrN} rows`);
+    await shot('stress');
+    // Today: the home-screen view
+    await $t('open-today').click(); await $t('today').waitFor({ timeout: 5000 });
+    const tv = await $t('today-value').textContent(), trows = await page.locator('[data-testid=today-holdings] .td-row').count();
+    check('Today: the total value, the session move and a row per holding', /\d{1,3}(,\d{3})+/.test(tv) && /EGP|No session move/.test(await $t('today-pl').textContent()) && trows >= 2, `${tv} · ${trows} rows`);
+    await page.setViewportSize({ width: 390, height: 844 }); await shot('today-phone');
+    await $t('today-pin').check();
+    check('Today: "Open the app on this screen" is remembered on this device', await page.evaluate(() => localStorage.getItem('pd.openToday')) === 'true');
+    await $t('today-pin').uncheck(); await $t('today-full').click();
+    check('Today: "Full portfolio" goes back', await page.locator('[data-testid=today]').isHidden() && await page.evaluate(() => localStorage.getItem('pd.openToday')) === 'false');
+    await page.setViewportSize({ width: 1280, height: 900 });
     await page.click('#tab-settings');
     check('view only: the settings save button is hidden', !(await $t('save-settings').isVisible()));
 
