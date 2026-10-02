@@ -144,13 +144,19 @@ def fetch(after, seen, out_dir, addr=None, pw=None, query=None):
 
 
 def skip_ids(seen, assets):
-    """The seen ids a fetch skips: all of them, except the invoices while a stock is still stored without a ticker
-    (sync.js reads those again for their ISIN codes and fills the ticker in). seen: sync/state seen {id: {kind}},
-    assets: portfolio/assets items {name: asset}."""
+    """The seen ids a fetch skips: all of them, except statements an earlier run held (sync.js tries them again) and the
+    invoices while a stock is still stored without a ticker (sync.js reads those again for their ISIN codes and fills
+    the ticker in). seen: sync/state seen {id: {kind, status}}, assets: portfolio/assets items {name: asset}."""
     seen = seen or {}
     loose = any(isinstance(a, dict) and not a.get("fund") and not a.get("symbol") and not a.get("watch")
                 and not str(a.get("name") or n).lower().startswith("thndr") for n, a in (assets or {}).items())
-    return {k for k, v in seen.items() if not (loose and isinstance(v, dict) and v.get("kind") == "invoice")}
+    def again(v):
+        if not isinstance(v, dict):
+            return False
+        if v.get("kind") == "invoice":
+            return loose
+        return bool(v.get("kind")) and v.get("status") == "hold"
+    return {k for k, v in seen.items() if not again(v)}
 
 
 def seen_ids(state_path):

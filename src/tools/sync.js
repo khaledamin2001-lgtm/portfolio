@@ -371,7 +371,7 @@ function applyStatement(st, entry, msg) {
 }
 
 // ---------- run ----------
-const healed = [];
+const healed = [], heldStatements = [];
 const needsTicker = () => Object.values(assets).some((a) => a && !a.fund && !a.symbol && !a.watch && !/^thndr/i.test(a.name || ''));
 async function healFromInvoice(pdfjs, msg) {
   try {
@@ -395,9 +395,12 @@ async function run() {
   // (the job re-fetches seen invoices while such a stock is left, see imap_fetch.skip_ids)
   Object.keys(assets).forEach((n) => { const r = healTicker(n, null, 'from its ISIN'); if (r) healed.push(r); });
   for (const msg of manifest) {
-    if (state.seen[msg.id]) { if (state.seen[msg.id].kind === 'invoice' && needsTicker()) await healFromInvoice(pdfjs, msg); continue; }
+    // a statement held by an earlier run is tried again (the job re-fetches it, imap_fetch.skip_ids): what it waited for
+    // may have arrived since. Still held, it is not reported again.
+    const prev = state.seen[msg.id], retry = !!(prev && prev.status === 'hold' && prev.kind && prev.kind !== 'invoice');
+    if (prev && !retry) { if (prev.kind === 'invoice' && needsTicker()) await healFromInvoice(pdfjs, msg); continue; }
     const kind = /invoice/i.test(msg.subject) ? 'invoice' : /monthly e-statement/i.test(msg.subject) ? 'monthly' : /requested e-statement/i.test(msg.subject) ? 'requested' : null;
-    const entry = { id: msg.id, subject: msg.subject, date: msg.date, kind, status: 'ignored', changes: [], reasons: [], notes: [], unchanged: 0 };
+    const entry = { id: msg.id, subject: msg.subject, date: msg.date, kind, status: 'ignored', changes: [], reasons: [], notes: [], unchanged: 0, ...(retry ? { retry: true } : {}) };
     log.push(entry);
     if (kind) {
       try {
@@ -425,11 +428,26 @@ async function run() {
         if (own.error) { /* held above */ } else if (kind === 'invoice') {
           entry.status = applyInvoiceEmail(docs.flatMap((d) => parseInvoices(d.lines)), entry);
         } else {
-          entry.status = applyStatement(TS.parseStatement(docs), entry, msg);
+          const st = TS.parseStatement(docs);
+          entry.status = applyStatement(st, entry, msg);
+          if (entry.status === 'hold') heldStatements.push({ st, entry, msg });
         }
       } catch (e) { entry.status = 'hold'; entry.reasons.push((e.held ? '' : 'could not process: ') + (e.message || e)); }
     }
     state.seen[msg.id] = { subject: msg.subject, date: msg.date, kind, status: entry.status, at: new Date().toISOString() };
+  }
+  // statements that arrive together come in email order, not period order (two requested statements, the later period
+  // first): a held one is tried again after the others, until a round applies none
+  for (let progress = true; progress;) {
+    progress = false;
+    for (const h of heldStatements.filter((x) => x.entry.status === 'hold')) {
+      const e = { ...h.entry, changes: [], reasons: [], notes: [], unchanged: 0 }; delete e.proposed;
+      const status = applyStatement(h.st, e, h.msg);
+      if (status === 'hold') continue;
+      Object.assign(h.entry, e, { status }); delete h.entry.proposed;
+      state.seen[h.msg.id] = { ...state.seen[h.msg.id], status };
+      progress = true;
+    }
   }
   // missing monthly statement alert: raised once per month (state.alerts[M]), listing every month still missing
   const missing = missingStatements(today, settings, imports, marks);
@@ -457,7 +475,7 @@ async function run() {
   W('sync_state.json', state);
 
   const processed = log.filter((e) => e.kind);
-  const holds = processed.filter((e) => e.status === 'hold');
+  const holds = processed.filter((e) => e.status === 'hold' && !e.retry);
   const applied = processed.filter((e) => e.status === 'applied');
   const lines = [];
   if (heads.length) lines.push('Heads-up:', ...heads.map((it) => '  • ' + it.text), '');
