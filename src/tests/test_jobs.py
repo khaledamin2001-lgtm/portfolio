@@ -113,6 +113,11 @@ check("imap: quoted for IMAP", imap_fetch.imap_quote('a "b" c') == '"a \\"b\\" c
 check("imap: INTERNALDATE -> ms", imap_fetch.internal_ms("31-Dec-2025 08:32:02 +0000") == "1767169922000"   # private-scan: synthetic
       and imap_fetch.internal_ms(" 1-Jan-2026 02:00:00 +0200") == "1767225600000")   # private-scan: synthetic
 check("imap: X-GM-MSGID -> Gmail API id (hex)", format(1853011970335501012, "x") == "19b73891c064ead4")   # private-scan: synthetic
+_seen = {"i1": {"kind": "invoice"}, "m1": {"kind": "monthly"}, "x": {"kind": None}}
+check("imap: seen invoices are read again only while a stock has no ticker",
+      imap_fetch.skip_ids(_seen, {"CIB": {"name": "CIB", "symbol": "COMI"}, "thndrgold": {"name": "thndrgold", "fund": True}}) == {"i1", "m1", "x"}
+      and imap_fetch.skip_ids(_seen, {"Raya": {"name": "Raya", "sector": "Unclassified"}}) == {"m1", "x"}
+      and imap_fetch.skip_ids(None, None) == set())
 check("imap: subjects kept", all(s.startswith(imap_fetch.KEEP) for s in ("Your Thndr Invoice", "Your requested E-statement - Sep 2026", "Your monthly E-statement - Aug 2026"))
       and not "Invoice ready".startswith(imap_fetch.KEEP))
 

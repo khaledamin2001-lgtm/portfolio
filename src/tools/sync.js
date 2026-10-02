@@ -5,7 +5,9 @@
    - "Your Thndr Invoice": each trade is added, or the matching ledger row corrected to the invoice. A ledger row
      matches an invoice block only when it has the SAME date, type and asset and (stocks) the same quantity or a
      close amount, (funds) a close amount; every row is matched at most once per run, so two equal lots on
-     different days, or two equal lots on the same day, stay two rows.
+     different days, or two equal lots on the same day, stay two rows. A stock's ISIN on the invoice gives its ticker
+     (market/latest quotes carry TradingView's isin), so a new stock is priced at once; one stored without a ticker
+     is healed from its ISIN or from an invoice read again (summary.healed).
    - "Your requested E-statement" (any period): the statement wins for the dates it covers: missing rows added,
      mis-booked rows corrected, rows not on it removed (except on its last day, which may still be settling),
      kickbacks trued up, and broker cash set to its closing balance.
@@ -116,6 +118,25 @@ function resolveName(n) {
   if (t) return { name: t.a, known: true };
   return { name: n, known: false };
 }
+// an invoice's ISIN (EGS…) -> the listed ticker, from market/latest (TradingView's isin column), with its sector
+function isinTicker(code) {
+  if (!code || !/^EG[A-Z0-9]{10}$/i.test(code) || !market || !market.quotes) return null;
+  const hit = Object.entries(market.quotes).filter(([, q]) => q && String(q.isin || '').toUpperCase() === code.toUpperCase());
+  if (hit.length !== 1) return null;
+  const [s, q] = hit[0], m = bench.members.find((x) => x.s === s);
+  return { s, sector: (m && m.sector) || q.sector || 'Unclassified' };
+}
+// a stock stored without a ticker (first seen on an invoice before ISINs were looked up): its ticker from the ISIN
+// (asset.isin, or the code on one of its invoices), so it is priced at once instead of after the next monthly statement
+function healTicker(name, code, why) {
+  const a = assets[name];
+  if (!a || a.fund || a.symbol || name.startsWith('thndr')) return null;
+  const tk = isinTicker(code || a.isin);
+  if (!tk || Object.values(assets).some((x) => x !== a && (x.symbol || '').toUpperCase() === tk.s)) return null;
+  const upd = { ...a, symbol: tk.s, isin: (code || a.isin).toUpperCase(), sector: a.sector && a.sector !== 'Unclassified' ? a.sector : tk.sector };
+  assets[name] = upd; changed.newAssets[name] = upd;
+  return `ticker ${tk.s} recorded for "${name}" (${why}), so it is priced from now on`;
+}
 const cashTo = (rows, d) => r2(rows.filter((t) => t.d <= d).reduce((s, t) => s + (t.amt || 0), 0));
 const cashBefore = (rows, d) => r2(rows.filter((t) => t.d < d).reduce((s, t) => s + (t.amt || 0), 0));
 const touch = (d) => changed.ledgerYears.add(d.slice(0, 4));
@@ -155,8 +176,12 @@ function parseInvoices(lines) {
 function applyInvoice(v, entry) {
   if (!v.d || !v.type || !v.qty || v.total == null) { entry.reasons.push(`could not read an invoice block (${v.name || 'unknown security'})`); return; }
   if (settings.trackFrom && v.d <= settings.trackFrom) { entry.unchanged++; entry.notes.push(`${v.d} ${v.type} ${v.name || v.code}: before tracking started (${settings.trackFrom}), already in the starting holdings`); return; }
-  const fund = v.fund, name = fund ? v.code.toLowerCase() : resolveName(v.name).name;
-  const known = fund || resolveName(v.name).known;
+  // a stock: the asset already listed under the invoice ISIN's ticker, else the one with its name
+  const fund = v.fund, tk = fund ? null : isinTicker(v.code), byTk = tk && Object.values(assets).find((x) => (x.symbol || '').toUpperCase() === tk.s);
+  const name = fund ? v.code.toLowerCase() : byTk ? byTk.name : resolveName(v.name).name;
+  const known = fund || !!byTk || resolveName(v.name).known;
+  const fixed = !fund && known && !byTk && healTicker(name, v.code, `from its invoice ${v.d}`);
+  if (fixed) entry.notes.push(fixed);
   const row = { d: v.d, t: v.type, a: name, q: v.qty, p: +(v.gross / v.qty).toFixed(fund ? 6 : 4), amt: r2(v.type === 'Buy' ? -v.total : v.total), acc: fund ? 'MF' : 'Main' };
   const tol = Math.max(1, Math.abs(row.amt) * 0.015);
   const amtDiff = (t) => Math.abs((t.amt || 0) - row.amt);
@@ -178,8 +203,9 @@ function applyInvoice(v, entry) {
   const add = { id: newId(), ...row, src: `invoice-${v.d}` };
   tx.push(add); consumed.add(add.id); touch(add.d); entry.changes.push(`added ${desc(add)}`);
   if (!known && !changed.newAssets[name]) {
-    changed.newAssets[name] = { name, sector: 'Unclassified' }; assets[name] = changed.newAssets[name];
-    entry.notes.push(`new stock "${name}" has no ticker yet; it is filled in from the next monthly statement snapshot`);
+    const isin = /^EG[A-Z0-9]{10}$/i.test(v.code || '') ? v.code.toUpperCase() : undefined;
+    changed.newAssets[name] = tk ? { name, symbol: tk.s, isin, sector: tk.sector } : { name, isin, sector: 'Unclassified' }; assets[name] = changed.newAssets[name];
+    entry.notes.push(tk ? `new stock "${name}" (${tk.s})` : `new stock "${name}" has no ticker yet; it is filled in from the next monthly statement snapshot`);
   }
 }
 // One invoice EMAIL, all-or-nothing: its blocks are applied to a working copy of the ledger, assets and pending
@@ -345,14 +371,31 @@ function applyStatement(st, entry, msg) {
 }
 
 // ---------- run ----------
+const healed = [];
+const needsTicker = () => Object.values(assets).some((a) => a && !a.fund && !a.symbol && !a.watch && !/^thndr/i.test(a.name || ''));
+async function healFromInvoice(pdfjs, msg) {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(args.inbox, `${msg.id}.json`))).raw;
+    if (!TS.authCheck(raw).ok) return;
+    const docs = [];
+    for (const a of TS.attachments(raw)) docs.push({ filename: a.filename, lines: await TS.pdfLines(pdfjs, a.bytes) });
+    if (TS.ownerCheck(docs, settings).error) return;
+    docs.flatMap((d) => parseInvoices(d.lines)).filter((v) => !v.fund && v.name).forEach((v) => {
+      const r = healTicker(resolveName(v.name).name, v.code, `from its invoice ${v.d}`); if (r) healed.push(r);
+    });
+  } catch (e) { /* a seen invoice that cannot be read again changes nothing */ }
+}
 async function run() {
   const pdfjs = require(require.resolve('pdfjs-dist/legacy/build/pdf.js', { paths: [__dirname, path.join(__dirname, 'node_modules'), path.join(__dirname, 'pdfjs', 'node_modules')] }));
   loadState();
   const out = args.out; fs.rmSync(path.join(out, 'write'), { recursive: true, force: true }); fs.mkdirSync(path.join(out, 'write'), { recursive: true });
   const manifest = fs.existsSync(path.join(args.inbox, 'manifest.json')) ? JSON.parse(fs.readFileSync(path.join(args.inbox, 'manifest.json'))) : [];
   manifest.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  // stocks stored without a ticker: from the ISIN kept on the asset, else from the code on an invoice already read
+  // (the job re-fetches seen invoices while such a stock is left, see imap_fetch.skip_ids)
+  Object.keys(assets).forEach((n) => { const r = healTicker(n, null, 'from its ISIN'); if (r) healed.push(r); });
   for (const msg of manifest) {
-    if (state.seen[msg.id]) continue;
+    if (state.seen[msg.id]) { if (state.seen[msg.id].kind === 'invoice' && needsTicker()) await healFromInvoice(pdfjs, msg); continue; }
     const kind = /invoice/i.test(msg.subject) ? 'invoice' : /monthly e-statement/i.test(msg.subject) ? 'monthly' : /requested e-statement/i.test(msg.subject) ? 'requested' : null;
     const entry = { id: msg.id, subject: msg.subject, date: msg.date, kind, status: 'ignored', changes: [], reasons: [], notes: [], unchanged: 0 };
     log.push(entry);
@@ -440,6 +483,7 @@ async function run() {
         missing: alert ? alert.map(lbl) : [], checked: today,
       },
     } : null,
+    healed,
     digest: { items: dg.items, emailed: heads.map((it) => it.key), drawdown: dg.drawdown, errors: dg.errors },
     log: log.map(({ removedRows, ...e }) => e),
   };

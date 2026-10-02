@@ -47,14 +47,19 @@ const pct = (a, b) => (b ? Math.round((a / b - 1) * 1000) / 10 : null);
           o.markSource = mk.source || (mk.provisional ? 'provisional' : 'typed');
         } else if (st.fullMonth) o.cashVsPortfolio = 'the portfolio has no month-end for this month';
         if (st.snapshot && st.to) {
-          const sh = sharesAt(st.to), bad = [];
-          st.snapshot.holdings.forEach((h) => { const k = String(h.ticker || '').toUpperCase(); if (Math.abs((sh[k] || 0) - (h.qty || 0)) > 0.5) bad.push(k); });
-          Object.keys(sh).forEach((k) => { if (sh[k] > 0.5 && !st.snapshot.holdings.some((h) => String(h.ticker || '').toUpperCase() === k) && !/SAVINGS|THNDR/.test(k)) bad.push(k + ' (not on the statement)'); });
+          // the portfolio's count under the holding's ticker, else under its name (a Thndr fund is kept under its name)
+          const sh0 = sharesAt(st.to), sh = {}, used = new Set(), bad = [];
+          Object.entries(sh0).forEach(([k, q]) => { const u = k.toUpperCase(); sh[u] = (sh[u] || 0) + q; });
+          st.snapshot.holdings.forEach((h) => {
+            const k = String(h.ticker || '').toUpperCase(), n = String(h.name || '').toUpperCase(), key = k in sh ? k : n && n in sh ? n : k;
+            used.add(key); if (Math.abs((sh[key] || 0) - (h.qty || 0)) > 0.5) bad.push(k);
+          });
+          Object.keys(sh).forEach((k) => { if (sh[k] > 0.5 && !used.has(k) && !/SAVINGS|THNDR/.test(k)) bad.push(k + ' (not on the statement)'); });
           o.sharesVsPortfolio = bad.length ? 'differ: ' + bad.join(', ') : 'match';
           if (bad.length) {   // what each side calls the differing holdings (names, tickers, kinds; whether the quantities are the same)
             const ledgerQ = Object.values(sh);
             o.detail = { statement: st.snapshot.holdings.map((h) => ({ ticker: h.ticker, name: h.name || h.isin || '', kind: h.kind, sameQtyInPortfolioUnderAnotherName: ledgerQ.some((q) => Math.abs(q - (h.qty || 0)) < 0.5) })),
-              portfolio: Object.values(assets).filter((x) => x && bad.some((b) => b.startsWith(x.name) || b.startsWith(String(x.symbol || '').toUpperCase()))).map((x) => ({ name: x.name, symbol: x.symbol || '', fund: !!x.fund, sector: x.sector || '',
+              portfolio: Object.values(assets).filter((x) => x && bad.some((b) => b.startsWith(x.name.toUpperCase()) || (x.symbol && b.startsWith(String(x.symbol).toUpperCase())))).map((x) => ({ name: x.name, symbol: x.symbol || '', fund: !!x.fund, sector: x.sector || '',
                 rows: tx.filter((t) => t.a === x.name && t.d <= st.to).map((t) => `${t.d} ${t.t} ${t.acc || ''} ${t.src || ''}`.trim()) })) };
           }
         }
@@ -63,5 +68,5 @@ const pct = (a, b) => (b ? Math.round((a / b - 1) * 1000) / 10 : null);
     console.log(JSON.stringify(o));
   }
   const hi = settings.historyImport || {};
-  console.log(JSON.stringify({ summary: sum, portfolio: { inception: settings.inception, trackFrom: settings.trackFrom, historyImport: { status: hi.status, from: hi.from, to: hi.to, months: hi.months, gaps: hi.gaps, adjustments: hi.adjustments }, accountNumberKnown: !!(settings.account || {}).unifiedCode, holderNameKnown: !!(settings.account || {}).holder, monthsWithMarks: Object.keys(marks).sort(), ledgerRows: tx.length, bySource: tx.reduce((m, t) => { const k = t.src || 'typed'; m[k] = (m[k] || 0) + 1; return m; }, {}), lastSync: state.lastRun || null } }));
+  console.log(JSON.stringify({ summary: sum, portfolio: { inception: settings.inception, trackFrom: settings.trackFrom, historyImport: { status: hi.status, from: hi.from, to: hi.to, months: hi.months, gaps: hi.gaps, adjustments: hi.adjustments }, stocksWithoutTicker: Object.values(assets).filter((a) => a && !a.fund && !a.symbol && !a.watch && !/^thndr/i.test(a.name || '')).length, accountNumberKnown: !!(settings.account || {}).unifiedCode, holderNameKnown: !!(settings.account || {}).holder, monthsWithMarks: Object.keys(marks).sort(), ledgerRows: tx.length, bySource: tx.reduce((m, t) => { const k = t.src || 'typed'; m[k] = (m[k] || 0) + 1; return m; }, {}), lastSync: state.lastRun || null } }));
 })().catch((e) => { console.log(JSON.stringify({ ok: false, error: String(e && e.message || e) })); process.exit(1); });

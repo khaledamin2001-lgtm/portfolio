@@ -35,5 +35,28 @@ for (const [label, order] of [['cash first', [cash, mf]], ['fund statement first
   const st = TS.parseStatement(order);
   check(`a quiet month, ${label}: the cash account is the brokerage statement`, st.cash && st.cash.end === 12345.67 && st.mf && st.mf.end === 0, JSON.stringify([st.cash && st.cash.end, st.mf && st.mf.end]));   // private-scan: synthetic
 }
+
+// 3. invoices: the ISIN gives the ticker (market/latest quotes carry TradingView's isin), no wait for the next statement
+{
+  const market = { quotes: { COMI: { price: 100, isin: 'EGS60121C018', sector: 'Financial Services' }, ISPH: { price: 3, isin: 'EGS512O1C012' } } };
+  const bench = { members: [{ s: 'COMI', sector: 'Banks' }] };
+  const inv = (name, code) => ({ d: '2026-09-30', type: 'Buy', name, code, qty: 10, gross: 1000, total: 1002, fund: false });
+  const E = () => ({ changes: [], reasons: [], notes: [], unchanged: 0 });
+  S._reset([], {}, {}, { market, bench });
+  let e = E(); S.applyInvoice(inv('Commercial International Bank (Egypt)', 'EGS60121C018'), e);
+  let a = S._state().assets['Commercial International Bank (Egypt)'];
+  check('a new stock from an invoice gets its ticker and sector from the ISIN', a && a.symbol === 'COMI' && a.isin === 'EGS60121C018' && a.sector === 'Banks' && /\(COMI\)/.test(e.notes.join()), JSON.stringify([a, e.notes]));
+  S._reset([], { CIB: { name: 'CIB', symbol: 'COMI', sector: 'Banks' } }, {}, { market, bench });
+  e = E(); S.applyInvoice(inv('Commercial International Bank (Egypt)', 'EGS60121C018'), e);
+  check('an invoice for a stock already held under its ticker books to that asset (no duplicate)', S._state().tx[0].a === 'CIB' && Object.keys(S._state().assets).length === 1, JSON.stringify(S._state()));
+  S._reset([], {}, {}, { market, bench });
+  e = E(); S.applyInvoice(inv('Unknown Co', 'EGS00000X000'), e);
+  a = S._state().assets['Unknown Co'];
+  check('an ISIN not in the market data: the stock waits for the statement, its ISIN kept', a && !a.symbol && a.isin === 'EGS00000X000' && /no ticker yet/.test(e.notes.join()), JSON.stringify(a));
+  S._reset([{ id: 'x', d: '2026-09-29', t: 'Buy', a: 'Ibn sina pharma', q: 5, amt: -20, acc: 'Main' }], { 'Ibn sina pharma': { name: 'Ibn sina pharma', sector: 'Unclassified' } }, {}, { market, bench });
+  e = E(); S.applyInvoice(inv('Ibn sina pharma', 'EGS512O1C012'), e);
+  a = S._state().assets['Ibn sina pharma'];
+  check('a stock stored without a ticker is healed by its next invoice', a.symbol === 'ISPH' && S._state().changed.newAssets['Ibn sina pharma'].symbol === 'ISPH' && /ticker ISPH recorded/.test(e.notes.join()), JSON.stringify([a, e.notes]));
+}
 console.log(fail ? `${fail} FAILED` : 'ALL PASS');
 process.exit(fail ? 1 : 0);

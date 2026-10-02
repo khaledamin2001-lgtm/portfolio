@@ -313,7 +313,8 @@ def gmail_import(http, tok, pkg, keys, docs, shared, code, work, now, dry, read_
         else:
             after = gmail_after(code, st, settings, now)
         inbox = os.path.join(work, "inbox")
-        c = imap_fetch.fetch(after, set(st.get("seen") or {}), inbox, login["address"], login["appPassword"])
+        items = ((docs.get("portfolio/assets") or {}).get("data") or {}).get("items") or {}
+        c = imap_fetch.fetch(after, imap_fetch.skip_ids(st.get("seen"), items), inbox, login["address"], login["appPassword"])
     except imap_fetch.FetchError as e:
         raise jc.JobError("Gmail", str(e)) from None
     for attempt in range(2):

@@ -361,7 +361,8 @@ def main(argv=None):
         step = "Gmail fetch"
         import imap_fetch
         try:
-            c = imap_fetch.fetch(plan["gmailAfter"], set(st.get("seen") or {}), inbox)
+            items = (jc.load_data(os.path.join(data, "portfolio", "assets.json"), {}) or {}).get("items") or {}
+            c = imap_fetch.fetch(plan["gmailAfter"], imap_fetch.skip_ids(st.get("seen"), items), inbox)
         except imap_fetch.FetchError as e:
             raise jc.JobError("Gmail fetch", str(e)) from None
         jc.log(f"gmail: after {plan['gmailAfter']}: {c['found']} found, {c['kept']} new, {c['seen']} already seen, {c['otherSubject']} other subjects")
