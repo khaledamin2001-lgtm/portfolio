@@ -51,6 +51,12 @@ const pct = (a, b) => (b ? Math.round((a / b - 1) * 1000) / 10 : null);
           st.snapshot.holdings.forEach((h) => { const k = String(h.ticker || '').toUpperCase(); if (Math.abs((sh[k] || 0) - (h.qty || 0)) > 0.5) bad.push(k); });
           Object.keys(sh).forEach((k) => { if (sh[k] > 0.5 && !st.snapshot.holdings.some((h) => String(h.ticker || '').toUpperCase() === k) && !/SAVINGS|THNDR/.test(k)) bad.push(k + ' (not on the statement)'); });
           o.sharesVsPortfolio = bad.length ? 'differ: ' + bad.join(', ') : 'match';
+          if (bad.length) {   // what each side calls the differing holdings (names, tickers, kinds; whether the quantities are the same)
+            const ledgerQ = Object.values(sh);
+            o.detail = { statement: st.snapshot.holdings.map((h) => ({ ticker: h.ticker, name: h.name || h.isin || '', kind: h.kind, sameQtyInPortfolioUnderAnotherName: ledgerQ.some((q) => Math.abs(q - (h.qty || 0)) < 0.5) })),
+              portfolio: Object.values(assets).filter((x) => x && bad.some((b) => b.startsWith(x.name) || b.startsWith(String(x.symbol || '').toUpperCase()))).map((x) => ({ name: x.name, symbol: x.symbol || '', fund: !!x.fund, sector: x.sector || '',
+                rows: tx.filter((t) => t.a === x.name && t.d <= st.to).map((t) => `${t.d} ${t.t} ${t.acc || ''} ${t.src || ''}`.trim()) })) };
+          }
         }
       }
     } catch (e) { o.error = String(e.message || e).slice(0, 120); }
