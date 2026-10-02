@@ -2584,7 +2584,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   })();
 })();
 </script>
-<meta name="pd-build" content="2ef1d674ae0a 2026-10-02 09:59">
+<meta name="pd-build" content="5e2d4aba97a6 2026-10-02 11:57">
 <style>
 :root{
   /* Apple-style system: SF (the system font on iPhone and Mac) for everything, quiet greys, one blue accent, green / red
@@ -4913,13 +4913,20 @@ button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.pl
     const heads = (docs || []).map((d) => ((d && d.lines) || d || []).slice(0, 10).join(' ').replace(/\s+/g, ' '));
     const codes = [...new Set(heads.map((h) => (h.match(/Unified Code\s*(\d{4,})/i) || [])[1]).filter(Boolean))];
     const head = heads.join(' | ');
-    return { codes, code: codes[0] || null, head, holderSeen: holderSeenIn(head, holder) };
+    return { codes, code: codes[0] || null, head, holderSeen: holderSeenIn(head, holder), name: printedName(head) };
+  }
+  // the account holder's name as Thndr printed it: "Client Name <name> Unified Code" / "Currency EGP <name> Start Balance"
+  // (statements), "Invoice <name> Custodian:" (invoices)
+  function printedName(head) {
+    const n = [/Client Name\s+(.+?)\s+Unified Code/i, /Currency\s+[A-Z]{3}\s+(.+?)\s+Start Balance/i, /Invoice\s+(.+?)\s+Custodian/i]
+      .map((re) => (head.match(re) || [])[1]).find(Boolean);
+    return n && n.trim().length >= 3 && n.trim().length <= 60 ? n.trim() : null;
   }
   function ownerCheck(docs, settings) {
     const acc = (settings && settings.account) || {};
     const code = String(acc.unifiedCode || '').trim(), holder = String(acc.holder || '').trim();
     const a = accountOf(docs, holder);
-    const r = { code: a.code, holderSeen: a.holderSeen, error: null };
+    const r = { code: a.code, holderSeen: a.holderSeen, name: a.name, error: null };
     // A portfolio with neither an account number nor a holder name yet (a new site account: nobody types their Thndr name)
     // takes the account of its first statement or invoice: the caller records that number (firstUse), and from then on
     // only documents of that account are used.
@@ -4934,7 +4941,11 @@ button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.pl
         r.error = `is not in the name of ${holder}` + (other && other.length <= 60 ? ` (it is in the name of ${other.trim()})` : ` (its header reads "${a.head.slice(0, 100)}")`);
       }
     }
-    else r.error = 'has no Unified Code in its header, so the account could not be confirmed';
+    // the account number is known but this document does not print one (Thndr's invoices print only the holder's name)
+    // and no name was learned yet: its printed name becomes the portfolio's holder name (learnName), checked from then on.
+    // It is a verified Thndr email in the account's own Gmail, and statements keep being checked by the number.
+    else if (a.name) r.learnName = true;
+    else r.error = 'has no Unified Code and no holder name in its header, so the account could not be confirmed';
     return r;
   }
 

@@ -371,8 +371,13 @@ async function run() {
         if (own.error) {
           entry.status = 'hold'; entry.reasons.push(`refused: this ${kind === 'invoice' ? 'invoice' : 'statement'} ${own.error}; nothing from it was used`);
         } else if (own.code && !(settings.account || {}).unifiedCode) {
-          settings = { ...settings, account: { ...(settings.account || {}), unifiedCode: own.code } }; changed.settings = true;
+          settings = { ...settings, account: { ...(settings.account || {}), unifiedCode: own.code, ...(own.name && !(settings.account || {}).holder ? { holder: own.name } : {}) } }; changed.settings = true;
           entry.notes.push(`Thndr account ${own.code} recorded for this portfolio from its first statement`);
+        } else if (own.name && !((settings.account || {}).holder || '').trim() && (own.learnName || (own.code && own.code === (settings.account || {}).unifiedCode))) {
+          // the holder's name, so invoices (which print no account number) can be checked: from a statement of this account,
+          // or from the first invoice when none told it yet
+          settings = { ...settings, account: { ...(settings.account || {}), holder: own.name } }; changed.settings = true;
+          entry.notes.push(`Thndr account holder "${own.name}" recorded for this portfolio`);
         }
         if (own.error) { /* held above */ } else if (kind === 'invoice') {
           entry.status = applyInvoiceEmail(docs.flatMap((d) => parseInvoices(d.lines)), entry);
