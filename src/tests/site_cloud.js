@@ -324,7 +324,7 @@ k = store.unlock(${JSON.stringify(path.join(SITE, 'p/khaled/keys.json'))}, open(
 i = json.loads(sys.stdin.read()); p = r.open_mail_pkg(k, i["pkg"]); priv, _ = r.account_key(p["pk8"])
 g = json.loads(store.unseal(priv, i["gmail"]).decode())["data"]
 print(json.dumps({"uid": p["uid"], "email": p["email"], "prefs": p["prefs"], "refresh": bool(p["refresh"]), "pk8": bool(p["pk8"]), "gmail": [g["address"], g["appPassword"]]}))`], { input: JSON.stringify({ pkg: pkgEnv, gmail: gmailEnv }), stdio: ['pipe', 'pipe', 'inherit'] })) : null;
-    check('email updates: the package opens only with the mail key and names this account, its address and choices', !!opened && opened.uid === uid && opened.email === EMAIL && opened.prefs.alerts && opened.prefs.weekly && opened.prefs.reports && opened.prefs.gmail && opened.refresh && opened.pk8 && !pkgEnv.includes(EMAIL), JSON.stringify(opened));
+    check('email updates: the package opens only with the mail key and names this account, its address and choices (the friends leaderboard on by default)', !!opened && opened.uid === uid && opened.email === EMAIL && opened.prefs.alerts && opened.prefs.weekly && opened.prefs.reports && opened.prefs.leaderboard === true && opened.prefs.gmail && opened.refresh && opened.pk8 && !pkgEnv.includes(EMAIL), JSON.stringify(opened));
     check('the job can open the Gmail login with the account key from the package (spaces removed)', !!opened && JSON.stringify(opened.gmail) === JSON.stringify(['friend.test@example.com', 'abcdefghijklmnop']));
     await $t('account-menu').click(); await $t('account-gmail').click();
     await $t('gmail-status').waitFor();
@@ -459,23 +459,34 @@ print(json.dumps({"uid": p["uid"], "email": p["email"], "prefs": p["prefs"], "re
     await E.$t('friends-back').click(); await E.$t('account-back').click();
     await F.$t('friends-back').click(); await F.$t('account-friends').click(); await F.$t('friend-view').waitFor();
     check("opening Friends shares the viewer's own copy back", await until(() => FB.docs[`shares/${uidB}/to/${uid}`]));
-    await F.$t('friend-view').click(); await F.lockHidden(30000).catch(() => {});
-    await F.page.waitForTimeout(800);
-    check("viewing a friend shows their portfolio, read-only, under a banner", /Omar/.test(await F.page.locator('#pf-name-text').textContent()) && /Viewing/.test(await F.$t('view-banner').textContent()) && /read-only/.test(await F.$t('edit-state').textContent()));
-    await F.shot('friend-view');
-    await F.$t('view-back').click(); await F.page.waitForTimeout(800);
-    check('"Back to mine" returns to your own portfolio', /Sara/.test(await F.page.locator('#pf-name-text').textContent()) && !(await F.page.locator('#pd-view').isVisible()));
-    // a copy made by the email job (Python) opens in the browser too: the owner's main portfolio shape (full, own market data)
+    // a friend's profile: percentages only (returns, holdings by weight, trades), never an amount
+    const noAmounts = (t) => !/EGP|\b\d{1,3}(,\d{3})+\b|\b\d{4,}\b(?!-)/.test(t.replace(/\b20\d\d\b/g, ''));
+    await F.$t('friend-view').click(); await F.$t('profile-sheet').waitFor({ timeout: 30000 });
+    await F.page.waitForTimeout(400);
+    const sheet1 = await F.$t('profile-sheet').textContent();
+    check("tapping View opens their profile page: their return next to yours and the index's, holdings by weight, latest trades",
+      /Omar/.test(await F.$t('profile-name').textContent()) && /%/.test(await F.$t('profile-picked').textContent()) && await F.$t('profile-holdings').isVisible() && await F.$t('profile-trades').isVisible() && /Them.*You.*Index/.test(sheet1), sheet1.slice(0, 200));
+    check('the profile shows percentages only: no EGP amount anywhere on it', noAmounts(sheet1), sheet1.slice(0, 300));
+    await F.page.waitForTimeout(600); await F.shot('friend-profile');
+    await F.$t('profile-close').click(); await F.page.waitForTimeout(300);
+    check('closing the profile leaves you on your own portfolio', !(await F.$t('profile-sheet').count()) && /Sara/.test(await F.page.locator('#pf-name-text').textContent()));
+    // a copy from before profiles (the documents themselves, v1) still opens: the profile is made on this side
     const snapDocs = Object.assign({}, MARKET, { 'portfolio/settings': Object.assign({}, rd('portfolio/settings.json'), { name: 'Main Portfolio' }), 'portfolio/assets': rd('portfolio/assets.json'), 'portfolio/marks': rd('portfolio/marks.json') });
     for (const f of fs.readdirSync(path.join(SYN, 'ledger'))) snapDocs['ledger/' + f.replace('.json', '')] = rd('ledger/' + f);
-    fs.writeFileSync(path.join(TMP, 'snap.json'), JSON.stringify({ v: 1, at: '2026-09-30T15:30:00Z', name: 'Main Portfolio', full: true, docs: snapDocs }));
-    const pyEnv = sh('python3', ['-c', `import sys, json; sys.path.insert(0, ${JSON.stringify(path.join(ROOT, 'src/jobs'))}); import run_account_mail as r
-print(r.seal_json(json.load(open(${JSON.stringify(path.join(TMP, 'snap.json'))})), ${JSON.stringify(sv(FB.docs['directory/' + EMAIL_B].fields, 'pub'))}, r.SHARE_LABEL))`]).trim();
-    FB.docs[`shares/${uid}/to/${uidB}`].fields.pkg = { stringValue: pyEnv };
-    await F.$t('account-menu').click(); await F.$t('account-friends').click(); await F.$t('friend-view').click(); await F.lockHidden(30000).catch(() => {});
-    await F.page.waitForTimeout(800);
-    check("a copy made by the email job's code opens on the page (the main-portfolio shape)", /Main Portfolio/.test(await F.page.locator('#pf-name-text').textContent()));
-    await F.$t('view-back').click(); await F.page.waitForTimeout(500);
+    const seal = (obj) => { fs.writeFileSync(path.join(TMP, 'snap.json'), JSON.stringify(obj)); return sh('python3', ['-c', `import sys, json; sys.path.insert(0, ${JSON.stringify(path.join(ROOT, 'src/jobs'))}); import run_account_mail as r
+print(r.seal_json(json.load(open(${JSON.stringify(path.join(TMP, 'snap.json'))})), ${JSON.stringify(sv(FB.docs['directory/' + EMAIL_B].fields, 'pub'))}, r.SHARE_LABEL))`]).trim(); };
+    const synProf = JSON.parse(sh('node', [path.join(ROOT, 'src/tools/profile.js'), '--data', SYN, '--name', 'Main Portfolio'])).profile;
+    const topSym = synProf.holdings[0].s;
+    FB.docs[`shares/${uid}/to/${uidB}`].fields.pkg = { stringValue: seal({ v: 1, at: '2026-09-30T15:30:00Z', name: 'Main Portfolio', full: true, docs: snapDocs }) };
+    await F.$t('account-menu').click(); await F.$t('account-friends').click(); await F.$t('friend-view').click(); await F.$t('profile-sheet').waitFor({ timeout: 30000 });
+    const sheet2 = await F.$t('profile-holdings').textContent();
+    check("an older copy (the documents themselves) still opens as a profile, made on this side", new RegExp(topSym).test(sheet2) && noAmounts(await F.$t('profile-sheet').textContent()), sheet2.slice(0, 120));
+    await F.$t('profile-close').click();
+    // the profile the email job makes (tools/profile.js, sealed by Python) opens the same way
+    FB.docs[`shares/${uid}/to/${uidB}`].fields.pkg = { stringValue: seal({ v: 2, at: '2026-09-30T15:30:00Z', name: 'Main Portfolio', profile: synProf }) };
+    await F.$t('account-menu').click(); await F.$t('account-friends').click(); await F.$t('friend-view').click(); await F.$t('profile-sheet').waitFor({ timeout: 30000 });
+    check("a profile made by the email job's code opens on the page", new RegExp(topSym).test(await F.$t('profile-holdings').textContent()));
+    await F.$t('profile-close').click(); await F.page.waitForTimeout(300);
     await E.$t('account-menu').click(); await E.$t('account-friends').click(); await E.$t('friend-remove').waitFor();
     E.page.once('dialog', (d) => d.accept());
     await E.$t('friend-remove').click();
@@ -596,20 +607,22 @@ print(r.seal_json(json.load(open(${JSON.stringify(path.join(TMP, 'snap.json'))})
     await E.$t('account-menu').click(); await E.$t('account-friends').click(); await E.$t('friend-accept').waitFor({ timeout: 15000 }); await E.$t('friend-accept').click();
     await E.$t('friend-friends').waitFor({ timeout: 20000 }).catch(() => {});
     await G.$t('friends-back').click(); await G.$t('account-friends').click(); await G.$t('friend-view').waitFor({ timeout: 15000 });
-    await G.$t('friend-view').click(); await G.lockHidden(30000).catch(() => {}); await G.page.waitForTimeout(800);
-    check("from the main portfolio, a friend's portfolio opens under the banner", /Omar/.test(await G.page.locator('#pf-name-text').textContent()) && await G.$t('view-banner').isVisible());
-    await G.$t('view-back').click(); await G.page.waitForTimeout(800);
-    check('"Back to mine" returns to the main portfolio', /Demo Portfolio/.test(await G.page.locator('#pf-name-text').textContent()));
+    await G.$t('friend-view').click(); await G.$t('profile-sheet').waitFor({ timeout: 30000 });
+    check("from the main portfolio, a friend's profile opens", /Omar/.test(await G.$t('profile-name').textContent()));
+    await G.$t('profile-close').click(); await G.page.waitForTimeout(300);
     // the top-left menu is the friends hub: you and your friends ranked by the return over the page's period, tap to view
     await G.page.click('#pf-name'); await G.$t('hub-me').waitFor({ timeout: 10000 });
     await G.page.waitForFunction(() => { const f = document.querySelector('[data-testid=hub-friend]'); return f && /Month/.test(f.textContent); }, null, { timeout: 30000 }).catch(() => {});
     const hubText = await G.page.locator('#pf-menu').textContent();
     check('the hub lists you and your friend, ranked over the picked period (All time), with this month and this year', /Demo Portfolio/.test(hubText) && /Omar/.test(hubText) && /Friends · All time/.test(hubText) && /%/.test(await G.$t('hub-friend').textContent()) && /Month .*This year/.test(await G.$t('hub-me').textContent()), hubText.slice(0, 200));
     await G.shot('hub');
-    await G.$t('hub-friend').click(); await G.page.waitForTimeout(800);
-    check("tapping a friend in the hub opens their portfolio", /Omar/.test(await G.page.locator('#pf-name-text').textContent()) && await G.$t('view-banner').isVisible());
-    await G.page.click('#pf-name'); await G.$t('hub-me').click(); await G.page.waitForTimeout(800);
-    check('tapping yourself in the hub returns to your portfolio', /Demo Portfolio/.test(await G.page.locator('#pf-name-text').textContent()) && !(await G.page.locator('#pd-view').isVisible()));
+    await G.$t('hub-friend').click(); await G.$t('profile-sheet').waitFor({ timeout: 15000 }).catch(() => {});
+    check("tapping a friend in the hub opens their profile", /Omar/.test(await G.$t('profile-name').textContent()));
+    await G.$t('profile-close').click();
+    await G.page.click('#pf-name'); await G.$t('hub-me').click(); await G.$t('profile-sheet').waitFor({ timeout: 15000 }).catch(() => {});
+    check('tapping yourself in the hub shows your own profile, as friends see it', /what your friends see/.test(await G.$t('profile-sheet').textContent()) && noAmounts(await G.$t('profile-sheet').textContent()));
+    await G.page.waitForTimeout(600); await G.shot('my-profile');
+    await G.$t('profile-close').click();
     // the same ranking on the Overview tab
     await G.page.click('#tab-overview'); await G.$t('friends-panel').waitFor({ timeout: 10000 });
     await G.page.waitForFunction(() => { const f = document.querySelector('[data-testid=panel-friend]'); return f && /Month/.test(f.textContent); }, null, { timeout: 30000 }).catch(() => {});
@@ -631,10 +644,16 @@ print(r.seal_json(json.load(open(${JSON.stringify(path.join(TMP, 'snap.json'))})
     check('This quarter shows the whole quarter at the top (e.g. Oct 2026 – Dec 2026), Calendar year the whole year',
       /^[A-Z][a-z]{2} \d{4} – (Mar|Jun|Sep|Dec) \d{4}$/.test(qLabel) && MONS[['Mar', 'Jun', 'Sep', 'Dec'].indexOf(qb.slice(0, 3))] === qa.slice(0, 3) && /^[A-Z][a-z]{2} \d{4} – Dec \d{4}$/.test(yLabel), `${qLabel} | ${yLabel}`);
     await G.page.click('#period [data-pt="Since Inception"]'); await G.page.waitForTimeout(500);
-    await G.$t('panel-friend').click(); await G.page.waitForTimeout(1000);
-    check('tapping a friend card on the Overview opens their portfolio', /Omar/.test(await G.page.locator('#pf-name-text').textContent()) && await G.$t('view-banner').isVisible());
-    await G.$t('panel-me').click(); await G.page.waitForTimeout(1000);
-    check('tapping your own card goes back to yours', /Demo Portfolio/.test(await G.page.locator('#pf-name-text').textContent()));
+    await G.page.waitForFunction(() => document.querySelector('[data-testid=friends-feed]'), null, { timeout: 15000 }).catch(() => {});
+    const feed = (await G.$t('friends-feed').count()) ? await G.$t('friends-feed').textContent() : '';
+    check("the Overview lists the friends' latest trades (who, what, when; a sale's result in %)", /Friends' activity/.test(feed) && /@omar_k (bought|sold)/.test(feed) && noAmounts(feed), feed.slice(0, 200));
+    await G.$t('feed-item').first().click(); await G.$t('profile-sheet').waitFor({ timeout: 15000 }).catch(() => {});
+    check("tapping a trade in the feed opens that friend's profile", /Omar/.test(await G.$t('profile-name').textContent()));
+    await G.$t('profile-close').click();
+    await G.$t('panel-friend').click(); await G.$t('profile-sheet').waitFor({ timeout: 15000 }).catch(() => {});
+    check('tapping a friend card on the Overview opens their profile', /Omar/.test(await G.$t('profile-name').textContent()));
+    await G.$t('profile-close').click(); await G.page.waitForTimeout(300);
+    check('your own page stays open underneath', /Demo Portfolio/.test(await G.page.locator('#pf-name-text').textContent()));
     // another portfolio on this device can be removed from the list by the user
     await G.page.evaluate(() => localStorage.setItem('pd.dev.yassin', JSON.stringify({ v: 3, ct: 'x' })));
     await G.page.click('#pf-name'); await G.$t('forget-yassin').waitFor({ timeout: 10000 });

@@ -530,6 +530,81 @@
     return out;
   }
 
-  const api = { headsUp, drawdownCheck, heldStocks, priceBook, makePricer, daily, dailyStats, dailyTwr, capWeights, benchWeights, holdingsAt, estimateMarks, attribution, activeWeights, tradeChecks, tradingHabits, income, trailing, calendar, TRADING_DAYS, TRADING_NOTE };
+  // ---------- one portfolio from its documents, and the percentages profile friends see ----------
+  // docs: {"coll/doc": data}, a portfolio's documents plus market/latest, history/<YYYY-MM> and bench/egx30. Runs the
+  // engine the way the page does: closed months without a statement estimated from closing prices, the daily series,
+  // a held stock without a quote priced from the price book. o: {today, market (a fresher market/latest: the site's live
+  // prices)}. Returns {R, data, today} or null when there is no portfolio yet. Used by the site (lock.js) and
+  // tools/profile.js (the job), so a friend sees the same figures from either.
+  function portfolioRun(docs, sel, o) {
+    o = o || {};
+    const st0 = docs && docs['portfolio/settings'];
+    if (!st0 || !st0.inception) return null;
+    const tx = Object.keys(docs).filter((k) => k.startsWith('ledger/')).sort().flatMap((k) => (docs[k] && docs[k].rows) || []);
+    const assets = (docs['portfolio/assets'] || {}).items || {}, marks0 = (docs['portfolio/marks'] || {}).months || {};
+    const history = {}; Object.keys(docs).forEach((k) => { if (k.startsWith('history/')) history[k.slice(8)] = docs[k]; });
+    const today = o.today || PE.cairoToday(), led = PE.runLedger(tx), pb = priceBook(history), pricer = makePricer(assets, led, pb);
+    const fallback = (name) => { const p = pricer(name, today); return p ? { p: p.p, d: pb.last } : null; };
+    let D = null; try { D = daily(st0, led, assets, pb, marks0, today); } catch (e) { D = null; }
+    let marks = marks0; try { if (Object.keys(history).length) marks = estimateMarks(st0, marks0, led, assets, pb, today); } catch (e) { marks = marks0; }
+    const data = { settings: st0, marks, assets, tx, market: o.market || docs['market/latest'] || null, bench: docs['bench/egx30'] || null };
+    return { R: PE.run(data, sel || { type: 'Since Inception' }, { fallback, daily: D || undefined, today }), data, today };
+  }
+
+  // What friends see of a portfolio: PERCENTAGES ONLY, never an amount (no EGP, no share counts, no prices), so the copy
+  // sealed to a friend cannot reveal how much money is in it. From an all-time portfolioRun:
+  //   months   [{m, r, b, live}] each month's time-weighted return and the index's: any period is compounded from these
+  //            (profilePeriod), so friends compare over the same period the page shows
+  //   holdings [{s, n, sec, w, ret, chg, days}] symbol, name, sector, weight in the portfolio, return on cost, today's
+  //            move, days held; sectors [{sec, w}]; cashW the cash weight
+  //   trades   [{d, side 'buy' | 'sell', kind 'new' | 'added' | 'trimmed' | 'closed', s, n, ret}] the latest 40, newest
+  //            first; ret is a sale's result on its cost (a closed round trip: the whole trip, dividends included).
+  //            Cash-like funds (parking money in the savings fund) are not trades.
+  //   stats    {closed, winRate, avgHold, best, worst, maxDD} closed round trips and the deepest month-end drawdown
+  function friendProfile(run, info) {
+    const R = run.R, rnd = (x) => (x == null || !isFinite(x) ? null : Math.round(x * 1e5) / 1e5);
+    const sectorOf = {}, symOf = {};
+    Object.values(run.data.assets || {}).forEach((a) => { if (a && a.name) { sectorOf[a.name] = a.sector; symOf[a.name] = a.symbol || ''; } });
+    const months = R.months.filter((r) => r.has && r.ret != null).map((r) => ({ m: r.month, r: rnd(r.ret), b: rnd(r.bench), live: !!r.live }));
+    const cash = Math.max(0, R.liveCash != null ? R.liveCash : R.settings.cash || 0), tot = R.pos.mvTotal + cash;
+    const holdings = R.pos.open.filter((p) => (p.mv || 0) > 0).map((p) => ({ s: p.symbol || '', n: p.name, sec: p.sector || 'Unclassified',
+      w: rnd(tot ? p.mv / tot : 0), ret: rnd(p.openCost ? p.unreal / p.openCost : null), chg: rnd(p.chg != null ? p.chg / 100 : null), days: p.holdDays })).sort((a, b) => b.w - a.w);
+    const sec = {}; holdings.forEach((h) => { sec[h.sec] = (sec[h.sec] || 0) + h.w; });
+    const sectors = Object.keys(sec).map((k) => ({ sec: k, w: rnd(sec[k]) })).sort((a, b) => b.w - a.w);
+    const thr = typeof R.settings.openThreshold === 'number' ? R.settings.openThreshold : 0.5;
+    const tripAt = {}; (R.pos.trips || []).forEach((t) => { tripAt[t.name + '|' + t.lastSell] = t; });
+    const held = {}, ev = [];
+    R.ledger.forEach((t) => {
+      if (!t.a || (t.t !== 'Buy' && t.t !== 'Sell' && t.t !== 'Bonus')) return;
+      const h = held[t.a] || 0, q = t.q || 0, fund = CASH_LIKE.has(sectorOf[t.a]);
+      if (t.t !== 'Sell') { held[t.a] = h + q; if (t.t === 'Buy' && !fund) ev.push({ d: t.d, side: 'buy', kind: h > thr ? 'added' : 'new', s: symOf[t.a] || '', n: t.a }); return; }
+      held[t.a] = h - q;
+      if (fund) return;
+      const closed = held[t.a] <= thr, trip = closed ? tripAt[t.a + '|' + t.d] : null;
+      const ret = trip ? trip.roi : t.basis ? ((t.amt || 0) - t.basis) / t.basis : null;
+      ev.push({ d: t.d, side: 'sell', kind: closed ? 'closed' : 'trimmed', s: symOf[t.a] || '', n: t.a, ret: rnd(ret) });
+    });
+    const trips = (R.pos.trips || []).filter((t) => !CASH_LIKE.has(t.sector));
+    const wins = trips.filter((t) => t.total > 0);
+    const stats = { closed: trips.length, winRate: rnd(trips.length ? wins.length / trips.length : null), avgHold: trips.length ? Math.round(mean(trips.map((t) => t.holdDays))) : null,
+      best: rnd(trips.length ? Math.max(...trips.map((t) => t.roi)) : null), worst: rnd(trips.length ? Math.min(...trips.map((t) => t.roi)) : null), maxDD: rnd(R.stats && R.stats.maxDD) };
+    const mk = run.data.market || {};
+    return Object.assign({ v: 2, name: R.settings.name || '', inception: R.settings.inception, asOf: mk.asOf || run.today, bench: 'EGX30 Capped',
+      months, holdings, sectors, cashW: rnd(tot ? cash / tot : 0), trades: ev.slice(-40).reverse(), stats }, info || {});
+  }
+  // a profile's return over a period of the page's selector ({type, asOf, from, to}): {r, b, from, to}, the months
+  // compounded (b null when a month has no index return); null when the period has no month
+  function profilePeriod(p, sel) {
+    if (!p || !p.months || !p.months.length) return null;
+    const rows = p.months.map((x) => ({ month: x.m, has: true }));
+    const rg = PE.periodRange(sel || { type: 'Since Inception' }, { inception: p.inception && p.inception <= p.months[0].m ? p.inception : p.months[0].m }, rows);
+    const P = rg.valid ? p.months.filter((x) => x.m >= rg.from && x.m <= rg.to) : [];
+    if (!P.length) return null;
+    let r = 1, b = 1, bOk = true;
+    P.forEach((x) => { r *= 1 + x.r; if (x.b == null) bOk = false; else b *= 1 + x.b; });
+    return { r: r - 1, b: bOk ? b - 1 : null, from: rg.from, to: rg.to };
+  }
+
+  const api = { headsUp, drawdownCheck, heldStocks, priceBook, makePricer, daily, dailyStats, dailyTwr, capWeights, benchWeights, holdingsAt, estimateMarks, attribution, activeWeights, tradeChecks, tradingHabits, portfolioRun, friendProfile, profilePeriod, income, trailing, calendar, TRADING_DAYS, TRADING_NOTE };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.PA = api;
 })(this);

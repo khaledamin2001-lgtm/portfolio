@@ -53,6 +53,8 @@ step_tests() {
   echo "  test_trading.js: $(tail -1 "$TMP/trading.out")"
   node src/tests/test_checks.js > "$TMP/checks.out" || { cat "$TMP/checks.out"; die "test_checks.js"; }
   echo "  test_checks.js: $(tail -1 "$TMP/checks.out")"
+  node src/tests/test_profile.js > "$TMP/profile.out" || { cat "$TMP/profile.out"; die "test_profile.js"; }
+  echo "  test_profile.js: $(tail -1 "$TMP/profile.out")"
   (cd "$TMP/tsrc" && node tests/test.js > "$TMP/test.out") || { cat "$TMP/test.out"; die "test.js"; }
   echo "  test.js: $(head -c 160 "$TMP/test.out")"
   (cd "$TMP/tsrc" && node tests/test_site_store.js > "$TMP/sitestore.out") || { cat "$TMP/sitestore.out"; die "test_site_store.js"; }

@@ -254,6 +254,9 @@ try:
                 return 200, {"documents": [{"name": f"x/links/{a}/with/{b}", "fields": {k: {"stringValue": v} for k, v in f.items()}} for (a, b), f in sorted(LINKS.items()) if a == u]}
             if path.startswith("shares/"):
                 _, owner, _, viewer = path.split("/")
+                if method == "GET":
+                    if uid_of(tok) not in (owner, viewer): return deny
+                    return (200, {"fields": {k: {"stringValue": v} for k, v in SHARES[(owner, viewer)].items()}}) if (owner, viewer) in SHARES else (404, {})
                 if uid_of(tok) != owner or (LINKS.get((owner, viewer)) or {}).get("status") != "friends": return deny
                 SHARES[(owner, viewer)] = {k: v["stringValue"] for k, v in body["fields"].items()}
                 share_writes.append((owner, viewer))
@@ -283,15 +286,19 @@ try:
     # friends
     check("friends: a copy is written for every friend and nobody else (not for a link posing as a friend with another key)", sorted(share_writes) == sorted([(UID, GUID), (GUID, UID), (GUID, OUID), (OUID, GUID)]), json.dumps(share_writes))
     s1 = open_share(acct, (GUID, UID))
-    check("friends: the Gmail account's copy opens with its friend's key and holds its portfolio (import included)",
-          not s1["full"] and s1["name"] == "Friend Portfolio" and sorted(r["id"] for r in s1["docs"]["ledger/y2026"]["rows"]) == ["o1", "o2"] and "imports/2026-08" in s1["docs"], json.dumps(sorted(s1["docs"]))[:300])
-    check("friends: the copy leaves out the Thndr account, the Gmail login and the job's records",
-          "account" not in s1["docs"]["portfolio/settings"] and not any(k.startswith("sync/") for k in s1["docs"]) and "abcdefghijklmnop" not in json.dumps(s1))
+    p1 = s1.get("profile") or {}
+    check("friends: the Gmail account's copy opens with its friend's key and is its percentages profile (months, holdings by weight, its trades)",
+          s1.get("v") == 2 and s1["name"] == "Friend Portfolio" and p1.get("months") and [h["s"] for h in p1.get("holdings") or []] == ["COMI"]
+          and [(t["side"], t["kind"], t["s"]) for t in p1.get("trades") or []] == [("buy", "new", "COMI")], json.dumps(s1)[:300])
+    # percentages only: no amount, share count, price or document anywhere in it
+    j1s = json.dumps(s1)
+    check("friends: the copy holds percentages only (no amounts, share counts, prices, documents, Thndr account or Gmail login)",
+          not any(k in j1s for k in ('"amt"', '"q"', '"p"', '"mv"', '"cash"', '"docs"', '"account"', "abcdefghijklmnop")) and all(abs(h["w"]) <= 1 for h in p1["holdings"]), j1s[:300])
     s2 = open_share(gacct, (UID, GUID))
-    check("friends: an account that is not the owner asking for the main portfolio shares its own", not s2["full"] and "market/latest" not in s2["docs"] and "portfolio/settings" in s2["docs"])
+    check("friends: an account that is not the owner asking for the main portfolio shares its own profile", s2.get("v") == 2 and s2["name"] != "Main" and (s2.get("profile") or {}).get("months"))
     s3 = open_share(gacct, (OUID, GUID))
-    check("friends: the owner's verified account shares the MAIN portfolio (engine documents with their market data, no sync)",
-          s3["full"] and "market/latest" in s3["docs"] and "ledger/y2026" in s3["docs"] and not any(k.startswith("sync/") for k in s3["docs"]) and "account" not in s3["docs"]["portfolio/settings"], json.dumps(sorted(s3["docs"]))[:300])
+    check("friends: the owner's verified account shares the MAIN portfolio's profile",
+          s3.get("v") == 2 and (s3.get("profile") or {}).get("months") and s3["name"] != "Owner account", json.dumps(s3)[:200])
     jg, j1 = json.loads(STATUS.get(GUID, {}).get("job", "{}")), json.loads(STATUS.get(UID, {}).get("job", "{}"))
     check("admin status: the job writes each account's line (Gmail result, month-end report, friends), no figures (account 1 lists 2 friend links: its friend and the impostor link)",
           jg.get("gmail", {}).get("ok") and jg.get("friends") == 2 and jg.get("report") == "Aug-26 sent 2026-09-24" and j1.get("friends") == 2 and not j1.get("gmail"), json.dumps([jg, j1]))
@@ -398,10 +405,45 @@ try:
         ram.subprocess.run = real_run
     check("a step failing after the heads-up email went out (the weekly here): the email is recorded, the next run does not repeat it",
           any("heads-up" in x for x in first) and not any("heads-up" in x for x in again), json.dumps([first, again]))
+    upkg = DB[f"mail/{UID}"]["pkg"]
     DB[f"mail/{UID}"]["pkg"] = seal_mail({"uid": "Usomeoneelse", "email": "x@example.com", "refresh": "RT1", "pk8": pk8})
     sent.clear()
     ram.main(argv, http=FakeHttp(), send=send)
     check("a package naming another account is refused", sent == [])
+    DB[f"mail/{UID}"]["pkg"] = upkg
+
+    # ---- the monthly friends leaderboard: in the first days of a month, to each account's own address, percentages only ----
+    def lb_run(now):
+        sent.clear(); ram.main(["--engine", eng, "--code", code, "--now", now], http=FakeHttp(), send=send)
+        return {m["to"]: m for m in sent if "leaderboard" in m["subject"]}
+    lb = lb_run("2026-09-03T13:30:00Z")
+    g = lb.get("friend2@example.com") or {}
+    check("leaderboard: on the 3rd, an account whose friends' copies all cover August gets it (the owner too, ranked on the main portfolio)",
+          g.get("subject", "").startswith("August 2026 leaderboard: you are #") and g["subject"].endswith(" of 3") and "Demo" in g["text"] and "Owner" in g["text"]
+          and (lb.get("owner@example.com") or {}).get("subject", "").endswith(" of 2"), json.dumps({k: v["subject"] for k, v in lb.items()}))
+    check("leaderboard: an account with a friend who has no copy for it waits (until the 8th)", "friend@example.com" not in lb)
+    aug = {str(k): ram.month_figures(open_share({UID: acct, GUID: gacct, OUID: oacct}[k[1]], k)["profile"], "2026-08") for k in [(UID, GUID), (OUID, GUID)]}
+    pct = lambda x: ("+" if x > 0.00005 else "−" if x < -0.00005 else "") + f"{abs(x) * 100:.1f}%"
+    check("leaderboard: each friend's August return and year so far come from the profile they share",
+          all(v[0] is not None and pct(v[0]) in g.get("text", "") and pct(v[1]) in g.get("text", "") for v in aug.values()), json.dumps(aug))
+    check("leaderboard: percentages only (no EGP, no amounts)", lb and all("EGP" not in m["text"] and "EGP" not in m["html"] for m in lb.values()))
+    check("leaderboard: not sent twice", lb_run("2026-09-03T17:30:00Z") == {})
+    lb = lb_run("2026-09-08T13:30:00Z")
+    check("leaderboard: on the 8th the waiting account gets it, with the friends whose copies are there", list(lb) == ["friend@example.com"]
+          and lb["friend@example.com"]["subject"].endswith(" of 2") and "Friend Portfolio" in lb["friend@example.com"]["text"], json.dumps({k: v["subject"] for k, v in lb.items()}))
+    st1 = adoc(UID, acct, "sync/mail") or {}
+    check("leaderboard: the month is recorded for the account", st1.get("leaderboardSent") == "2026-08", json.dumps(st1.get("leaderboardSent")))
+    # the ranking itself
+    me = {"months": [{"m": "2026-08", "r": 0.02, "b": 0.01}, {"m": "2026-07", "r": 0.1, "b": 0}], "trades": [{"d": "2026-08-10", "side": "sell", "s": "COMI", "ret": 0.12}], "asOf": "2026-09-01"}
+    a = {"months": [{"m": "2026-08", "r": 0.05, "b": 0.01}], "trades": [{"d": "2026-08-20", "side": "sell", "s": "SWDY", "ret": 0.3}, {"d": "2026-07-20", "side": "sell", "s": "X", "ret": 0.9}], "asOf": "2026-08-31"}
+    old = {"months": [{"m": "2026-08", "r": 0.5, "b": 0.01}], "trades": [], "asOf": "2026-08-15"}
+    rows, bench, best = ram.leaderboard(me, [("Omar", a), ("Old copy", old), ("Nobody", {"months": []})], "2026-08")
+    check("leaderboard: ranked by the month's return, a copy from mid-month and one without the month last, the index from the account",
+          [r["who"] for r in rows] == ["Omar", "You", "Old copy", "Nobody"] and rows[2]["m"] is None and abs(rows[1]["ytd"] - (1.1 * 1.02 - 1)) < 1e-9 and bench == 0.01, json.dumps(rows))
+    check("leaderboard: the best sale of the month among the ranked (not another month's)", best == {"who": "Omar", "s": "SWDY", "ret": 0.3}, json.dumps(best))
+    gk = ec.generate_private_key(ec.SECP256R1())
+    gpk = base64.b64encode(gk.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)).decode()
+    check("open_json opens what seal_json sealed", ram.open_json(gk, ram.seal_json({"v": 2, "x": [1]}, gpk, b"portfolio-share-v1"), b"portfolio-share-v1") == {"v": 2, "x": [1]})
 
     # ---- a friendship made by @username: the asker's side has no email until it is accepted ----
     class HandleHttp:

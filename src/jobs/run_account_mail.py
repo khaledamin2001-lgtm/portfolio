@@ -32,13 +32,17 @@ its portfolio (the site says so when it is switched on). For each package this j
      has no reports.emailedAt gets excel.js + excel.py (workbook) and factsheet.js (HTML + PDF, on the page built from
      src/; Playwright is installed by JOBS_PLAYWRIGHT_SETUP the first time one is due), emailed to the account's address
      with both files attached, then stamped reports.emailedAt (reportsPending removed) in the account;
-  6. friends: a new friend request (links/{uid}/with/*, 'received') is emailed once; for every friend ('friends') a
-     fresh copy of the portfolio (portfolio, ledger, imports; the Thndr account number and email settings left out) is
-     sealed to the friend's key as shares/{uid}/to/{friend} when it changed or is a day old. The site owner's own account
-     (its sign-in email hashes to OWNER_HASH, verified, prefs.shareMain) shares the MAIN portfolio instead: the engine's own documents (all but sync),
-     opened with the same key as the mail packages;
+  6. friends: a new friend request (links/{uid}/with/*, 'received') is emailed once; for every friend ('friends') the
+     portfolio's PERCENTAGES profile (tools/profile.js: returns by month, holdings by weight, trades as %; never an
+     amount) is sealed to the friend's key as shares/{uid}/to/{friend} when it changed or is a day old. The site owner's
+     own account (its sign-in email hashes to OWNER_HASH, verified, prefs.shareMain) shares the MAIN portfolio's profile
+     instead (the engine's documents, opened with the same key as the mail packages). In the first days of a month
+     (prefs.leaderboard; older packages follow the other emails) the account gets one leaderboard email: last month's
+     return of the account and of each friend (their shares/{friend}/to/{uid} profiles), ranked, with the index and the
+     month's best sale, percentages only; sent once every friend's copy covers the month, or from the 8th (to the 10th)
+     with the late ones shown as no figure;
   7. writes status/{uid}.job {at, gmail, report, friends, error} for the site owner's admin screen (no figures);
-  8. saves {alertsSent, weeklySent, gmail, friendMailed, shares, lastReport} back to the account as users/{uid}/docs/sync__mail, encrypted to the account key.
+  8. saves {alertsSent, weeklySent, gmail, friendMailed, shares, leaderboardSent, lastReport} back to the account as users/{uid}/docs/sync__mail, encrypted to the account key.
 Emails go from GMAIL_ADDRESS to the address in the package only. One account failing never stops the others; the job
 exits 1 (and emails the owner) only when nothing could be done at all. Logs carry counts, never figures or addresses.
 """
@@ -57,7 +61,6 @@ PROJECT = "portfolio-desk-4d14a"
 FS = f"https://firestore.googleapis.com/v1/projects/{PROJECT}/databases/(default)/documents"
 MAIL_LABEL = b"portfolio-mail-v1"
 SHARE_LABEL = b"portfolio-share-v1"
-SHARE_COLLS = ("portfolio", "ledger", "imports")
 OWNER_HASH = "467022c320757248bf70115c83d305a7e4d139c35e1be5f8117fb30d7f769347"     # SHA-256 of the site owner's sign-in email (the address is not published here)
 SITE = "https://khaledamin2001-lgtm.github.io/portfolio/"
 
@@ -420,17 +423,28 @@ def list_links(http, tok, uid):
     return out
 
 
-def share_snapshot(docs, name, full, at):
-    """The copy a friend sees: {v, at, name, full, docs: {"coll/doc": data}} (full = every collection but sync, for the
-    owner's main portfolio, which brings its own market data)."""
-    out = {}
-    for k, v in docs.items():
-        c = k.split("/", 1)[0]
-        if (full and c != "sync") or (not full and c in SHARE_COLLS):
-            out[k] = v.get("data") if isinstance(v, dict) and "data" in v and "version" in v else v
-    if isinstance(out.get("portfolio/settings"), dict):
-        out["portfolio/settings"] = {k: v for k, v in out["portfolio/settings"].items() if k not in ("account", "factsheetEmail", "recipient")}
-    return {"v": 1, "at": at, "name": name, "full": bool(full), "docs": out}
+def share_profile(docs, shared, code, work, name, handle, tag):
+    """What a friend sees: {v: 2, at, name, profile}, the portfolio's PERCENTAGES profile (tools/profile.js, engine2.js
+    friendProfile: returns by month, holdings by weight, trades as %), never an amount, a share count or a price. docs:
+    the portfolio's documents ({"coll/doc": {"data": ...}}), with the shared market data."""
+    d = os.path.join(work, "share-" + tag)
+    shutil.rmtree(d, ignore_errors=True)
+    materialize({k: (v if isinstance(v, dict) and "data" in v else {"data": v}) for k, v in docs.items()}, shared, d)
+    r = subprocess.run(["node", os.path.join(code, "src", "tools", "profile.js"), "--data", d, "--name", name] + (["--handle", handle] if handle else []),
+                       capture_output=True, text=True, timeout=300)
+    out = json.loads((r.stdout or "{}").strip().splitlines()[-1] if (r.stdout or "").strip() else "{}")
+    if not out.get("ok"):
+        raise jc.JobError("friends", out.get("error") or "profile.js failed")
+    return {"v": 2, "at": jc.now_iso(), "name": name, "profile": out["profile"]}
+
+
+def own_handle(http, tok, uid):
+    """The account's @username (status/{uid}.handle, written by the site), or ''."""
+    try:
+        st, j = http.json("GET", f"{FS}/status/{uid}", headers={"Authorization": "Bearer " + tok})
+        return (((j or {}).get("fields") or {}).get("handle") or {}).get("stringValue") or "" if st == 200 else ""
+    except Exception:
+        return ""
 
 
 def seal_json(obj, pub_b64, label):
@@ -448,6 +462,86 @@ def seal_json(obj, pub_b64, label):
     iv = os.urandom(12)
     b = lambda x: base64.b64encode(x).decode()
     return json.dumps({"v": 1, "epk": b(epk), "iv": b(iv), "ct": b(AESGCM(key).encrypt(iv, plain, label))}, separators=(",", ":"))
+
+
+def open_json(priv, blob, label):
+    """The inverse of seal_json: an envelope sealed to this account's key -> the object (gzipped or plain JSON)."""
+    import gzip
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    e = json.loads(blob)
+    b = base64.b64decode
+    epk = b(e["epk"])
+    key = HKDF(hashes.SHA256(), 32, epk, label).derive(priv.exchange(ec.ECDH(), ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), epk)))
+    plain = AESGCM(key).decrypt(b(e["iv"]), b(e["ct"]), label)
+    return json.loads(gzip.decompress(plain) if plain[:2] == b"\x1f\x8b" else plain)
+
+
+def friend_profiles(http, tok, uid, priv, friends):
+    """[(link, profile)] for the friends whose copy for this account (shares/{friend}/to/{uid}) is a percentages profile
+    (v2). Older copies (v1, whole documents) are skipped: the friend's site replaces them the next time it opens."""
+    out = []
+    for f in friends:
+        st, j = http.json("GET", f"{FS}/shares/{f['uid']}/to/{uid}", headers={"Authorization": "Bearer " + tok})
+        if st != 200:
+            continue
+        try:
+            snap = open_json(priv, (((j or {}).get("fields") or {}).get("pkg") or {}).get("stringValue") or "", SHARE_LABEL)
+        except Exception:
+            continue
+        if isinstance(snap, dict) and snap.get("v") == 2 and isinstance(snap.get("profile"), dict):
+            out.append((f, snap["profile"]))
+    return out
+
+
+def prev_month(now):
+    first = now.date().replace(day=1)
+    return (first - datetime.timedelta(days=1)).strftime("%Y-%m")
+
+
+def month_label(M):
+    return datetime.date(int(M[:4]), int(M[5:7]), 1).strftime("%B %Y")
+
+
+def month_figures(p, M):
+    """A profile's return in month M and its year up to M (compounded), each None when it has no figure."""
+    rows = {x.get("m"): x for x in (p or {}).get("months") or [] if x.get("r") is not None}
+    m = rows.get(M)
+    ytd, any_ = 1.0, False
+    for k in sorted(rows):
+        if k[:4] == M[:4] and k <= M:
+            ytd, any_ = ytd * (1 + rows[k]["r"]), True
+    return (m["r"] if m else None), (ytd - 1 if any_ else None)
+
+
+def fresh_for(p, M):
+    """True when a profile was made after month M ended (its last trading days count: the weekend is Fri-Sat)."""
+    last = datetime.date(int(M[:4]), int(M[5:7]), 1) + datetime.timedelta(days=32)
+    last = last.replace(day=1) - datetime.timedelta(days=1)
+    return str((p or {}).get("asOf") or "") >= (last - datetime.timedelta(days=3)).isoformat()
+
+
+def leaderboard(mine, theirs, M):
+    """The month-M ranking: (rows ranked by the month's return, the index's month, the month's best sale or None).
+    mine: this account's profile; theirs: [(name, profile)]. Percentages only, as everything a friend sees."""
+    rows = []
+    for who, p, me in [("You", mine, True)] + [(n, p, False) for n, p in theirs]:
+        m, ytd = month_figures(p, M) if (me or fresh_for(p, M)) else (None, None)
+        rows.append({"who": who, "me": me, "m": m, "ytd": ytd, "p": p})
+    rows.sort(key=lambda r: (r["m"] is None, -(r["m"] or 0), not r["me"]))
+    bench = next((x.get("b") for x in (mine or {}).get("months") or [] if x.get("m") == M), None)
+    if bench is None:
+        bench = next((x.get("b") for _, p in theirs for x in (p or {}).get("months") or [] if x.get("m") == M and x.get("b") is not None), None)
+    best = None
+    for r in rows:
+        if r["m"] is None:
+            continue
+        for t in (r["p"] or {}).get("trades") or []:
+            if t.get("side") == "sell" and t.get("ret") is not None and str(t.get("d") or "")[:7] == M and (best is None or t["ret"] > best["ret"]):
+                best = {"who": r["who"], "s": t.get("s") or t.get("n") or "a stock", "ret": t["ret"]}
+    return [{k: v for k, v in r.items() if k != "p"} for r in rows], bench, best
 
 
 def confirmed_friend(http, tok, f):
@@ -471,7 +565,7 @@ def share_to_friends(http, tok, uid, friends, snap, state, now):
     """Writes shares/{uid}/to/{friend} where the copy changed or is 20 hours old, for friends whose link matches their
     account (confirmed_friend). Returns how many were written."""
     import hashlib
-    h = hashlib.sha256(json.dumps(snap["docs"], sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:32]
+    h = hashlib.sha256(json.dumps(snap["profile"], sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:32]
     done, n = dict(state.get("shares") or {}), 0
     for f in friends:
         o = done.get(f["uid"]) or {}
@@ -546,6 +640,8 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
     # the site owner's own account is only a sign-in for the admin screen and friends: the main portfolio already reads
     # the owner's Thndr emails and sends the owner's emails, so this account gets no import and no emails of its own
     owner_acct = hashlib.sha256(str(token_claims(tok).get("email") or "").lower().encode()).hexdigest() == OWNER_HASH
+    # the monthly friends leaderboard: its own tick on the site; packages from before it follow the other emails
+    lb_on = prefs.get("leaderboard", owner_acct or any(prefs.get(k, True) for k in ("alerts", "weekly", "reports")))
     if owner_acct:
         prefs = {"alerts": False, "weekly": False, "reports": False, "gmail": False, "shareMain": prefs.get("shareMain")}
     today = now.strftime("%Y-%m-%d")
@@ -688,17 +784,35 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                     if friends:
                         cl = token_claims(tok)
                         owner = hashlib.sha256(str(cl.get("email") or "").lower().encode()).hexdigest() == OWNER_HASH
-                        if prefs.get("shareMain") and main_docs and owner and cl.get("email_verified"):
+                        main = bool(prefs.get("shareMain") and main_docs and owner and cl.get("email_verified"))
+                        handle = own_handle(http, tok, pkg["uid"])
+                        if main:
                             md = main_docs()
-                            snap = share_snapshot(md, ((md.get("portfolio/settings") or {}).get("data") or {}).get("name") or "Main portfolio", True, jc.now_iso())
+                            snap = share_profile(md, shared, code, work, ((md.get("portfolio/settings") or {}).get("data") or {}).get("name") or "Main portfolio", handle, "main")
                         else:
-                            snap = share_snapshot(cur_docs, name, False, jc.now_iso())
+                            snap = share_profile(cur_docs, shared, code, work, name, handle, "own")
                         before = json.dumps(state.get("shares") or {}, sort_keys=True)
                         n = share_to_friends(http, tok, pkg["uid"], friends, snap, state, now)
                         if n or json.dumps(state.get("shares") or {}, sort_keys=True) != before:
                             changed = True
                         if n:
-                            notes.append(f"{n} friend cop{'y' if n == 1 else 'ies'} refreshed{' (main portfolio)' if snap['full'] else ''}")
+                            notes.append(f"{n} friend cop{'y' if n == 1 else 'ies'} refreshed{' (main portfolio)' if main else ''}")
+                        # on the 1st of the month (or the first days, until every friend's copy covers the month): how
+                        # you and your friends ranked last month, in percentages, to this account's own address
+                        M = prev_month(now)
+                        if lb_on and now.day <= 10 and state.get("leaderboardSent") != M:
+                            theirs = [(f.get("name") or ("@" + f["handle"] if f.get("handle") else "A friend"), p) for f, p in friend_profiles(http, tok, pkg["uid"], priv, friends)]
+                            all_fresh = len(theirs) == len(friends) and all(fresh_for(p, M) for _, p in theirs)
+                            if all_fresh or now.day > 7:
+                                rows, bench, best = leaderboard(snap["profile"], theirs, M)
+                                if any(r["m"] is not None for r in rows if not r["me"]):
+                                    subj, body, html = emails.leaderboard(name, month_label(M), rows, bench, best, emails.ACCOUNT_FOOT)
+                                    send(pkg["email"], subj, body, html)
+                                    notes.append("leaderboard sent")
+                                else:
+                                    notes.append("leaderboard skipped (no friend's figures for the month)")
+                                state["leaderboardSent"] = M
+                                changed = True
                 except Exception as e:      # friends never stop the rest
                     notes.append(f"friends not done ({getattr(e, 'step', type(e).__name__)})")
             # the owner hears about every new account (the admin list, read with the owner's verified sign-in)

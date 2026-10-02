@@ -21,7 +21,7 @@ file lists every file and how to build and test.
 | File | What it is |
 |---|---|
 | `site/build_site.py` | Wraps the built page into the live site: the root `index.html` (the page + `lock.js` + `lock.css`, self-hosted fonts, the Content-Security-Policy), `portfolios.json`, the web manifest, icons, `vendor/` and `sw.js`. Run it after any change under `src/` and commit the outputs. |
-| `site/lock.js` | Everything specific to the website: the lock screen, keys and encryption (setup key, device password, Face ID / fingerprint), loading and decrypting the data, editing from the site (GitHub API), accounts (Firebase Auth + Firestore), friends (@usernames or email) and shared copies, the admin screen, email-update settings, live prices from TradingView, the offline copy. Each section starts with a comment saying what it does. |
+| `site/lock.js` | Everything specific to the website: the lock screen, keys and encryption (setup key, device password, Face ID / fingerprint), loading and decrypting the data, editing from the site (GitHub API), accounts (Firebase Auth + Firestore), friends (@usernames or email), their percentages profiles and activity feed, the admin screen, email-update settings, live prices from TradingView, the offline copy. Each section starts with a comment saying what it does. |
 | `site/lock.css` | Styles for the lock screen and the site's own bars and screens. |
 | `site/store.js` | The site editor's write rules, the JavaScript twin of `jobs/store.py` (merge, markers, all-or-nothing batch), pinned by `jobs/merge_vectors.json`. |
 | `site/make_keys.py` | Makes a portfolio's key pair: `keys.json` for the repo, and the setup key and private key into a secret folder (never committed). |
@@ -42,7 +42,7 @@ Run by the workflows in the private `portfolio-engine` repository as `python3 sr
 | `run_market.py` | The daily market update for one portfolio: prices (`fetch_prices.py`), history, index, macro fields, then a site refresh and the "market updated" email. |
 | `run_shared_market.py` | The whole EGX market once a day for every account, published sealed to the members' key as `m/market.enc.json`. |
 | `run_sync.py` | The owner's Thndr inbox sync: new emails from Gmail (`imap_fetch.py`) → `tools/sync.js` → one write → the inbox email, the weekly summary, the month-end report, a site refresh. |
-| `run_account_mail.py` | Every opted-in site account: its Thndr emails from its own Gmail, "Build it from my Thndr emails", heads-up alerts, the weekly summary, the month-end report, friend requests, friends' copies, new sign-ups for the owner. Each email goes to that account's own address only. |
+| `run_account_mail.py` | Every opted-in site account: its Thndr emails from its own Gmail, "Build it from my Thndr emails", heads-up alerts, the weekly summary, the month-end report, friend requests, friends' percentages profiles, the monthly friends leaderboard (1st to 10th, once a month), new sign-ups for the owner. Each email goes to that account's own address only. |
 | `run_reports.py` | Month-end reports for a portfolio without an inbox sync (Yassin's). |
 | `publish.py` | Encrypts a portfolio's documents (`../tools/export.py`) and pushes them to this repo's `p/<id>/`. |
 | `fetch_prices.py` | Prices from TradingView's public scanner plus a short daily-bar backfill. |
@@ -67,6 +67,7 @@ materializes it).
 | `tools/sync.js` | Applies Thndr emails (invoices, requested and monthly statements) to the ledger; prints the writes to make and the inbox email. Holds a statement for review unless the month reconciles exactly. |
 | `tools/history_seed.js` | "Build it from my Thndr emails": a whole portfolio from the monthly statements since 2019. |
 | `tools/weekly.js` | The Thursday weekly summary email (HTML + text). |
+| `tools/profile.js` | A portfolio's percentages profile for its friends (`engine2.js` `friendProfile`: returns by month, holdings by weight, trades as %, no amounts); the account job shares it. |
 | `tools/excel.js` + `tools/excel.py` | The month-end Excel workbook (`excel.js` shapes the figures, `excel.py` writes the `.xlsx`). |
 | `tools/factsheet.js` | Renders the monthly factsheet with the page's own code, headless (Playwright): HTML, PDF and the headline figures. |
 | `tools/plan.js` | Today's dates in Cairo for the jobs (weekday, last month, Gmail search start). |
@@ -83,11 +84,12 @@ with only the public key; `jobs/publish.py` and `jobs/run_sync.py` call them.
 | `tests/test_dietz.js` | Modified Dietz, bonus shares, round trips, same-day ordering. Sections on the real data run only with private exports (`KHALED_EXPORT`, `YASSIN_EXPORT`, `EXPECTED_JSON`), otherwise `SKIP`. |
 | `tests/test.js` | Excel parity against the original workbook; needs two private fixtures, otherwise exits 0. |
 | `tests/test_statement.js` | Statement reading and matching (the right ledger row, quiet months). |
+| `tests/test_profile.js` | The friends' profile: only percentages (no amounts, share counts or prices), weights add up, returns equal the engine's, trades in order. |
 | `tests/test_trading.js` | The sums behind Analysis → Your trading (`engine2.js` `tradingHabits`): per trade, days held, groups, streaks, after the sale. |
 | `tests/test_checks.js` | The model checks that tell a real problem from how Thndr books things: cash dips, estimated months, trade prices on big-move days, typed fund rows. |
 | `tests/test_owner.js` | The account lock: a statement is used only for its own holder / Thndr account; a new account's first statement sets it. |
 | `tests/test_jobs.py` | The jobs' rules: market patches, sync writes, the time gate, recipients, unsent emails, the watcher, the alarm key. |
-| `tests/test_account_mail.py` | The account job end to end with a fake Firebase and mailer: alerts, weekly, Gmail import, history import, reports, friends, impostor links. `DUMP_EMAILS=<dir>` writes every email out. |
+| `tests/test_account_mail.py` | The account job end to end with a fake Firebase and mailer: alerts, weekly, Gmail import, history import, reports, friends' profiles, the leaderboard, impostor links. `DUMP_EMAILS=<dir>` writes every email out. |
 | `tests/test_history_seed.py` | Building a portfolio from statements: gaps, names vs tickers, funds, an empty start, two Thndr accounts. |
 | `tests/test_store.py`, `tests/js_compat.mjs`, `tests/test_site_store.js` | The store's encryption and write rules, in Python and in the browser's JavaScript. |
 | `tests/crypto_roundtrip.py` | Encrypt with `export.py` / `encrypt_file.py`, decrypt the way `lock.js` does. |

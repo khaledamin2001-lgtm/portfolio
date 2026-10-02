@@ -121,3 +121,56 @@ body.pd-locked>:not(#lock){display:none!important}
 #lock .lk-handle small{display:block;font-size:12px;color:var(--ink-3,#6E6E73)}
 #lock .lk-handle .lk-btn{padding:9px 12px;font-size:14px;background:var(--surface,#fff)}
 .pd-friends .pdf-handle{color:var(--accent,#0071E3);font-weight:500;margin-top:-2px}
+/* the profile page (a friend's, or yours as friends see it): a sheet from the bottom on phones, a card in the middle on wide screens */
+body.pd-sheet-open{overflow:hidden}
+#pd-sheet{position:fixed;inset:0;z-index:1100;display:flex;align-items:flex-end;justify-content:center;background:rgba(0,0,0,.38);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);animation:ps-fade .2s ease}
+@media (min-width:700px){#pd-sheet{align-items:center;padding:24px}}
+#pd-sheet .ps-card{width:100%;max-width:560px;max-height:92vh;overflow:auto;-webkit-overflow-scrolling:touch;background:var(--bg,#F2F2F7);color:var(--ink,#1D1D1F);border-radius:22px 22px 0 0;padding:16px 16px calc(24px + env(safe-area-inset-bottom,0px));animation:ps-up .32s cubic-bezier(.2,.9,.3,1)}
+@media (min-width:700px){#pd-sheet .ps-card{border-radius:22px;padding:18px 18px 22px}}
+@keyframes ps-up{from{transform:translateY(40px);opacity:.4}to{transform:none;opacity:1}}
+@keyframes ps-fade{from{opacity:0}to{opacity:1}}
+#pd-sheet .ps-top{display:flex;align-items:center;gap:12px;padding:4px 2px 14px}
+#pd-sheet .ps-av,.pd-friends .pdf-av{flex:none;display:grid;place-items:center;border-radius:50%;color:#fff;font-weight:700;background:linear-gradient(160deg,color-mix(in srgb,var(--accent,#0071E3) 75%,#fff),var(--accent,#0071E3))}
+#pd-sheet .ps-av{width:52px;height:52px;font-size:22px}
+#pd-sheet .ps-id{flex:1;min-width:0}
+#pd-sheet .ps-id b{display:block;font:700 20px/1.2 var(--f-display,system-ui,sans-serif);letter-spacing:-.02em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#pd-sheet .ps-id small{display:block;font-size:13px;color:var(--ink-3,#6E6E73)}
+#pd-sheet .ps-x{flex:none;width:34px;height:34px;border-radius:50%;border:0;background:var(--fill,rgba(118,118,128,.12));color:var(--ink-2,#424245);font-size:22px;line-height:1;cursor:pointer}
+#pd-sheet .ps-hero,#pd-sheet .ps-sec{background:var(--surface,#fff);border-radius:16px;padding:14px 16px;margin-top:12px;box-shadow:var(--shadow)}
+#pd-sheet .ps-hero{text-align:center;padding:18px 16px}
+#pd-sheet .ps-hero small{display:block;font-size:13px;color:var(--ink-3,#6E6E73)}
+#pd-sheet .ps-big{font:700 44px/1.1 var(--f-display,system-ui,sans-serif);letter-spacing:-.03em;font-variant-numeric:tabular-nums;margin:2px 0}
+#pd-sheet h4{margin:0 0 8px;font:600 12px/1.2 var(--f-ui,system-ui,sans-serif);letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3,#6E6E73)}
+#pd-sheet .ps-tbl{width:100%;border-collapse:collapse;font-size:14px}
+#pd-sheet .ps-tbl th{font-size:11px;font-weight:600;color:var(--ink-3,#6E6E73);text-align:right;padding:0 0 6px;text-transform:none;letter-spacing:0;background:none;position:static;border:0}
+#pd-sheet .ps-tbl td{padding:9px 0;border-top:.5px solid var(--grid,#E8E8ED);font-variant-numeric:tabular-nums}
+#pd-sheet .ps-tbl td.n{text-align:right;font-weight:600}
+#pd-sheet .ps-bar{display:grid;grid-template-columns:54px 1fr 64px;align-items:center;gap:10px;font-size:13px;padding:4px 0}
+#pd-sheet .ps-bar>span:last-child{text-align:right;font-weight:600;font-variant-numeric:tabular-nums}
+#pd-sheet .ps-bar i,#pd-sheet .ps-hold i{display:block;height:8px;border-radius:4px;background:var(--fill,rgba(118,118,128,.12));overflow:hidden}
+#pd-sheet .ps-bar i b,#pd-sheet .ps-hold i b{display:block;height:100%;border-radius:4px;background:var(--accent,#0071E3)}
+#pd-sheet .ps-bar i b.pos{background:var(--pos,#1A7F37)} #pd-sheet .ps-bar i b.neg{background:var(--neg,#D70015)}
+#pd-sheet .ps-hold>div>b{font-weight:600}
+#pd-sheet .ps-hold{display:grid;grid-template-columns:minmax(0,1fr) 70px 46px 60px;align-items:center;gap:10px;padding:8px 0;border-top:.5px solid var(--grid,#E8E8ED);font-size:13.5px}
+#pd-sheet .ps-hold:first-of-type{border-top:0}
+#pd-sheet .ps-hold small{display:block;font-size:11.5px;color:var(--ink-3,#6E6E73);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#pd-sheet .ps-hold>span{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+#pd-sheet .ps-hold .ps-w{color:var(--ink-2,#424245);font-weight:500}
+#pd-sheet .ps-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+#pd-sheet .ps-chip{font-size:12px;font-weight:500;padding:4px 10px;border-radius:999px;background:var(--fill,rgba(118,118,128,.12));color:var(--ink-2,#424245)}
+#pd-sheet .ps-trade{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:8px 0;border-top:.5px solid var(--grid,#E8E8ED);font-size:14px}
+#pd-sheet .ps-trade:first-of-type{border-top:0}
+#pd-sheet .ps-trade small{flex:none;font-size:12px;color:var(--ink-3,#6E6E73)}
+#pd-sheet .ps-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px 8px;text-align:center}
+#pd-sheet .ps-stats b,#pd-sheet .ps-stats>div>span{display:block;font:700 19px/1.2 var(--f-display,system-ui,sans-serif);letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+#pd-sheet .ps-stats small{display:block;font-size:11.5px;color:var(--ink-3,#6E6E73)}
+#pd-sheet .ps-note{display:block;margin:6px 0 0;font-size:12px;color:var(--ink-3,#6E6E73)}
+#pd-sheet .ps-foot{margin:14px 0 0;text-align:center;font-size:12px;color:var(--ink-3,#6E6E73)}
+/* the friends' activity under the friends cards on the Overview */
+.pd-friends .pdf-feed{margin-top:16px}
+.pd-friends .pdf-feed h3{margin-bottom:4px}
+.pd-friends .pdf-feed-row{display:flex;align-items:center;gap:12px;width:100%;padding:10px 0;border:0;border-top:.5px solid var(--grid,#E8E8ED);background:none;color:var(--ink,#1D1D1F);text-align:left;cursor:pointer;font:400 14px/1.35 var(--f-ui,system-ui,sans-serif)}
+.pd-friends .pdf-feed-row:first-of-type{border-top:0}
+.pd-friends .pdf-av{width:34px;height:34px;font-size:14px}
+.pd-friends .pdf-feed-txt{min-width:0}
+.pd-friends .pdf-feed-txt small{display:block;font-size:12px;color:var(--ink-3,#6E6E73)}

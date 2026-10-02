@@ -231,10 +231,38 @@ def alerts(name, items):
 
 def friend(name, who):
     blocks = [("p", f"{who} sent you a friend request on the portfolio site."),
-              ("box", "info", "If you accept", ["You both see each other's portfolio: holdings, returns and activity, read-only.", "Either of you can remove it any time."]),
+              ("box", "info", "If you accept", ["You both see each other's returns, holdings and trades in percentages. Nobody sees anyone's amounts.", "Either of you can remove it any time."]),
               ("p", "To answer, sign in on the site: the request is under Account, then Friends.")]
     text, html = email(name, f"{who} wants to be friends", blocks, button=("Answer the request", SITE + "?friends"), foot=ACCOUNT_FOOT)
     return f"{who} wants to be friends on the portfolio site", text, html
+
+
+def leaderboard(name, month_label, rows, bench, best, foot):
+    """The monthly friends leaderboard: you and your friends ranked by last month's return, in percentages only.
+    rows: [{"who", "me", "m" (the month's return or None), "ytd"}] already ranked; bench: the index's month return;
+    best: {"who", "s", "ret"} the month's best sale among you, or None."""
+    pct = lambda x: "—" if x is None else ("+" if x > 0.00005 else "−" if x < -0.00005 else "") + f"{abs(x) * 100:.1f}%"
+    me = next((r for r in rows if r.get("me")), None)
+    place = lambda r: 1 + sum(1 for o in rows if o.get("m") is not None and o["m"] > r["m"]) if r.get("m") is not None else None    # a tie shares the place
+    rank = place(me) if me else None
+    tiles = [("Your rank", f"#{rank} of {len(rows)}" if rank else "—", None, None),
+             ("Your return", pct(me and me.get("m")), month_label.split(" ")[0], tone_of(me and me.get("m"))),
+             ("EGX30 Capped", pct(bench), "the index", tone_of(bench))]
+    table = [[f"#{place(r)}" if r.get("m") is not None else "", ("You" if r.get("me") else r["who"]), (pct(r.get("m")), tone_of(r.get("m"))), (pct(r.get("ytd")), tone_of(r.get("ytd")))]
+             for r in rows]
+    blocks = [("tiles", tiles), ("h", "The ranking", f"{month_label} return, and the year so far"),
+              ("table", ["", "Who", month_label.split(" ")[0][:3], "This year"], table, ["l", "l", "r", "r"])]
+    if best:
+        blocks.append(("box", "good", "Best trade of the month", [f"{best['who']} sold {best['s']}: {pct(best['ret'])} on the money put in."]))
+    top = [r for r in rows if r.get("m") is not None and place(r) == 1]
+    if top:
+        names = ["you" if r.get("me") else r["who"] for r in top]
+        who = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+        blocks.insert(0, ("p", who[0].upper() + who[1:] + (" came first" if len(top) == 1 else " shared first place") + f" in {month_label} with {pct(top[0]['m'])}."))
+    blocks.append(("p", "Percentages only: nobody sees anyone's amounts. Each figure is the portfolio's time-weighted return, so deposits and withdrawals do not count as gains."))
+    text, html = email(name, f"{month_label} leaderboard", blocks, subtitle="You and your friends", button=("See the rankings", SITE), foot=foot)
+    head = f"you are #{rank} of {len(rows)}" if rank else "the friends ranking"
+    return f"{month_label} leaderboard: {head}", text, html
 
 
 def built(name, seed, summary, short):

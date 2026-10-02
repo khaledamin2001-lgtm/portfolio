@@ -40,6 +40,7 @@ GUIDE = [
     ("built", "Friends · once, when \"Build it from my Thndr emails\" has built their portfolio"),
     ("waiting", "Friends · once, when their portfolio cannot be built yet (no monthly statement in their Gmail)"),
     ("gmail", "Friends · once, when their Gmail app password stops working"),
+    ("leaderboard", "Friends · on the 1st of the month: how they and their friends ranked last month (percentages only)"),
 ]
 
 
@@ -61,7 +62,7 @@ def account_samples(code, tools, work):
                for x in sorted(os.listdir(dump)) if x.startswith(n + "-")]
         key = ("alerts" if "heads-up" in subj else "weekly" if " week to " in subj else "friend" if "wants to be friends" in subj
                else "posted" if "statement posted" in subj else "monthend" if "month-end report" in subj else "built" if "built from your" in subj
-               else "waiting" if "waiting for" in subj else "signup" if subj.startswith("New on your") else "gmail" if "could not be read" in subj else None)
+               else "waiting" if "waiting for" in subj else "signup" if subj.startswith("New on your") else "gmail" if "could not be read" in subj else "leaderboard" if " leaderboard: " in subj else None)
         if key and key not in out:
             out[key] = {"subject": subj, "text": text, "html": html, "att": att}
     return out, syn

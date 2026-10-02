@@ -43,7 +43,9 @@ There are two kinds of portfolio:
    account's own key before it reaches Firestore. The jobs can read an account only if it opted in to email updates,
    by sealing a package to the job's key. Friends find each other by @username (`handles/{handle}`, taken
    automatically once the email is confirmed) or by email (`directory/{email}`); see `src/site/lock.js` (friends) and
-   `src/cloud/firestore.rules`.
+   `src/cloud/firestore.rules`. Friends compare in **percentages only**: what one shares with another is a profile of
+   returns by month, holdings by weight and trades as % (`engine2.js` `friendProfile`), never an amount. On the 1st of
+   the month each account can get a leaderboard email ranking it and its friends on last month's return.
 
 ## What runs when (all times Cairo)
 
@@ -74,8 +76,8 @@ Keys: each setup-key portfolio has a P-256 key pair; the private key is wrapped 
 600,000 rounds, AES-256-GCM) and, on each device, by that device's password. An account's key pair is wrapped by its
 password and by a one-time recovery code. Data is sealed with ECDH P-256 → HKDF-SHA256 → AES-256-GCM. The site loads
 only its own files (a strict Content-Security-Policy) and talks only to TradingView (prices), GitHub (editing) and
-Firebase. Firestore rules (`src/cloud/firestore.rules`) decide who may touch which ciphertext; a friend sees a copy
-sealed to their own key. No secret is in this repository; `src/tests/check_private.py` fails the build if anything
+Firebase. Firestore rules (`src/cloud/firestore.rules`) decide who may touch which ciphertext; a friend sees a
+percentages-only profile sealed to their own key. No secret is in this repository; `src/tests/check_private.py` fails the build if anything
 looks like private data.
 
 ## Build and test

@@ -109,7 +109,6 @@
 
   /* ---------- keys ---------- */
   let KEYS = null, PK8 = null, DATA_AT = null, lastFetch = 0, fetchTry = 0;
-  let VIEW = null;   // {uid, name}: a friend's shared portfolio is on the page (read-only), see "friends" below
   let LINK = null;   // {uid, email, refresh, pk8, pub, name}: the site account linked to this setup-key portfolio, see "linked account" below
   let SAVED_AT = null;   // set when the last data answer was sw.js's saved copy (its x-pd-saved-at header), null when it came from the network
   async function unwrapWithSetupKey(code) { return unwrapKey(KEYS.wrap, code.toUpperCase().replace(/[^A-Z0-9]/g, '')); }
@@ -140,7 +139,6 @@
     return crypto.subtle.decrypt({ name: 'AES-GCM', iv: ub64(e.iv), additionalData: enc.encode(label) }, key, ub64(e.ct));
   }
   async function fetchData() {
-    if (VIEW) return fetchShareData();
     if (CUR && CUR.cloud) return fetchCloudData();
     const r = await fetch(base() + 'data.enc.json?t=' + Date.now(), { cache: 'no-store' });
     if (!r.ok) throw new Error('Could not download the portfolio data (' + r.status + ')');
@@ -215,7 +213,7 @@
   const RECENT = new Map();         // 'coll/doc' -> {sha, doc, at}: this device's last commit of a document (the API can lag)
   let QUEUE = Promise.resolve();    // saves run one at a time, in the order the page made them
   const engineRepo = () => (CUR && CUR.engine) || null;
-  const canEdit = () => !!(PK8 && !VIEW && ((CUR && CUR.cloud && CLOUD) || (EDIT && engineRepo())));
+  const canEdit = () => !!(PK8 && ((CUR && CUR.cloud && CLOUD) || (EDIT && engineRepo())));
   window.pdCanEdit = canEdit;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const b64big = (u) => { u = u instanceof Uint8Array ? u : new Uint8Array(u); let s = ''; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); };
@@ -334,13 +332,13 @@
       const st = el('pd-edit-state');
       if (st) {
         const soon = on && exp && exp - Date.now() < 14 * 864e5;
-        st.textContent = VIEW ? `Viewing ${VIEW.name} · read-only` : CUR && CUR.cloud ? (on ? 'Your account · changes save as you make them' : 'Your account') : !engineRepo() ? 'View only' : !on ? 'View only on this device' : JOB_NOTE || (soon ? `Editing on · the editing key expires ${dayText(exp)}` : 'Editing on · saved changes reach the site in a few minutes');
+        st.textContent = CUR && CUR.cloud ? (on ? 'Your account · changes save as you make them' : 'Your account') : !engineRepo() ? 'View only' : !on ? 'View only on this device' : JOB_NOTE || (soon ? `Editing on · the editing key expires ${dayText(exp)}` : 'Editing on · saved changes reach the site in a few minutes');
         st.classList.toggle('stale', !!soon && !JOB_NOTE);
       }
       const cloud = !!(CUR && CUR.cloud);
       for (const [id, kind] of [['pd-run-market', 'market'], ['pd-run-sync', 'sync'], ['pd-edit-menu', null]]) { const b = el(id); if (b) b.hidden = !on || cloud || (kind && !jobFile(kind)); }
       const b = el('pd-edit-on'); if (b) b.hidden = on || cloud || !engineRepo() || !PK8;
-      const ac = el('pd-account'); if (ac) ac.hidden = !PK8 || !!(VIEW && !cloud && !LINK);   // a setup-key portfolio offers to link the site account
+      const ac = el('pd-account'); if (ac) ac.hidden = !PK8;   // a setup-key portfolio offers to link the site account
       document.body.classList.toggle('pd-edit', on);
     });
   }
@@ -506,15 +504,14 @@
   }
   function publish(bundle) {
     DOCS = bundle.docs || {}; DATA_AT = bundle.exportedAt; OPENED = CUR.id;
-    if (!VIEW) applyOverlay();   // saves made here that the published data does not show yet
+    applyOverlay();   // saves made here that the published data does not show yet
     const jm = DOCS['market/latest'] || {};   // the market job's own document in this bundle: its asOf is the job's heartbeat
     if (LIVE && Date.parse(LIVE.asOf) > Date.parse(jm.asOf || 0)) DOCS['market/latest'] = { ...jm, ...LIVE, jobAsOf: jm.asOf || LIVE.jobAsOf };
     listeners.forEach(fire);
-    document.title = (VIEW ? VIEW.name : CUR.name) + ' · Stock Market Portfolio Tracker';
+    document.title = CUR.name + ' · Stock Market Portfolio Tracker';
     whenReady(() => {   // the bottom bar is the last thing in the document; the data can be ready before it is parsed
       footerFresh();
-      const w = document.getElementById('pd-who'); if (w) w.textContent = VIEW ? VIEW.name : CUR.name;
-      viewBanner();
+      const w = document.getElementById('pd-who'); if (w) w.textContent = CUR.name;
     });
     offlineBanner();
   }
@@ -538,7 +535,7 @@
     const t = document.getElementById('toast'); if (t) { t.hidden = true; t.textContent = ''; }
   }
   function lock(auto) {
-    VIEW = null; FRIENDS = null; MY_HANDLE = null; LINK = null; viewBanner();
+    closeProfile(); FRIENDS = null; MY_HANDLE = null; LINK = null;
     PK8 = null; DOCS = {}; DATA_AT = null; lastFetch = 0; EXPORTS = null; SAVED_AT = null; EDIT = null; CLOUD = null; MEMBERS = null; OVERLAY.clear(); RECENT.clear(); JOB_NOTE = ''; editBar();
     document.title = 'Stock Market Portfolio Tracker';
     listeners.forEach(fire); blank(); offlineBanner();
@@ -777,11 +774,11 @@
     $l('#lk-retry').onclick = async () => { const b = $l('#lk-retry'); b.disabled = true; b.textContent = 'Trying…'; if (!PK8) return lock(false); await unlocked(PK8); };
   }
   async function start() {
-    if (CUR.cloud && !VIEW) { await loadSession(); const g = await accountGone().catch(() => null); if (g) { await leaveGoneAccount(g); throw Object.assign(new Error('account ' + g), { code: 'gone' }); } }
+    if (CUR.cloud) { await loadSession(); const g = await accountGone().catch(() => null); if (g) { await leaveGoneAccount(g); throw Object.assign(new Error('account ' + g), { code: 'gone' }); } }
     await loadEdit(); publish(await fetchData()); dbResolve(db);
-    if (!CUR.cloud && !VIEW) await loadLink().catch((e) => { console.warn('linked account not opened', e); LINK = null; CLOUD = null; });
+    if (!CUR.cloud) await loadLink().catch((e) => { console.warn('linked account not opened', e); LINK = null; CLOUD = null; });
     editBar();
-    if ((CUR.cloud || LINK) && !VIEW) housekeeping().catch((e) => console.warn('account housekeeping', e));
+    if (CUR.cloud || LINK) housekeeping().catch((e) => console.warn('account housekeeping', e));
     updateLive().catch((e) => { console.warn('live prices unavailable', e); notice('Live prices are unavailable right now: showing prices from the last daily update.'); }); }
   async function refresh() { if (!PK8) return; fetchTry = Date.now(); try { const b = await fetchData(); if (b.exportedAt !== DATA_AT) publish(b); else offlineBanner(); } catch (e) { console.warn('refresh failed', e); }
     if (CUR && (CUR.cloud || LINK) && CLOUD) listFriends().catch(() => {}); }
@@ -984,7 +981,7 @@
   // Everything one open portfolio or account leaves in memory, cleared before another account takes the page (otherwise
   // its unsaved edits, its linked account, the friend being viewed or friends' figures would carry over)
   function resetSession() {
-    OVERLAY.clear(); RECENT.clear(); EDIT = null; LINK = null; VIEW = null; FRIENDS = null; MY_HANDLE = null;
+    OVERLAY.clear(); RECENT.clear(); EDIT = null; LINK = null; FRIENDS = null; MY_HANDLE = null; closeProfile();
     Object.keys(CONFIRMED).forEach((k) => delete CONFIRMED[k]);
     HUB.you = null; HUB.youData = null; HUB.friends = {}; HUB.market = null; HUB.marketAt = 0;
   }
@@ -1230,42 +1227,43 @@
   const sealTo = (pubB64, bytes, label) => seal(bytes, label, pubB64);
   async function writeMail(prefs) {
     const mk = await (await fetch('p/khaled/keys.json', { cache: 'no-store' })).json();
-    const pkg = { v: 1, uid: CLOUD.uid, email: prefs.email, refresh: CLOUD.refresh, pk8: b64big(acctKey()), prefs: { alerts: !!prefs.alerts, weekly: !!prefs.weekly, reports: !!prefs.reports, gmail: !!prefs.gmail, shareMain: !!prefs.shareMain }, at: new Date().toISOString() };
+    const pkg = { v: 1, uid: CLOUD.uid, email: prefs.email, refresh: CLOUD.refresh, pk8: b64big(acctKey()), prefs: { alerts: !!prefs.alerts, weekly: !!prefs.weekly, reports: !!prefs.reports, leaderboard: prefs.leaderboard !== false, gmail: !!prefs.gmail, shareMain: !!prefs.shareMain }, at: new Date().toISOString() };
     const env = Object.assign({ v: 1 }, await sealTo(mk.pub, enc.encode(JSON.stringify(pkg)), MAIL_LABEL));
     await fsReq('PATCH', `mail/${CLOUD.uid}`, { fields: { pkg: { stringValue: JSON.stringify(env) }, at: { stringValue: pkg.at } } });
     ls.set(mailLS(), Object.assign({}, prefs, { ref: await sha(CLOUD.refresh) }));
   }
   // nothing left on: the package is deleted, so the job no longer opens the portfolio
   async function setMail(prefs) {
-    if (prefs.alerts || prefs.weekly || prefs.reports || prefs.gmail || prefs.shareMain) return writeMail(prefs);
+    if (prefs.alerts || prefs.weekly || prefs.reports || prefs.leaderboard || prefs.gmail || prefs.shareMain) return writeMail(prefs);
     await fsReq('DELETE', `mail/${CLOUD.uid}`); ls.del(mailLS());
   }
   // the job signs in with the saved refresh token: after a password change (which ends old sessions) it is sealed again
   async function resealMail() { const m = mailPrefs(); if (m && CLOUD && CLOUD.refresh && m.ref !== (await sha(CLOUD.refresh))) await writeMail(m); }
   function mailScreen(note) {
-    const on = mailOn(), m = on ? mailPrefs() : Object.assign({ email: CUR.email || (CLOUD && CLOUD.email) || '' }, mailPrefs() || {}, { alerts: true, weekly: true, reports: true });
-    screen(`<h1>Email updates</h1><p>Get an email when something needs your attention (a dividend coming up, a target or stop reached, a big drop), a summary every Thursday evening, and your month-end report (Excel workbook + PDF factsheet) when each monthly statement is posted.</p>
+    const on = mailOn(), m = on ? mailPrefs() : Object.assign({ email: CUR.email || (CLOUD && CLOUD.email) || '' }, mailPrefs() || {}, { alerts: true, weekly: true, reports: true, leaderboard: true });
+    screen(`<h1>Email updates</h1><p>Get an email when something needs your attention (a dividend coming up, a target or stop reached, a big drop), a summary every Thursday evening, your month-end report (Excel workbook + PDF factsheet) when each monthly statement is posted, and on the 1st of each month how you ranked among your friends (percentages only).</p>
       <p class="lk-tip">To write these, the site owner's email job has to open your portfolio, so while this is on your figures are not private from that job. Switch it off any time: nothing is kept after that.</p>
       <form id="lk-ml" autocomplete="off"><input id="lk-ml-email" type="email" data-testid="mail-address" value="${esc(m.email)}" placeholder="Email address" aria-label="Email address">
       <label class="lk-check"><input type="checkbox" id="lk-ml-alerts" data-testid="mail-alerts" ${m.alerts ? 'checked' : ''}> Heads-up alerts</label>
       <label class="lk-check"><input type="checkbox" id="lk-ml-weekly" data-testid="mail-weekly" ${m.weekly ? 'checked' : ''}> Weekly summary (Thursday evening)</label>
       <label class="lk-check"><input type="checkbox" id="lk-ml-reports" data-testid="mail-reports" ${m.reports ? 'checked' : ''}> Month-end report (Excel + PDF)</label>
+      <label class="lk-check"><input type="checkbox" id="lk-ml-leaderboard" data-testid="mail-leaderboard" ${m.leaderboard !== false ? 'checked' : ''}> Friends leaderboard (1st of the month)</label>
       <button class="lk-btn" id="lk-ml-go" data-testid="mail-on">${on ? 'Save' : 'Turn on email updates'}</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>
       ${on ? '<button class="lk-btn ghost" id="lk-ml-off" data-testid="mail-off">Turn off email updates</button>' : ''}
       <div class="lk-links"><button type="button" class="lk-link" id="lk-ml-back" data-testid="mail-back">Back</button></div>`);
     $l('#lk-ml-back').onclick = accountScreen;
     $l('#lk-ml').onsubmit = async (ev) => {
-      ev.preventDefault(); const email = $l('#lk-ml-email').value.trim(), alerts = $l('#lk-ml-alerts').checked, weekly = $l('#lk-ml-weekly').checked, reports = $l('#lk-ml-reports').checked;
+      ev.preventDefault(); const email = $l('#lk-ml-email').value.trim(), alerts = $l('#lk-ml-alerts').checked, weekly = $l('#lk-ml-weekly').checked, reports = $l('#lk-ml-reports').checked, leaderboard = $l('#lk-ml-leaderboard').checked;
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return err('Enter an email address.');
-      if (!alerts && !weekly && !reports) return err('Pick at least one kind of email, or turn email updates off.');
+      if (!alerts && !weekly && !reports && !leaderboard) return err('Pick at least one kind of email, or turn email updates off.');
       const b = $l('#lk-ml-go'); b.disabled = true; err('Saving…');
-      try { await writeMail({ email, alerts, weekly, reports, gmail: gmailOn() }); open(); toast('Email updates are on. The first ones come after the next market close.'); }
+      try { await writeMail(Object.assign({}, mailPrefs() || {}, { email, alerts, weekly, reports, leaderboard, gmail: gmailOn() })); open(); toast('Email updates are on. The first ones come after the next market close.'); }
       catch (e) { console.error(e); b.disabled = false; err(e.message || String(e)); }
     };
     const off = $l('#lk-ml-off');
     if (off) off.onclick = async () => {
       off.disabled = true;
-      try { await setMail(Object.assign({}, mailPrefs(), { alerts: false, weekly: false, reports: false })); open(); toast('Email updates are off.'); }
+      try { await setMail(Object.assign({}, mailPrefs(), { alerts: false, weekly: false, reports: false, leaderboard: false })); open(); toast('Email updates are off.'); }
       catch (e) { console.error(e); off.disabled = false; err(e.message || String(e)); }
     };
   }
@@ -1330,8 +1328,8 @@
           const patch = {};
           if (!S0.trackFrom && !(S0.historyImport && S0.historyImport.status === 'pending')) patch.trackFrom = cairoDay(Date.now() / 1000);   // the ledger so far stands; emails count from the next day
           if (Object.keys(patch).length) await saveDoc('update', 'portfolio/settings', patch);
-          const m = Object.assign({ email: email || address, alerts: false, weekly: false, reports: false }, mailPrefs() || {});
-          if (also) Object.assign(m, { email: m.email || address, alerts: true, weekly: true, reports: true });
+          const m = Object.assign({ email: email || address, alerts: false, weekly: false, reports: false, leaderboard: false }, mailPrefs() || {});
+          if (also) Object.assign(m, { email: m.email || address, alerts: true, weekly: true, reports: true, leaderboard: true });
           await writeMail(Object.assign(m, { gmail: true }));
           return gmailDoneScreen(done, history || !!(S0.historyImport && S0.historyImport.status === 'pending'));
         }
@@ -1384,19 +1382,20 @@
     };
   }
   /* ---------- friends, status for the site owner, deleting or restarting an account ----------
-     Friends see each other's portfolios, read-only. links/{uid}/with/{other} holds each side of a friendship ('sent',
+     Friends compare returns, in percentages only. links/{uid}/with/{other} holds each side of a friendship ('sent',
      'received', then 'friends' once the one who received it accepts); a friend is found by their @username through
-     handles/{handle} = {uid, name, pub, at} or by their sign-in email through directory/{email} = {uid, name, pub}. Each side keeps shares/{me}/to/{friend} = a copy of its own portfolio documents
-     (portfolio, ledger, imports; the Thndr account number and email settings left out) gzipped and sealed to the friend's
-     public key ('portfolio-share-v1'): refreshed when the account opens or saves (and by the email job for accounts that
-     have it), readable only by that friend. Viewing one swaps the page's documents for the copy plus the shared market
-     data, with editing off, until "Back to mine". Removing a friend deletes both sides and both copies.
+     handles/{handle} = {uid, name, pub, at} or by their sign-in email through directory/{email} = {uid, name, pub}. Each
+     side keeps shares/{me}/to/{friend} = its PERCENTAGES PROFILE (engine2.js friendProfile: returns by month, holdings by
+     weight, trades as %; never an amount, a share count or a price) gzipped and sealed to the friend's public key
+     ('portfolio-share-v1'): refreshed when the account opens or saves (and by the email job for accounts that have it),
+     readable only by that friend. Tapping a friend opens their profile page; the Overview shows the friends ranking and
+     their latest trades. Removing a friend deletes both sides and both copies.
      status/{uid} = {name, email, createdAt, lastSeen, site: JSON {mail, reports, gmail, friends}, job: JSON (written by
      the email job)} is what the site owner's admin screen lists: no figures. The owner (OWNER_EMAIL, verified) can reset
      an account there: everything of it is deleted except the sign-in; signing in again starts afresh (restartScreen). */
   // the site owner's sign-in email, as its SHA-256 (the address itself is not published); the database rules hold the
   // address and decide, this only shows the Admin button and the "main portfolio" choice
-  const OWNER_HASH = '467022c320757248bf70115c83d305a7e4d139c35e1be5f8117fb30d7f769347', SHARE_LABEL = 'portfolio-share-v1', SHARE_COLLS = new Set(['portfolio', 'ledger', 'imports']);
+  const OWNER_HASH = '467022c320757248bf70115c83d305a7e4d139c35e1be5f8117fb30d7f769347', SHARE_LABEL = 'portfolio-share-v1';
   const JOB_URL = 'https://github.com/khaledamin2001-lgtm/portfolio-engine/actions/workflows/account-mail.yml';
   let FRIENDS = null;   // the open account's links: [{uid, status, name, pub, email, handle, at}]
   let MY_HANDLE = null;   // the open account's @username: '' none yet, null not looked up this session
@@ -1458,20 +1457,15 @@
     if (/[?&]friends\b/.test(location.search)) { history.replaceState(null, '', location.pathname); if (PK8 && lockEl().hidden) friendsScreen(); }
     await refreshShares();
   }
-  // the copy friends see: the portfolio documents only, without the Thndr account number or email settings
-  function shareSnapshot() {
-    const docs = {};
-    for (const [k, v] of Object.entries(DOCS)) if (SHARE_COLLS.has(k.split('/')[0])) docs[k] = v;
-    if (docs['portfolio/settings']) { const c = Object.assign({}, docs['portfolio/settings']); delete c.account; delete c.factsheetEmail; delete c.recipient; docs['portfolio/settings'] = c; }
-    return { v: 1, at: new Date().toISOString(), name: CUR.name, full: false, docs };
-  }
   const gzip = async (text) => new Uint8Array(await new Response(new Blob([enc.encode(text)]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer());
   const gunzip = async (bytes) => new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
   async function refreshShares(force) {
-    if (VIEW || !FRIENDS || !CLOUD || !PK8) return;
+    if (!FRIENDS || !CLOUD || !PK8) return;
     if (isOwner() && (mailPrefs() || {}).shareMain) return;   // the email job shares the owner's main portfolio instead
     const fr = FRIENDS.filter((f) => f.status === 'friends' && f.pub); if (!fr.length) return;
-    const snapObj = shareSnapshot(), h = await sha(JSON.stringify(snapObj.docs)), body = JSON.stringify(snapObj);
+    const prof = myProfile(); if (!prof) return;
+    const snapObj = { v: 2, at: new Date().toISOString(), name: CUR.name, profile: Object.assign({}, prof, { name: CUR.name, handle: MY_HANDLE || '' }) };
+    const h = await sha(JSON.stringify(snapObj.profile)), body = JSON.stringify(snapObj);
     for (const f of fr) {
       const k = 'pd.share.' + CUR.id + '.' + f.uid, o = ls.get(k);
       if (!force && o && o.h === h && Date.now() - o.t < 20 * 3600e3) continue;
@@ -1547,34 +1541,66 @@
   }
   let shareTimer = null;
   function shareSoon() { clearTimeout(shareTimer); shareTimer = setTimeout(() => refreshShares().catch(() => {}), 8000); }
-  // a friend's copy on the page, read-only
-  async function fetchShareData() {
-    const j = await fsReq('GET', `shares/${VIEW.uid}/to/${CLOUD.uid}`);
-    const snapObj = JSON.parse(await gunzip(await unseal(JSON.parse(fStr(j, 'pkg')), SHARE_LABEL, acctKey())));
-    const market = snapObj.full ? { docs: {} } : await fetchMarket().catch(() => ({ docs: {} }));
-    const docs = Object.assign({}, market.docs || {}, snapObj.docs || {});
-    macroMarks(docs);
-    VIEW.at = snapObj.at; lastFetch = Date.now(); SAVED_AT = null;
-    return { exportedAt: snapObj.at, docs };
+  /* ---------- a profile page: what a friend (or you) shares, percentages only ----------
+     Opened by tapping a friend (or yourself) in the friends cards, the activity feed, the hub or the Friends screen: a
+     sheet over the page with the return over the page's period next to yours and the index's, the months, holdings by
+     weight, sectors, the latest trades and trading stats. Nothing on it is an amount: the profile has none. */
+  let PROFILE_UID = null;
+  function closeProfile() {
+    PROFILE_UID = null;
+    const sh = document.getElementById('pd-sheet'); if (sh) sh.remove();
+    document.body.classList.remove('pd-sheet-open');
   }
-  async function viewFriend(f) {
-    const was = VIEW; VIEW = { uid: f.uid, name: f.name };
-    try { publish(await fetchData()); editBar(); open(); window.scrollTo(0, 0); }
-    catch (e) { VIEW = was; throw e; }
+  async function openProfile(uid, fresh) {
+    const me = uid === 'me', f = me ? null : (FRIENDS || []).find((x) => x.uid === uid);
+    if (!me && !f) return;
+    let p = me ? myProfile() : fresh ? null : (HUB.friends[uid] || {}).p;
+    if (!me && !p) {
+      try { p = await friendProfile(f); HUB.friends[uid] = { p, t: Date.now() }; }
+      catch (e) { toast(e.code === 'not_found' ? `${f.name} has not shared yet. It appears after they next open the site.` : 'Could not open it: ' + (e.message || e), 'error'); return; }
+    }
+    if (!p) { toast('Nothing to show yet.', 'error'); return; }
+    closeProfile(); PROFILE_UID = uid;
+    const sh = document.createElement('div'); sh.id = 'pd-sheet'; sh.setAttribute('role', 'dialog'); sh.setAttribute('aria-modal', 'true'); sh.dataset.testid = 'profile-sheet';
+    sh.innerHTML = profileHTML(p, f, me);
+    document.body.appendChild(sh); document.body.classList.add('pd-sheet-open');
+    sh.addEventListener('click', (e) => { if (e.target === sh || e.target.closest('[data-ps-close]')) closeProfile(); });
+    const c = sh.querySelector('[data-ps-close]'); if (c) c.focus();
   }
-  async function viewMine() { VIEW = null; publish(await fetchData()); editBar(); window.scrollTo(0, 0); }
-  function viewBanner() {
-    whenReady(() => {
-      let b = document.getElementById('pd-view');
-      if (!VIEW) { if (b) b.hidden = true; return; }
-      if (!b) { b = document.createElement('div'); b.id = 'pd-view'; b.setAttribute('role', 'status'); b.dataset.testid = 'view-banner'; document.body.insertBefore(b, document.body.firstChild); }
-      b.hidden = false;
-      b.innerHTML = `Viewing <b>${esc(VIEW.name)}</b>, shared with you${VIEW.at ? ` (as of ${esc(whenOf(VIEW.at))})` : ''}. You can look, not change. <button type="button" id="pd-view-back" data-testid="view-back">Back to mine</button>`;
-      b.querySelector('#pd-view-back').onclick = () => viewMine().catch((e) => toast('Could not reopen your portfolio: ' + (e.message || e), 'error'));
-    });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && PROFILE_UID) closeProfile(); });
+  const verb = (t) => (t.side === 'buy' ? (t.kind === 'new' ? 'bought' : 'bought more') : t.kind === 'closed' ? 'sold all of' : 'sold part of');
+  const ago = (d) => {
+    const n = Math.round((Date.parse(window.PE.cairoToday()) - Date.parse(d)) / 864e5);
+    return n <= 0 ? 'today' : n === 1 ? 'yesterday' : n < 7 ? `${n} days ago` : dayOf(d + 'T12:00:00Z');
+  };
+  const pcH = (x) => `<span class="${toneH(x)}">${pctH(x)}</span>`;
+  const wH = (x) => pctH(x).replace('+', '');   // a weight: no sign
+  function profileHTML(p, f, me) {
+    const P = period(), per = (x, q) => (x && window.PA.profilePeriod(x, q)) || null;
+    const mine = me ? null : myProfile(), pick = per(p, P.sel), yours = mine ? per(mine, P.sel) : null;
+    const handle = me ? MY_HANDLE : cleanHandle((f && f.handle) || p.handle);
+    const rows = [['This month', { type: 'Month' }], ['This year', { type: 'YTD' }], ['Last 12 months', { type: 'Last 12 Months' }], ['All time', { type: 'Since Inception' }]]
+      .map(([l, q]) => { const t = per(p, q), y = mine ? per(mine, q) : null; return `<tr><td>${l}</td><td class="n">${pcH(t && t.r)}</td>${me ? '' : `<td class="n">${pcH(y && y.r)}</td>`}<td class="n muted">${pctH(t && t.b)}</td></tr>`; }).join('');
+    const last = (p.months || []).slice(-12), top = Math.max(0.0001, ...last.map((m) => Math.abs(m.r)));
+    const bars = last.map((m) => `<div class="ps-bar"><span>${esc(window.PE.fmtMonth(m.m))}${m.live ? '*' : ''}</span><i><b class="${m.r < 0 ? 'neg' : 'pos'}" style="width:${Math.round((Math.abs(m.r) / top) * 100)}%"></b></i>${pcH(m.r)}</div>`).join('');
+    const w0 = Math.max(0.0001, ((p.holdings || [])[0] || {}).w || 0);
+    const hold = (p.holdings || []).map((h) => `<div class="ps-hold"><div><b>${esc(h.s || h.n)}</b><small>${esc(h.s ? h.n : h.sec)}</small></div><i><b style="width:${Math.round(Math.min(1, h.w / w0) * 100)}%"></b></i><span class="ps-w">${wH(h.w)}</span>${pcH(h.ret)}</div>`).join('');
+    const secs = (p.sectors || []).map((x) => `<span class="ps-chip">${esc(x.sec)} ${wH(x.w)}</span>`).join('') + (p.cashW > 0.0005 ? `<span class="ps-chip">Cash ${wH(p.cashW)}</span>` : '');
+    const trades = (p.trades || []).slice(0, 15).map((t) => `<div class="ps-trade"><span>${verb(t)} <b>${esc(t.s || t.n)}</b>${t.side === 'sell' && t.ret != null ? ' ' + pcH(t.ret) : ''}</span><small>${esc(ago(t.d))}</small></div>`).join('');
+    const S = p.stats || {};
+    return `<div class="ps-card">
+      <div class="ps-top"><div class="ps-av">${esc((p.name || '?').trim().charAt(0).toUpperCase())}</div>
+        <div class="ps-id"><b data-testid="profile-name">${esc(me ? p.name || CUR.name : (f && f.name) || p.name)}</b><small>${handle ? '@' + esc(handle) + ' · ' : ''}${me ? 'what your friends see' : 'updated ' + esc(whenOf(p.at || p.asOf))}</small></div>
+        <button type="button" class="ps-x" data-ps-close data-testid="profile-close" aria-label="Close">×</button></div>
+      <div class="ps-hero"><small>${esc(P.label)}</small><div class="ps-big ${toneH(pick && pick.r)}" data-testid="profile-picked">${pctH(pick && pick.r)}</div>
+        <small>EGX30 Capped ${pctH(pick && pick.b)}${yours ? ` · you ${pctH(yours.r)}` : ''}</small></div>
+      <div class="ps-sec"><h4>Returns</h4><table class="ps-tbl"><thead><tr><th></th><th class="n">${me ? 'You' : 'Them'}</th>${me ? '' : '<th class="n">You</th>'}<th class="n">Index</th></tr></thead><tbody>${rows}</tbody></table></div>
+      ${bars ? `<div class="ps-sec"><h4>Month by month</h4>${bars}${last.some((m) => m.live) ? '<small class="ps-note">* so far this month</small>' : ''}</div>` : ''}
+      <div class="ps-sec" data-testid="profile-holdings"><h4>Holdings</h4>${hold || '<p class="ps-note">No holdings right now.</p>'}${secs ? `<div class="ps-chips">${secs}</div>` : ''}</div>
+      <div class="ps-sec" data-testid="profile-trades"><h4>Latest trades</h4>${trades || '<p class="ps-note">No trades yet.</p>'}</div>
+      <div class="ps-sec"><h4>Trading</h4><div class="ps-stats"><div><b>${S.closed != null ? S.closed : '—'}</b><small>trades closed</small></div><div><b>${wH(S.winRate)}</b><small>won</small></div><div><b>${S.avgHold != null ? S.avgHold + 'd' : '—'}</b><small>average hold</small></div><div>${pcH(S.best)}<small>best trade</small></div><div>${pcH(S.worst)}<small>worst trade</small></div><div>${pcH(S.maxDD)}<small>deepest drop</small></div></div></div>
+      <p class="ps-foot">Percentages only: ${me ? 'friends never see' : 'nobody sees'} amounts, share counts or prices.</p></div>`;
   }
-  window.pdViewing = () => (VIEW ? { uid: VIEW.uid, name: VIEW.name } : null);
-
   async function friendsScreen(note) {
     screen('<h1>Friends</h1><p>Loading…</p>');
     let verified = false, handle = '';
@@ -1627,11 +1653,7 @@
       busy(b, '…');
       try { await unfriend(f.uid); friendsScreen(); } catch (e) { console.error(e); friendsScreen(e.message || String(e)); }
     }; });
-    document.querySelectorAll('#lock [data-view]').forEach((b) => { b.onclick = async () => {
-      const f = find(b.dataset.view); busy(b, 'Opening…');
-      try { await viewFriend(f); }
-      catch (e) { console.error(e); friendsScreen(e.code === 'not_found' ? `${f.name} has not shared a copy yet. It appears after they next open the site (or at the next daily update if their automatic updates are on).` : (e.message || String(e))); }
-    }; });
+    document.querySelectorAll('#lock [data-view]').forEach((b) => { b.onclick = async () => { open(); await openProfile(b.dataset.view, true); }; });
     const om = $l('#lk-fr-main');
     if (om) om.onclick = async () => {
       busy(om);
@@ -1700,7 +1722,7 @@
   async function unfriend(uid) {
     for (const p of [`shares/${CLOUD.uid}/to/${uid}`, `shares/${uid}/to/${CLOUD.uid}`, `links/${uid}/with/${CLOUD.uid}`, `links/${CLOUD.uid}/with/${uid}`]) await fsDel(p);
     ls.del('pd.share.' + CUR.id + '.' + uid);
-    if (VIEW && VIEW.uid === uid) await viewMine();
+    if (PROFILE_UID === uid) closeProfile();
   }
   // everything of an account except its sign-in: friends (both sides), copies, email package, directory entry, documents,
   // profile, status. The account itself (deleting) or the site owner (reset) does it.
@@ -1727,7 +1749,7 @@
     const email = CLOUD.email || CUR.email, id = CUR.id;
     if (kind === 'deleted') { await fsDel(`deleted/${CLOUD.uid}`).catch(() => {}); await fbAuth('delete', { idToken: await idToken() }).catch(() => {}); }
     await forget(); dropAccount(id); ['pd.mail.', 'pd.dir.', 'pd.status.'].forEach((k) => ls.del(k + id)); ls.del(CUR_LS);
-    resetSession(); PK8 = null; CLOUD = null; VIEW = null; FRIENDS = null; DOCS = {}; CUR = null; OPENED = null; listeners.forEach(fire); blank();
+    resetSession(); PK8 = null; CLOUD = null; FRIENDS = null; DOCS = {}; CUR = null; OPENED = null; listeners.forEach(fire); blank();
     if (kind === 'deleted') goneScreen(); else signInScreen(email, 'Your account was reset by the site owner. Sign in to set up a fresh portfolio.');
   }
   function goneScreen() {
@@ -1753,7 +1775,7 @@
         await fbAuth('delete', { idToken: await idToken() });
         const id = CUR.id;
         await forget(); dropAccount(id); ['pd.mail.', 'pd.dir.', 'pd.status.'].forEach((k) => ls.del(k + id)); ls.del(CUR_LS);
-        resetSession(); PK8 = null; CLOUD = null; VIEW = null; FRIENDS = null; DOCS = {}; CUR = null; OPENED = null; listeners.forEach(fire); blank();
+        resetSession(); PK8 = null; CLOUD = null; FRIENDS = null; DOCS = {}; CUR = null; OPENED = null; listeners.forEach(fire); blank();
         chooseScreen(); toast('Your account is deleted.');
       } catch (e) { console.error(e); b.disabled = false; err(e.message || String(e)); }
     };
@@ -1913,95 +1935,95 @@
     listFriends().then(() => { const x = $l('#lk-lk-friends'); if (x) x.textContent = 'Friends' + (incoming() ? ` · ${incoming()} new` : ''); }).catch(() => {});
     $l('#lk-lk-out').onclick = async () => {
       await idbDel('link:' + CUR.id).catch(() => {}); LINK = null; CLOUD = null; FRIENDS = null; MY_HANDLE = null; accountBadge();
-      if (VIEW) await viewMine().catch(() => {});
       editBar(); open(); toast('Signed out of the site account on this device. Your portfolio is unchanged.');
     };
   }
-  /* ---------- the friends hub (the top-left menu) and the Overview's friends cards ----------
+  /* ---------- the friends hub (the top-left menu), the Overview's friends cards and the friends' activity ----------
      You and your friends, ranked by the return over the period picked at the top of the page (This month, This year,
      All time, ... : the page's own period selector, window.pdPeriod), with this month / this year / all time underneath.
-     Every figure is computed here with the page's own engine (PE.run, PA) from the same documents the full view would
-     show (a friend's copy plus the shared market data), so tapping a row opens exactly those numbers. A friend's
-     documents are kept in memory only (refreshed every 10 minutes); the figures are recomputed when the period changes.
-     Your other portfolios on this device and "Another portfolio" sit below. */
+     Every figure comes from the same percentages profiles friends share (engine2.js friendProfile / profilePeriod), yours
+     included, so the ranking compares like with like. Below the cards: the friends' latest trades, newest first. Tapping a
+     row, a card or a trade opens that profile. A friend's profile is kept in memory only (refreshed every 10 minutes).
+     Your other portfolios on this device and "Another portfolio" sit below in the hub. */
   const HUB = { you: null, youData: null, friends: {}, market: null, marketAt: 0, busy: false };
   // the page's period: { sel: {type, asOf, from, to}, label } (app.html pdPeriod); All time when the page has none
   const period = () => (window.pdPeriod && window.pdPeriod()) || { sel: { type: 'Since Inception' }, label: 'All time' };
-  const periodKey = (sel) => JSON.stringify([sel.type, sel.asOf || null, sel.from || null, sel.to || null]);
-  function summarize(docs, sel) {
-    const E = window.PE, A = window.PA, st0 = docs && docs['portfolio/settings'];
-    if (!E || !A || !st0 || !st0.inception) return null;
-    try {
-      const tx = Object.keys(docs).filter((k) => k.startsWith('ledger/')).sort().flatMap((k) => (docs[k] && docs[k].rows) || []);
-      const assets = (docs['portfolio/assets'] || {}).items || {}, marks0 = (docs['portfolio/marks'] || {}).months || {};
-      const history = {}; Object.keys(docs).forEach((k) => { if (k.startsWith('history/')) history[k.slice(8)] = docs[k]; });
-      const today = E.cairoToday(), led = E.runLedger(tx), pb = A.priceBook(history), pricer = A.makePricer(assets, led, pb);
-      const fallback = (name) => { const p = pricer(name, today); return p ? { p: p.p, d: pb.last } : null; };
-      let D = null; try { D = A.daily(st0, led, assets, pb, marks0, today); } catch (e) { D = null; }
-      let marks = marks0; try { if (Object.keys(history).length) marks = A.estimateMarks(st0, marks0, led, assets, pb, today); } catch (e) { marks = marks0; }
-      let market = docs['market/latest'] || null;
-      if (market && LIVE && Date.parse(LIVE.asOf) > Date.parse(market.asOf || 0)) market = Object.assign({}, market, LIVE);
-      const data = { settings: st0, marks, assets, tx, market, bench: docs['bench/egx30'] || null };
-      const run = (q) => { try { return E.run(data, q, { fallback, daily: D || undefined }); } catch (e) { return null; } };
-      const tw = (R) => (R && R.stats && R.stats.n ? (R.stats.headlineTwr != null ? R.stats.headlineTwr : R.stats.twr) : null);
-      const Ra = run({ type: 'Since Inception' });
-      return { name: st0.name || '', month: tw(run({ type: 'Month' })), ytd: tw(run({ type: 'YTD' })), all: tw(Ra),
-        picked: sel ? tw(run(sel)) : tw(Ra), value: Ra ? (Ra.liveCash != null ? Ra.liveCash : Ra.settings.cash) + Ra.pos.mvTotal : null };
-    } catch (e) { console.warn('summary', e); return null; }
+  // a portfolio's percentages profile from its documents (with the live prices when they are newer than the documents')
+  function profileFrom(docs, info) {
+    if (!window.PA || !window.PE) return null;
+    let market = docs['market/latest'] || null;
+    if (market && LIVE && Date.parse(LIVE.asOf) > Date.parse(market.asOf || 0)) market = Object.assign({}, market, LIVE);
+    try { const run = window.PA.portfolioRun(docs, null, { market }); return run ? window.PA.friendProfile(run, info) : null; }
+    catch (e) { console.warn('profile', e); return null; }
   }
-  // one portfolio's figures for the current period, recomputed only when its documents or the period change
-  function figures(h, docs, sel) {
-    const k = periodKey(sel);
-    if (!h.s || h.k !== k || h.docs !== docs) { h.s = summarize(docs, sel); h.k = k; h.docs = docs; }
-    return h.s;
+  // this portfolio's own profile, rebuilt when its documents change
+  function myProfile() {
+    if (!HUB.you || HUB.youData !== DATA_AT) { HUB.you = profileFrom(DOCS, { handle: MY_HANDLE || '' }); HUB.youData = DATA_AT; }
+    return HUB.you;
   }
   async function hubMarket() {
     if (!HUB.market || Date.now() - HUB.marketAt > 600e3) { HUB.market = (await fetchMarket().catch(() => ({ docs: {} }))).docs || {}; HUB.marketAt = Date.now(); }
     return HUB.market;
   }
-  // a friend's documents (their shared copy, plus the shared market data unless the copy carries its own)
-  async function friendDocs(f) {
+  // a friend's profile from their share; a copy from before profiles (the documents themselves) is turned into one here
+  async function friendProfile(f) {
     const j = await fsReq('GET', `shares/${f.uid}/to/${CLOUD.uid}`);
-    const snapObj = JSON.parse(await gunzip(await unseal(JSON.parse(fStr(j, 'pkg')), SHARE_LABEL, acctKey())));
-    const docs = Object.assign({}, snapObj.full ? {} : await hubMarket(), snapObj.docs || {});
+    const snap = JSON.parse(await gunzip(await unseal(JSON.parse(fStr(j, 'pkg')), SHARE_LABEL, acctKey())));
+    if (snap.v >= 2 && snap.profile) return Object.assign({}, snap.profile, { at: snap.at });
+    const docs = Object.assign({}, snap.full ? {} : await hubMarket(), snap.docs || {});
     macroMarks(docs);
-    return docs;
+    const p = profileFrom(docs, { name: snap.name });
+    if (!p) throw Object.assign(new Error('their copy could not be read'), { code: 'bad' });
+    return Object.assign(p, { at: snap.at });
   }
   const pctH = (x) => { if (x == null || !isFinite(x)) return '—'; const t = (Math.abs(x) * 100).toFixed(1); return (t === '0.0' ? '' : x > 0 ? '+' : '−') + t + '%'; };
   const toneH = (x) => (x == null || Math.abs(x) < 0.0005 ? '' : x > 0 ? 'pos' : 'neg');
-  const egpH = (x) => (x == null || !isFinite(x) ? '' : new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(x) + ' EGP');
   const hasAcct = () => !!(CLOUD && PK8 && CUR && (CUR.cloud || LINK));
+  // a profile's figures for the page's period: the picked one, this month, this year, all time
+  function figures(p, sel) {
+    if (!p) return null;
+    const r = (q) => { const x = window.PA.profilePeriod(p, q); return x ? x.r : null; };
+    return { picked: r(sel), month: r({ type: 'Month' }), ytd: r({ type: 'YTD' }), all: r({ type: 'Since Inception' }) };
+  }
+  const friendsNow = () => ((hasAcct() && FRIENDS) || []).filter((f) => f.status === 'friends');
   // you first, then your friends; ranked by the return over the picked period (a row still loading goes last)
   function hubRows() {
-    const sel = period().sel;
-    if (!VIEW && HUB.youData !== DATA_AT) { HUB.you = {}; HUB.youData = DATA_AT; }    // your own documents changed
-    // while a friend's portfolio is open, DOCS are theirs: your row keeps using your own documents from before
-    const mine = !VIEW ? figures(HUB.you || (HUB.you = {}), DOCS, sel) : HUB.you && HUB.you.docs ? figures(HUB.you, HUB.you.docs, sel) : null;
-    const rows = [{ uid: 'me', me: true, name: (mine && mine.name) || CUR.name, handle: hasAcct() ? MY_HANDLE || '' : '', s: mine }].concat(((hasAcct() && FRIENDS) || []).filter((f) => f.status === 'friends')
-      .map((f) => { const h = HUB.friends[f.uid] || {}; return { uid: f.uid, name: f.name, handle: cleanHandle(f.handle), s: h.docs ? figures(h, h.docs, sel) : null, err: h.err }; }));
+    const sel = period().sel, mine = myProfile();
+    const rows = [{ uid: 'me', me: true, name: (mine && mine.name) || CUR.name, handle: hasAcct() ? MY_HANDLE || '' : '', s: figures(mine, sel) }].concat(friendsNow()
+      .map((f) => { const h = HUB.friends[f.uid] || {}; return { uid: f.uid, name: f.name, handle: cleanHandle(f.handle || (h.p && h.p.handle)), s: figures(h.p, sel), err: h.err }; }));
     const v = (r) => (r.s && r.s.picked != null ? r.s.picked : -1e9);
     return rows.sort((a, b) => v(b) - v(a));
+  }
+  // the friends' latest trades, newest first (yours are not in it: you know them)
+  function feedItems(n) {
+    const out = [];
+    for (const f of friendsNow()) { const h = HUB.friends[f.uid]; if (h && h.p) (h.p.trades || []).forEach((t) => out.push({ f, h: cleanHandle(f.handle || h.p.handle), t })); }
+    return out.sort((a, b) => (a.t.d < b.t.d ? 1 : a.t.d > b.t.d ? -1 : 0)).slice(0, n);
   }
   // under the big number: the other standard periods (the picked one is already the big number)
   const otherPeriods = (s, sel) => [['Month', 'Month', s.month], ['YTD', 'This year', s.ytd], ['Since Inception', 'All time', s.all]]
     .filter(([t]) => t !== sel.type || sel.asOf || sel.from).map(([, l, x]) => `${l} ${pctH(x)}`).join(' · ');
-  // the Overview section: the same ranking as cards
+  // the Overview section: the ranking as cards, then the friends' activity
   function panelInner() {
-    const rows = hubRows(), viewing = VIEW ? VIEW.uid : 'me', inc = incoming(), P = period();
-    const card = (r, i) => `<button type="button" class="pdf-card${r.uid === viewing ? ' cur' : ''}" data-hub="view" data-uid="${esc(r.uid)}" data-testid="panel-${r.me ? 'me' : 'friend'}">
+    const rows = hubRows(), inc = incoming(), P = period(), feed = feedItems(8);
+    const card = (r, i) => `<button type="button" class="pdf-card${r.me ? ' cur' : ''}" data-hub="profile" data-uid="${esc(r.uid)}" data-testid="panel-${r.me ? 'me' : 'friend'}">
         <span class="pdf-top"><span class="pdf-rank">#${i + 1}</span><b>${esc(r.name || '')}</b></span>${r.handle ? `<small class="pdf-handle">@${esc(r.handle)}</small>` : ''}
         <span class="pdf-ytd ${toneH(r.s && r.s.picked)}" data-testid="panel-picked">${pctH(r.s && r.s.picked)}</span><small>${esc(P.label)}</small>
         <small>${r.err ? esc(r.err) : r.s ? otherPeriods(r.s, P.sel) : 'Loading…'}</small>
-        <small class="pdf-tag">${r.me ? (viewing === 'me' ? 'You' : 'You · tap to go back') : r.uid === viewing ? 'Viewing now' : 'Tap to view'}</small></button>`;
+        <small class="pdf-tag">${r.me ? 'You · tap to see what friends see' : 'Tap to see their profile'}</small></button>`;
+    const item = (x) => `<button type="button" class="pdf-feed-row" data-hub="profile" data-uid="${esc(x.f.uid)}" data-testid="feed-item">
+        <span class="pdf-av">${esc((x.f.name || '?').trim().charAt(0).toUpperCase())}</span>
+        <span class="pdf-feed-txt"><b>${esc(x.h ? '@' + x.h : x.f.name)}</b> ${verb(x.t)} <b>${esc(x.t.s || x.t.n)}</b>${x.t.side === 'sell' && x.t.ret != null ? ' ' + pcH(x.t.ret) : ''}<small>${esc(ago(x.t.d))}</small></span></button>`;
     return `<div class="pdf-head"><h3>Friends · ${esc(P.label)}</h3><button type="button" class="pdf-add" data-hub="friends" data-testid="panel-add">+ Add friend</button></div>
       ${inc ? `<button type="button" class="pdf-note" data-hub="friends" data-testid="panel-requests">${inc} friend request${inc > 1 ? 's' : ''} waiting: tap to answer</button>` : ''}
       <div class="pdf-cards">${rows.map(card).join('')}</div>
-      ${rows.length === 1 ? '<p class="pdf-empty">Add friends by their @username to see their portfolios here and compare returns. They need an account on this site first: send them the link.</p>' : ''}`;
+      ${rows.length === 1 ? '<p class="pdf-empty">Add friends by their @username to compare returns. They need an account on this site first: send them the link. Friends see percentages only, never amounts.</p>' : ''}
+      ${feed.length ? `<div class="pdf-feed" data-testid="friends-feed"><h3>Friends' activity</h3>${feed.map(item).join('')}</div>` : ''}`;
   }
   window.pdFriendsPanel = () => {
     if (!hasAcct()) return '';
     setTimeout(() => refreshHub(document.getElementById('pf-menu'), true).catch(() => {}), 0);
-    const pend = !VIEW && ((DOCS['portfolio/settings'] || {}).historyImport || {}).status === 'pending';
+    const pend = ((DOCS['portfolio/settings'] || {}).historyImport || {}).status === 'pending';
     const card = !pend ? '' : gmailOn()
       ? '<section class="pd-friends pd-building" data-testid="history-pending"><h3>Building your portfolio…</h3><p class="pdf-empty">Your holdings, trades and returns are being built from your Thndr emails. It usually takes <b>about 10 minutes</b> after connecting Gmail. <b>We email you when it is ready</b>, and this page fills in by itself.</p></section>'
       : '<section class="pd-friends pd-building" data-testid="history-pending"><h3>One step left</h3><p class="pdf-empty">Connect the Gmail your Thndr emails go to, and your portfolio is built from them in about 10 minutes.</p><button type="button" class="pdf-add" data-hub="gmail" data-testid="pending-connect">Connect Gmail</button></section>';
@@ -2010,10 +2032,9 @@
   };
   function hubHTML() {
     const acct = hasAcct(), rows = hubRows(), P = period();
-    const viewing = VIEW ? VIEW.uid : 'me';
-    const row = (r, i) => `<button type="button" class="hub-row${r.uid === viewing ? ' cur' : ''}" data-hub="view" data-uid="${esc(r.uid)}" data-testid="hub-${r.me ? 'me' : 'friend'}">
+    const row = (r, i) => `<button type="button" class="hub-row${r.me ? ' cur' : ''}" data-hub="profile" data-uid="${esc(r.uid)}" data-testid="hub-${r.me ? 'me' : 'friend'}">
         <span class="hub-rank">${i + 1}</span>
-        <span class="hub-who"><b>${esc(r.name || '')}</b><small>${r.me ? 'You' + (viewing === 'me' ? ' · open now' : ' · back to yours') : r.uid === viewing ? 'Viewing now' : r.err ? esc(r.err) : r.s ? otherPeriods(r.s, P.sel) : 'Loading…'}</small>${r.me && r.s ? `<small>${otherPeriods(r.s, P.sel)}</small>` : ''}</span>
+        <span class="hub-who"><b>${esc(r.name || '')}</b><small>${r.me ? 'You' : r.err ? esc(r.err) : r.handle ? '@' + esc(r.handle) : ''}</small><small>${r.s ? otherPeriods(r.s, P.sel) : r.err ? '' : 'Loading…'}</small></span>
         <span class="hub-num ${toneH(r.s && r.s.picked)}">${pctH(r.s && r.s.picked)}<small>${esc(P.label)}</small></span></button>`;
     const others = allPortfolios().filter((p) => p.id !== CUR.id && (p.cloud || !!ls.get('pd.dev.' + p.id)));
     const inc = acct ? incoming() : 0;
@@ -2021,7 +2042,7 @@
       ${inc ? `<button type="button" class="hub-note" data-hub="friends" data-testid="hub-requests">${inc} friend request${inc > 1 ? 's' : ''} waiting</button>` : ''}
       ${rows.map(row).join('')}
       ${!acct ? `<button type="button" class="hub-note" data-hub="link" data-testid="hub-signin">See your friends here<small>${CUR.cloud ? 'sign in again to load them' : 'sign in with your site account'}</small></button>`
-        : rows.length === 1 ? '<p class="hub-empty">Add friends to see their portfolios and compare returns.</p>' : ''}
+        : rows.length === 1 ? '<p class="hub-empty">Add friends to compare returns.</p>' : ''}
       ${others.length ? `<div class="hub-head"><span>Your other portfolios</span></div>${others.map((p) => `<div class="hub-otherrow"><button type="button" class="hub-other" data-pid="${esc(p.id)}" data-testid="switch-${esc(p.id)}">${esc(p.name)}</button><button type="button" class="hub-forget" data-hub="forget" data-id="${esc(p.id)}" data-testid="forget-${esc(p.id)}" title="Remove from this device">Remove</button></div>`).join('')}` : ''}
       <button type="button" class="hub-other" data-testid="switch-other" onclick="pdSwitch()">Another portfolio<small>sign in, or open one with a setup key</small></button>`;
   }
@@ -2035,7 +2056,7 @@
       await listFriends().catch(() => {}); draw();
       for (const f of (FRIENDS || []).filter((x) => x.status === 'friends')) {
         const h = HUB.friends[f.uid]; if (h && Date.now() - h.t < 600e3) continue;
-        try { HUB.friends[f.uid] = { docs: await friendDocs(f), t: Date.now() }; }
+        try { HUB.friends[f.uid] = { p: await friendProfile(f), t: Date.now() }; }
         catch (e) { HUB.friends[f.uid] = { err: e.code === 'not_found' ? 'not shared yet' : 'could not load', t: Date.now() }; }
         draw();
       }
@@ -2063,11 +2084,7 @@
     if (what === 'friends') return friendsScreen();
     if (what === 'gmail') return gmailSetupScreen(() => open(), false, false, true);
     if (what === 'link') return CUR.cloud ? lock(false) : linkScreen();
-    if (what === 'view') {
-      if (b.dataset.uid === 'me') { if (VIEW) await viewMine().catch((x) => toast('Could not reopen your portfolio: ' + (x.message || x), 'error')); return; }
-      const f = (FRIENDS || []).find((x) => x.uid === b.dataset.uid); if (!f || (VIEW && VIEW.uid === f.uid)) return;
-      try { await viewFriend(f); } catch (x) { toast(x.code === 'not_found' ? `${f.name} has not shared a copy yet. It appears after they next open the site.` : 'Could not open it: ' + (x.message || x), 'error'); }
-    }
+    if (what === 'profile') return openProfile(b.dataset.uid);
   });
   window.pdAccountMenu = () => { if (!CUR || !PK8) return; if (CUR.cloud) accountScreen(); else if (LINK) linkedScreen(); else linkScreen(); };
   window.pdPortfolioList = () => allPortfolios().filter((p) => (CUR && p.id === CUR.id) || !!ls.get('pd.dev.' + p.id)).map((p) => ({ id: p.id, name: p.name }));
@@ -2106,7 +2123,7 @@
   }
   // while the page is visible and unlocked: the data every 30 minutes (every 2 minutes while a new portfolio is being
   // built from the Thndr emails, so it appears by itself), live prices every 10 minutes during the session
-  const building = () => !VIEW && ((DOCS['portfolio/settings'] || {}).historyImport || {}).status === 'pending';
+  const building = () => ((DOCS['portfolio/settings'] || {}).historyImport || {}).status === 'pending';
   function tick() {
     if (document.hidden || !PK8 || !lockEl().hidden) return;
     const now = Date.now(); footerFresh();
