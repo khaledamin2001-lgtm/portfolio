@@ -47,6 +47,8 @@ its portfolio (the site says so when it is switched on). For each package this j
      the MAIN portfolio's): tools/wrapped.js -> emails.wrapped, ranked among friends on the year's return;
   7. writes status/{uid}.job {at, gmail, report, friends, error} for the site owner's admin screen (no figures);
   8. saves {alertsSent, weeklySent, gmail, friendMailed, shares, leaderboardSent, reportCardSent, wrappedSent, lastReport} back to the account as users/{uid}/docs/sync__mail, encrypted to the account key.
+  9. one login: the site owner's verified account gets users/{uid}.mainKey once (the MAIN portfolio's key, sealed to the
+     account's own key, ensure_main_key), so signing in with its email and password opens the main portfolio directly.
 Emails go from GMAIL_ADDRESS to the address in the package only. One account failing never stops the others; the job
 exits 1 (and emails the owner) only when nothing could be done at all. Logs carry counts, never figures or addresses.
 """
@@ -64,6 +66,8 @@ API_KEY = "AIzaSyAYvh69A5VWAgmhKXt07RTgLpB_1hYBjA8"
 PROJECT = "portfolio-desk-4d14a"
 FS = f"https://firestore.googleapis.com/v1/projects/{PROJECT}/databases/(default)/documents"
 MAIL_LABEL = b"portfolio-mail-v1"
+MAINKEY_LABEL = b"portfolio-mainkey-v1"
+MAIN_PRIV = None        # the main portfolio's key (p/khaled/keys.json, the same key that opens the mail packages): set by main()
 SHARE_LABEL = b"portfolio-share-v1"
 OWNER_HASH = "467022c320757248bf70115c83d305a7e4d139c35e1be5f8117fb30d7f769347"     # SHA-256 of the site owner's sign-in email (the address is not published here)
 SITE = "https://khaledamin2001-lgtm.github.io/portfolio/"
@@ -551,6 +555,39 @@ def leaderboard(mine, theirs, M):
     return [{k: v for k, v in r.items() if k != "p"} for r in rows], bench, best
 
 
+def seal_bytes(plain, pub_b64, label):
+    """bytes sealed to a public key, as the site's seal() / unseal() (ECDH P-256, HKDF-SHA256 salted with the ephemeral key,
+    AES-GCM with the label as associated data): {"v": 1, "epk", "iv", "ct"} as a JSON string."""
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives import serialization, hashes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    peer = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), base64.b64decode(pub_b64))
+    eph = ec.generate_private_key(ec.SECP256R1())
+    epk = eph.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
+    key = HKDF(hashes.SHA256(), 32, epk, label).derive(eph.exchange(ec.ECDH(), peer))
+    iv = os.urandom(12)
+    b = lambda x: base64.b64encode(x).decode()
+    return json.dumps({"v": 1, "epk": b(epk), "iv": b(iv), "ct": b(AESGCM(key).encrypt(iv, plain, label))}, separators=(",", ":"))
+
+
+def ensure_main_key(http, tok, uid, acct_pub_b64, main_priv, portfolio_id="khaled"):
+    """One login for the site owner: users/{uid}.mainKey = {id, pk8} of the MAIN portfolio, sealed to the owner's account
+    key (as site/lock.js saveMainKey), written once when missing. Signing in with the account's email and password then
+    opens the main portfolio directly on any device. Returns True when it was written."""
+    from cryptography.hazmat.primitives import serialization
+    st, j = http.json("GET", f"{FS}/users/{uid}", headers={"Authorization": "Bearer " + tok})
+    if st != 200 or (((j or {}).get("fields") or {}).get("mainKey") or {}).get("stringValue"):
+        return False
+    pk8 = main_priv.private_bytes(serialization.Encoding.DER, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+    env = seal_bytes(json.dumps({"v": 1, "id": portfolio_id, "pk8": base64.b64encode(pk8).decode()}).encode(), acct_pub_b64, MAINKEY_LABEL)
+    st, _ = http.json("PATCH", f"{FS}/users/{uid}?updateMask.fieldPaths=mainKey", {"fields": {"mainKey": {"stringValue": env}}},
+                      headers={"Authorization": "Bearer " + tok})
+    if st != 200:
+        raise jc.JobError("one login", f"Firestore answered {st} saving the main key")
+    return True
+
+
 def confirmed_friend(http, tok, f):
     """A link's name, email and key are written by the other person: seal to that key only when directory/{email} (which
     only the owner of that sign-in email can write) names the same account and the same key. A request sent to an
@@ -893,6 +930,13 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                             changed = True
                 except Exception as e:      # never stops the rest; the next run tries again (until the 10th)
                     notes.append(f"wrapped not done ({getattr(e, 'step', type(e).__name__)})")
+            # one login: the owner's verified account holds the main portfolio's key (once)
+            if owner_acct and not dry and MAIN_PRIV is not None and token_claims(tok).get("email_verified"):
+                try:
+                    if ensure_main_key(http, tok, pkg["uid"], keys["pub"], MAIN_PRIV):
+                        notes.append("one login set up (the account opens the main portfolio)")
+                except Exception as e:
+                    notes.append(f"one login not set up ({getattr(e, 'step', type(e).__name__)})")
             # the owner hears about every new account (the admin list, read with the owner's verified sign-in)
             if owner_acct and not dry:
                 try:
@@ -960,6 +1004,8 @@ def main(argv=None, http=None, send=None):
         if not key:
             raise jc.JobError("mail key", "SETUP_KEY is not set")
         priv = store.unlock(keys, key)
+        global MAIN_PRIV
+        MAIN_PRIV = priv
         http = http or Http()
         step = "list"
         pkgs = list_packages(http)

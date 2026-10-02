@@ -196,6 +196,7 @@ try:
     # directory/{email}: only the owner of that sign-in email writes it (the database rules), so it is the truth
     DIRECTORY = {"friend@example.com": {"uid": UID, "pub": apub}, "friend2@example.com": {"uid": GUID, "pub": gpub_}, "owner@example.com": {"uid": OUID, "pub": opub_}}
     SHARES, STATUS, share_writes = {}, {}, []
+    PROFILES, profile_writes = {OUID: {"name": {"stringValue": "Owner"}}, UID: {"name": {"stringValue": "Demo"}}}, []
     def open_share(priv, key):
         e = json.loads(SHARES[key]["pkg"]); b = base64.b64decode; epk = b(e["epk"])
         k = HKDF(hashes.SHA256(), 32, epk, b"portfolio-share-v1").derive(priv.exchange(ec.ECDH(), ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), epk)))
@@ -223,6 +224,13 @@ try:
             path = url.split("?")[0].replace(FS + "/", "")
             if path == "mail":
                 return 200, {"documents": [{"name": f"projects/p/databases/(default)/documents/mail/{k.split('/')[1]}", "fields": {"pkg": {"stringValue": v["pkg"]}}} for k, v in DB.items() if k.startswith("mail/")]}
+            if path.startswith("users/") and path.count("/") == 1:      # the profile document (users/{uid}): only its account
+                u = path.split("/")[1]
+                if uid_of(tok) != u: return 403, {"error": {"status": "PERMISSION_DENIED"}}
+                if method == "GET":
+                    return (200, {"fields": PROFILES[u]}) if u in PROFILES else (404, {"error": {"status": "NOT_FOUND"}})
+                PROFILES.setdefault(u, {}).update(body["fields"]); profile_writes.append(u)
+                return 200, {}
             if path.startswith("users/"):
                 uid = path.split("/")[1]
                 if uid_of(tok) != uid: return 403, {"error": {"status": "PERMISSION_DENIED"}}
@@ -283,6 +291,14 @@ try:
           len(sent) == 3 and "heads-up" in sent[0]["subject"] and sent[1]["html"] and sent[2]["subject"] == "Zeyad's Portfolio wants to be friends on the portfolio site"
           and "?friends" in sent[2]["text"], json.dumps([m["subject"] for m in sent]))
     sent[:] = sent[:2]
+    # one login: the owner's verified account now holds the MAIN portfolio's key, sealed to the account's key
+    mk = (PROFILES.get(OUID) or {}).get("mainKey", {}).get("stringValue")
+    opened_mk = ram.open_json(oacct, mk, b"portfolio-mainkey-v1") if mk else {}
+    main_pk8 = store.unlock(store.load_keys(os.path.join(code, "p", "khaled", "keys.json")), os.environ["SETUP_KEY"]).private_bytes(
+        serialization.Encoding.DER, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+    check("one login: the owner's account gets the main portfolio's key, sealed to its own key; no other account does",
+          opened_mk.get("id") == "khaled" and base64.b64decode(opened_mk.get("pk8", "")) == main_pk8 and profile_writes == [OUID]
+          and "mainKey" not in (PROFILES.get(UID) or {}), json.dumps(profile_writes))
     # friends
     check("friends: a copy is written for every friend and nobody else (not for a link posing as a friend with another key)", sorted(share_writes) == sorted([(UID, GUID), (GUID, UID), (GUID, OUID), (OUID, GUID)]), json.dumps(share_writes))
     s1 = open_share(acct, (GUID, UID))
@@ -368,6 +384,7 @@ try:
     sent.clear(); commits.clear(); share_writes.clear()
     rc2 = ram.main(argv, http=FakeHttp(), send=send)
     check("friends: a second run rewrites no unchanged copy and emails no request again", share_writes == [], json.dumps(share_writes))
+    check("one login: written once", profile_writes == [OUID], json.dumps(profile_writes))
     check("a second run sends nothing (each alert once, one summary a week)", rc2 == 0 and sent == [], json.dumps([m["subject"] for m in sent]))
     check("gmail: a second run finds nothing new and changes no portfolio document", [n for u, n in commits if u == GUID] == [1] and sorted(r["id"] for r in (gdoc("ledger/y2026") or {}).get("rows") or []) == ["o1", "o2"], json.dumps(commits))
     STATUS["Unewbie"] = {"name": "Newbie's Portfolio", "email": "newbie@example.com"}
