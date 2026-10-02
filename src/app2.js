@@ -48,7 +48,7 @@ function dailySection(){
     <div class="tbl"><table data-testid="recon-table"><thead><tr><th>Month</th><th>Last session</th><th class="n">From prices</th><th class="n">Your mark</th><th class="n">Difference</th><th class="n">%</th></tr></thead><tbody>
     ${D.recon.map(r=>`<tr><td>${M(r.month)}</td><td>${dfmt(r.day)}</td><td class="n">${egp(r.model)}</td><td class="n">${egp(r.marks)}</td><td class="n ${Math.abs(r.pct)>0.01?'neg':''}">${egp(r.diff)}</td><td class="n">${Math.abs(r.pct)>0.01?`<span class="pill stale">${pct(r.pct,2)}</span>`:pct(r.pct,2)}</td></tr>`).join('')}
     </tbody></table></div>
-    <p class="note" style="margin:10px 0 0">Large gaps usually mean the month-end mark was typed as a round number. Posting the Thndr statement (Settings → Statements &amp; imports) replaces it with the exact figure from the positions snapshot.</p></div>`;
+    <p class="note" style="margin:10px 0 0">Large gaps usually mean the month-end mark was typed as a round number. Posting the Thndr statement (More → Statements) replaces it with the exact figure from the positions snapshot.</p></div>`;
 }
 
 // ---------- Performance: Daily P/L calendar ----------

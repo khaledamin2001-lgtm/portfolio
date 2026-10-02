@@ -460,6 +460,18 @@ try:
     gpk = base64.b64encode(gk.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)).decode()
     check("open_json opens what seal_json sealed", ram.open_json(gk, ram.seal_json({"v": 2, "x": [1]}, gpk, b"portfolio-share-v1"), b"portfolio-share-v1") == {"v": 2, "x": [1]})
 
+    # ---- the yearly wrap-up: early January, last year, ranked among friends; the owner's from the main portfolio ----
+    def wrap_run(now):
+        sent.clear(); ram.main(["--engine", eng, "--code", code, "--now", now], http=FakeHttp(), send=send)
+        return {m["to"]: m for m in sent if " wrapped · " in m["subject"]}
+    wr = wrap_run("2027-01-08T13:30:00Z")
+    check("wrapped: on the 8th of January every account with a portfolio gets its 2026 (the owner's from the main portfolio), to its own address",
+          sorted(wr) == ["friend2@example.com", "friend@example.com", "hist2@example.com", "owner@example.com"] and all(": your 2026 wrapped · " in m["subject"] for m in wr.values())
+          and "2026 IN NUMBERS" in wr["owner@example.com"]["text"], json.dumps({k: v["subject"] for k, v in wr.items()}))
+    check("wrapped: ranked among friends (percentages only), the account without friends without a ranking",
+          "YOU AND YOUR FRIENDS" in wr["friend@example.com"]["text"] and "Friend Portfolio" in wr["friend@example.com"]["text"] and "YOU AND YOUR FRIENDS" not in wr["hist2@example.com"]["text"])
+    check("wrapped: once a year", wrap_run("2027-01-08T17:30:00Z") == {} and wrap_run("2027-02-02T13:30:00Z") == {})
+
     # ---- the morning brief (run_morning.py): the owner's main portfolio, and the accounts that switched it on ----
     import run_morning, jobs_common as jc
     opkg = DB[f"mail/{OUID}"]["pkg"]

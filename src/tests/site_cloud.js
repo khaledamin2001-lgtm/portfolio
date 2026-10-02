@@ -267,7 +267,7 @@ const up = (url) => new Promise((res) => { http.get(url, (r) => { r.resume(); re
     // ---- 3. everything stored is encrypted, and private ----
     const blobs = Object.entries(FB.docs).filter(([k]) => k.startsWith(`users/${uid}/docs/`)).map(([, v]) => v.fields.blob.stringValue);
     check('every stored document is an encrypted envelope with nothing in the clear', blobs.length === 5 && blobs.every((b) => { const e = JSON.parse(b); return e.v === 1 && e.epk && e.iv && e.ct && !b.includes(SYM) && !b.includes('Omar') && !b.includes('abcdefgh'); }));
-    await page.click('#tab-settings'); await page.waitForTimeout(300);
+    await page.click('#tab-more'); await page.click('[data-testid=sec-inputs]'); await page.waitForTimeout(300);
     check('no Thndr name was asked: the settings hold none (the first statement sets the account)', (await page.inputValue('#st-holder')) === '');
     const other = identity('signUp', { email: 'other@example.com', password: 'x'.repeat(10), returnSecureToken: true })[1];
     const denied = firestore('GET', `https://firestore.googleapis.com${FSB}users/${uid}/docs/portfolio__settings`, { authorization: 'Bearer ' + other.idToken });
@@ -275,7 +275,7 @@ const up = (url) => new Promise((res) => { http.get(url, (r) => { r.resume(); re
 
     // ---- 4. saves, and a stale save is redone ----
     const s0 = FB.docs[`users/${uid}/docs/portfolio__settings`].updateTime;
-    await page.click('#tab-settings'); await page.fill('#st-rf', '21.5'); await $t('save-settings').click();
+    await page.click('#tab-more'); await page.click('[data-testid=sec-inputs]'); await page.fill('#st-rf', '21.5'); await $t('save-settings').click();
     for (let i = 0; i < 40 && FB.docs[`users/${uid}/docs/portfolio__settings`].updateTime === s0; i++) await page.waitForTimeout(250);
     const s1 = FB.docs[`users/${uid}/docs/portfolio__settings`].updateTime;
     check('a settings save lands in the account', s1 !== s0);
@@ -296,7 +296,7 @@ const up = (url) => new Promise((res) => { http.get(url, (r) => { r.resume(); re
     let asked = '';
     page.on('dialog', (d) => { asked = d.message(); d.accept(); });
     const L0 = (FB.docs[`users/${uid}/docs/ledger__y${NY}`] || {}).updateTime;
-    await page.click('#tab-settings');
+    await page.click('#tab-more'); await page.click('[data-testid=sec-statements]');
     check('the statement upload is offered', await $t('statement-upload-label').isVisible());
     await $t('statement-upload').setInputFiles([path.join(STMT, 'account-statement.pdf'), path.join(STMT, 'position-snapshot.pdf')]);
     await $t('statement-review').waitFor({ timeout: 60000 }).catch(() => {});
@@ -307,7 +307,7 @@ const up = (url) => new Promise((res) => { http.get(url, (r) => { r.resume(); re
     check('posting the statement saves the ledger, the month-end marks and the import record to the account',
       (FB.docs[`users/${uid}/docs/ledger__y${NY}`] || {}).updateTime !== L0 && !!FB.docs[`users/${uid}/docs/imports__${NM}`]);
     await page.waitForTimeout(1500);
-    await page.click('#tab-activity'); await page.waitForTimeout(300);
+    await page.click('#tab-more'); await page.click('[data-testid=sec-ledger]'); await page.waitForTimeout(300);
     check('the statement rows are in the ledger on the page', /Deposit[\s\S]*10,000/.test(await page.locator('#main').textContent()));
 
     // ---- 4c. email updates: the package is sealed to the mail key and names this account ----
@@ -335,7 +335,7 @@ print(json.dumps({"uid": p["uid"], "email": p["email"], "prefs": p["prefs"], "re
     check('turning Thndr emails off deletes the Gmail login and keeps email updates', !FB.docs[`users/${uid}/docs/sync__gmail`] && !!FB.docs['mail/' + uid]);
     await page.waitForTimeout(500);
     if (!(await page.evaluate(() => document.getElementById('lock').hidden))) await $t('account-back').click();
-    await page.click('#tab-reports'); await page.waitForTimeout(400);
+    await page.click('#tab-more'); await page.click('[data-testid=sec-factsheet]'); await page.waitForTimeout(400);
     if (await page.locator('#fs-xlsx').count()) {
       await page.click('#fs-xlsx'); await page.waitForTimeout(300);
       check('Reports tab: an account is told its month-end Excel and PDF come by email', /emailed to you/.test(await page.locator('#toast').textContent()));
@@ -348,7 +348,7 @@ print(json.dumps({"uid": p["uid"], "email": p["email"], "prefs": p["prefs"], "re
     await page.click('[data-testid=live-lock]');
     await $t('live-password').fill(PW); await $t('live-password-submit').click();
     await A.lockHidden();
-    await page.click('#tab-settings');
+    await page.click('#tab-more'); await page.click('[data-testid=sec-inputs]');
     check('lock + unlock with the password reopens the account (session refreshed)', (await page.inputValue('#st-rf')) === '20');
 
     // ---- 6. a second device ----
@@ -361,7 +361,7 @@ print(json.dumps({"uid": p["uid"], "email": p["email"], "prefs": p["prefs"], "re
     await B.lockHidden(60000).catch(() => {});
     if (await B.$t('live-bio-skip').count()) await B.$t('live-bio-skip').click();
     await B.lockHidden();
-    await B.page.click('#tab-settings');
+    await B.page.click('#tab-more'); await B.page.click('[data-testid=sec-inputs]');
     check('a second device signs in and sees the same portfolio', (await B.page.inputValue('#st-rf')) === '20');
 
     // ---- 7. password reset + recovery code; change password ----
@@ -378,7 +378,7 @@ print(json.dumps({"uid": p["uid"], "email": p["email"], "prefs": p["prefs"], "re
     await C.lockHidden(90000).catch(() => {});
     if (await C.$t('live-bio-skip').count()) await C.$t('live-bio-skip').click();
     await C.lockHidden();
-    await C.page.click('#tab-settings');
+    await C.page.click('#tab-more'); await C.page.click('[data-testid=sec-inputs]');
     check('the recovery code opens the portfolio', (await C.page.inputValue('#st-rf')) === '20');
     const D = await device('D');
     await D.page.goto(ORIGIN + '/index.html'); await D.$t('live-signin').click();

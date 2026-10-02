@@ -1582,7 +1582,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
       <label class="lk-check"><input type="checkbox" id="lk-ml-weekly" data-testid="mail-weekly" ${m.weekly ? 'checked' : ''}> Weekly summary (Thursday evening)</label>
       <label class="lk-check"><input type="checkbox" id="lk-ml-reports" data-testid="mail-reports" ${m.reports ? 'checked' : ''}> Month-end report (Excel + PDF)</label>
       <label class="lk-check"><input type="checkbox" id="lk-ml-leaderboard" data-testid="mail-leaderboard" ${m.leaderboard ? 'checked' : ''}> Friends leaderboard (1st of the month)</label>
-      <label class="lk-check"><input type="checkbox" id="lk-ml-card" data-testid="mail-report-card" ${m.reportCard ? 'checked' : ''}> Trading report card (early each month)</label>
+      <label class="lk-check"><input type="checkbox" id="lk-ml-card" data-testid="mail-report-card" ${m.reportCard ? 'checked' : ''}> Trading report card (early each month) and your year, wrapped (January)</label>
       <label class="lk-check"><input type="checkbox" id="lk-ml-morning" data-testid="mail-morning" ${m.morning ? 'checked' : ''}> Morning brief (Sunday to Thursday, about 9 am, before the market opens)</label>
       <button class="lk-btn" id="lk-ml-go" data-testid="mail-on">${on ? 'Save' : 'Turn on email updates'}</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>
       ${on ? '<button class="lk-btn ghost" id="lk-ml-off" data-testid="mail-off">Turn off email updates</button>' : ''}
@@ -2497,7 +2497,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   })();
 })();
 </script>
-<meta name="pd-build" content="934e282750d7 2026-10-02 04:40">
+<meta name="pd-build" content="2ef1d674ae0a 2026-10-02 05:27">
 <style>
 :root{
   /* Apple-style system: SF (the system font on iPhone and Mac) for everything, quiet greys, one blue accent, green / red
@@ -2581,7 +2581,7 @@ nav.tabs button[aria-selected="true"]{background:var(--surface);color:var(--ink)
 @media (max-width:860px) and (min-width:601px){nav.tabs{margin:0 0 10px;width:100%}nav.tabs button{flex:1;justify-content:center}}
 /* phones: an iOS tab bar fixed at the bottom of the screen, icon over a short label, frosted like the header */
 @media (max-width:600px){
-  nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:40;margin:0;width:auto;display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:0;
+  nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:40;margin:0;width:auto;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:0;
     padding:5px 2px calc(4px + env(safe-area-inset-bottom,0px));border-radius:0;overflow:visible;background:var(--glass);
     backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px);border-top:.5px solid var(--hair)}
   nav.tabs button{flex-direction:column;justify-content:center;gap:2px;padding:3px 0;border-radius:0;font-size:10px;font-weight:500;letter-spacing:.01em;color:var(--ink-3);min-height:48px}
@@ -2766,6 +2766,14 @@ textarea{width:100%;min-height:130px;font:12.5px/1.5 var(--f-mono)}
 .subnav a{font-size:13px;font-weight:500;padding:6px 13px;border-radius:999px;color:var(--ink);text-decoration:none;background:var(--fill)}
 .subnav a:hover{background:var(--fill-2)}
 .tsec{scroll-margin-top:110px;min-width:0;max-width:100%}
+details.morenums{margin-top:4px}details.morenums>summary{cursor:pointer;list-style:none;padding:14px 18px;border-radius:var(--r-lg,16px);background:var(--surface);box-shadow:var(--shadow);font-weight:600;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+details.morenums>summary::-webkit-details-marker{display:none}details.morenums>summary::after{content:"›";margin-left:auto;transition:transform .2s;color:var(--ink-3)}
+details.morenums[open]>summary::after{transform:rotate(90deg)}details.morenums[open]>summary{margin-bottom:12px}details.morenums>summary .muted{font-weight:400;font-size:13px}
+.secbar{display:flex;gap:6px;margin-bottom:16px;overflow-x:auto;scrollbar-width:none}.secbar::-webkit-scrollbar{display:none}
+.secbar button{flex:none;border:0;cursor:pointer;font:500 13.5px var(--f-ui);padding:8px 15px;border-radius:999px;color:var(--ink);background:var(--fill)}
+.secbar button:hover{background:var(--fill-2)}
+.secbar button[aria-selected="true"]{background:var(--ink);color:var(--bg);font-weight:600}
+@media (max-width:600px){.secbar{margin-inline:-16px;padding-inline:16px}.secbar button{min-height:38px}}
 .tsec>*+*{margin-top:18px}
 .tsec+.tsec{margin-top:34px;padding-top:0;border-top:0}
 .secttl{font:700 22px/1.2 var(--f-display);margin:0 0 14px;letter-spacing:-.025em}
@@ -2858,13 +2866,11 @@ button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.pl
   <div class="mast-in">
     <div class="brand"><div class="pf-switch"><button type="button" id="pf-name" class="pf-title" data-testid="portfolio-switch" aria-haspopup="menu" aria-expanded="false" title="Switch portfolio"><span id="pf-name-text">Portfolio</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="pf-menu" id="pf-menu" role="menu" hidden></div></div><span>EGX · Thndr · EGP</span></div>
     <nav class="tabs" role="tablist" id="tabs">
-      <button role="tab" data-tab="overview" id="tab-overview" aria-label="Overview"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 10.5 12 4l8.5 6.5"/><path d="M5.5 9v10.5h4.5V14h4v5.5h4.5V9"/></svg><span class="tl">Overview</span><span class="ts" aria-hidden="true">Overview</span></button>
+      <button role="tab" data-tab="overview" id="tab-overview" aria-label="Home"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 10.5 12 4l8.5 6.5"/><path d="M5.5 9v10.5h4.5V14h4v5.5h4.5V9"/></svg><span class="tl">Home</span><span class="ts" aria-hidden="true">Home</span></button>
       <button role="tab" data-tab="holdings" id="tab-holdings" aria-label="Holdings"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5a8.5 8.5 0 1 0 8.5 8.5H12z"/><path d="M15 3.9A8.5 8.5 0 0 1 20.1 9H15z"/></svg><span class="tl">Holdings</span><span class="ts" aria-hidden="true">Holdings</span></button>
-      <button role="tab" data-tab="performance" id="tab-performance" aria-label="Performance"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 17.5l5.5-6 4 3.5 7.5-8.5"/><path d="M15.5 6.5h5v5"/></svg><span class="tl">Performance</span><span class="ts" aria-hidden="true">Returns</span></button>
-      <button role="tab" data-tab="analysis" id="tab-analysis" aria-label="Analysis"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20V12M10 20V6M15 20v-9M20 20V9"/></svg><span class="tl">Analysis</span><span class="ts" aria-hidden="true">Analysis</span></button>
-      <button role="tab" data-tab="activity" id="tab-activity" aria-label="Activity"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6.5h11M9 12h11M9 17.5h11"/><circle cx="4.75" cy="6.5" r=".9" fill="currentColor"/><circle cx="4.75" cy="12" r=".9" fill="currentColor"/><circle cx="4.75" cy="17.5" r=".9" fill="currentColor"/></svg><span class="tl">Activity</span><span class="ts" aria-hidden="true">Activity</span></button>
-      <button role="tab" data-tab="reports" id="tab-reports" aria-label="Reports"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h8l4.5 4.5v12.5H6z"/><path d="M14 3.5V8h4.5M9 12.5h6.5M9 16h6.5"/></svg><span class="tl">Reports</span><span class="ts" aria-hidden="true">Reports</span></button>
-      <button role="tab" data-tab="settings" id="tab-settings" aria-label="Settings"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2.8l1.6 2.3 2.7-.6.9 2.6 2.6.9-.6 2.7 2.3 1.6-2.3 1.6.6 2.7-2.6.9-.9 2.6-2.7-.6L12 21.2l-1.6-2.3-2.7.6-.9-2.6-2.6-.9.6-2.7L2.5 12l2.3-1.6-.6-2.7 2.6-.9.9-2.6 2.7.6z"/></svg><span class="tl">Settings</span><span class="ts" aria-hidden="true">Settings</span></button>
+      <button role="tab" data-tab="performance" id="tab-performance" aria-label="Returns"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 17.5l5.5-6 4 3.5 7.5-8.5"/><path d="M15.5 6.5h5v5"/></svg><span class="tl">Returns</span><span class="ts" aria-hidden="true">Returns</span></button>
+      <button role="tab" data-tab="analysis" id="tab-analysis" aria-label="Trading"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20V12M10 20V6M15 20v-9M20 20V9"/></svg><span class="tl">Trading</span><span class="ts" aria-hidden="true">Trading</span></button>
+      <button role="tab" data-tab="more" id="tab-more" aria-label="More"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="12" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="18.5" cy="12" r="1.2" fill="currentColor"/></svg><span class="tl">More</span><span class="ts" aria-hidden="true">More</span></button>
     </nav>
   </div>
 </header>
@@ -4255,6 +4261,62 @@ button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.pl
     return { R: PE.run(data, sel || { type: 'Since Inception' }, { fallback, daily: D || undefined, today }), data, today };
   }
 
+  // Every sale of a stock (a part sale too; cash-like funds left out): its result over the average cost of the shares sold
+  // (the ledger's basis) and its days held from the buy that opened the position. [{d, s, n, kind, pl, roi, days}]
+  function salesOf(R, assets) {
+    const sectorOf = {}, symOf = {}; Object.values(assets || {}).forEach((a) => { if (a && a.name) { sectorOf[a.name] = a.sector; symOf[a.name] = a.symbol || ''; } });
+    const thr = typeof R.settings.openThreshold === 'number' ? R.settings.openThreshold : 0.5;
+    const held = {}, opened = {}, sales = [];
+    PE.sortLedger(R.ledger).forEach((t) => {
+      if (!t.a || (t.t !== 'Buy' && t.t !== 'Sell' && t.t !== 'Bonus')) return;
+      const h = held[t.a] || 0, q = t.q || 0;
+      if (t.t !== 'Sell') { if (h <= thr) opened[t.a] = t.d; held[t.a] = h + q; return; }
+      held[t.a] = h - q;
+      if (CASH_LIKE.has(sectorOf[t.a]) || !(t.basis > 0)) return;
+      const pl = (t.amt || 0) - t.basis;
+      sales.push({ d: t.d, s: symOf[t.a] || '', n: t.a, kind: held[t.a] <= thr ? 'closed' : 'trimmed', pl, roi: pl / t.basis, days: opened[t.a] ? dayNum(t.d) - dayNum(opened[t.a]) : null });
+    });
+    return sales;
+  }
+
+  // The yearly wrap-up (the email in early January): year Y in review. run: an all-time portfolioRun.
+  //   {year, ret, bench, months: [{m, r, b}], best / worst month, posMonths, sales: {n, wins, winRate, pl, best, worst},
+  //    mostTraded: {s, n, trades}, longest: {s, n, days, open}, buys, dividends, deposits, withdrawals, start, end}
+  // ret / bench compound the year's months (time-weighted: deposits and withdrawals do not count as gains).
+  function yearWrapped(run, Y) {
+    const R = run.R, y = String(Y);
+    const sectorOf = {}, symOf = {}; Object.values(run.data.assets || {}).forEach((a) => { if (a && a.name) { sectorOf[a.name] = a.sector; symOf[a.name] = a.symbol || ''; } });
+    const months = R.months.filter((r) => r.has && r.ret != null && r.month.slice(0, 4) === y).map((r) => ({ m: r.month, r: r.ret, b: r.bench, value: r.value, live: !!r.live }));
+    const comp = (k) => (months.length && months.every((x) => x[k] != null) ? months.reduce((a, x) => a * (1 + x[k]), 1) - 1 : null);
+    const byR = months.slice().sort((a, b) => b.r - a.r);
+    const sales = salesOf(R, run.data.assets).filter((x) => x.d.slice(0, 4) === y), wins = sales.filter((x) => x.pl > 0);
+    // best and worst by return, among sales of a real size (at least 0.5% of the average month-end value): a few shares
+    // left over are not "the worst trade of the year"
+    const avgV = months.length ? mean(months.map((x) => x.value || 0)) : 0, sized = sales.filter((x) => !avgV || Math.abs(x.pl / x.roi) >= 0.005 * avgV);
+    const bySale = (sized.length ? sized : sales).slice().sort((a, b) => b.roi - a.roi);
+    const rows = R.ledger.filter((t) => t.d && t.d.slice(0, 4) === y);
+    const count = {}; rows.forEach((t) => { if (t.a && (t.t === 'Buy' || t.t === 'Sell') && !CASH_LIKE.has(sectorOf[t.a])) count[t.a] = (count[t.a] || 0) + 1; });
+    const top = Object.keys(count).sort((a, b) => count[b] - count[a] || (a < b ? -1 : 1))[0];
+    // the longest hold: a sale in the year, or a position still open at the year's end (counted to 31 Dec, or to today)
+    const end = `${y}-12-31` < (run.today || '') ? `${y}-12-31` : run.today;
+    let longest = null;
+    sales.forEach((x) => { if (x.days != null && (!longest || x.days > longest.days)) longest = { s: x.s, n: x.n, days: x.days, open: false }; });
+    const thr = typeof R.settings.openThreshold === 'number' ? R.settings.openThreshold : 0.5, held = {}, opened = {};
+    PE.sortLedger(R.ledger).forEach((t) => { if (!t.a || t.d > end || (t.t !== 'Buy' && t.t !== 'Sell' && t.t !== 'Bonus')) return; const h = held[t.a] || 0;
+      if (t.t !== 'Sell' && h <= thr) opened[t.a] = t.d; held[t.a] = h + (t.t === 'Sell' ? -1 : 1) * (t.q || 0); });
+    Object.keys(held).forEach((n) => { if (held[n] > thr && opened[n] && !CASH_LIKE.has(sectorOf[n])) { const d = dayNum(end) - dayNum(opened[n]); if (!longest || d > longest.days) longest = { s: symOf[n] || '', n, days: d, open: true }; } });
+    const prevDec = R.months.find((r) => r.month === `${Number(y) - 1}-12` && r.has);
+    return { year: Number(y), ret: comp('r'), bench: comp('b'), months: months.map(({ m, r, b, live }) => ({ m, r, b, live })), partial: months.length < 12 || months.some((x) => x.live),
+      best: byR[0] ? { m: byR[0].m, r: byR[0].r } : null, worst: byR.length > 1 ? { m: byR[byR.length - 1].m, r: byR[byR.length - 1].r } : null,
+      posMonths: months.filter((x) => x.r > 0).length,
+      sales: { n: sales.length, wins: wins.length, winRate: sales.length ? wins.length / sales.length : null, pl: sum(sales.map((x) => x.pl)), best: bySale[0] || null, worst: bySale.length > 1 ? bySale[bySale.length - 1] : null },
+      mostTraded: top ? { s: symOf[top] || '', n: top, trades: count[top] } : null, longest,
+      buys: rows.filter((t) => t.t === 'Buy' && !CASH_LIKE.has(sectorOf[t.a])).length,
+      dividends: sum(rows.filter((t) => t.t === 'Dividend').map((t) => t.amt || 0)),
+      deposits: sum(rows.filter((t) => t.t === 'Deposit').map((t) => t.amt || 0)), withdrawals: -sum(rows.filter((t) => t.t === 'Withdrawal').map((t) => t.amt || 0)),
+      start: prevDec ? prevDec.value : null, end: months.length ? months[months.length - 1].value : null };
+  }
+
   // The monthly trading report card (the email on the 1st): how month M went next to the month before. run: an all-time
   // portfolioRun. Every sale counts (a part sale too), cash-like funds left out: its result is the money it brought in
   // over the average cost of the shares sold (the ledger's basis), its holding days from the buy that opened the position.
@@ -4267,17 +4329,7 @@ button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.pl
   function reportCard(run, M) {
     const R = run.R, prevMonth = PE.monthOf(addDays(M + '-01', -1));
     const sectorOf = {}, symOf = {}; Object.values(run.data.assets || {}).forEach((a) => { if (a && a.name) { sectorOf[a.name] = a.sector; symOf[a.name] = a.symbol || ''; } });
-    const thr = typeof R.settings.openThreshold === 'number' ? R.settings.openThreshold : 0.5;
-    const held = {}, opened = {}, sales = [];
-    PE.sortLedger(R.ledger).forEach((t) => {
-      if (!t.a || (t.t !== 'Buy' && t.t !== 'Sell' && t.t !== 'Bonus')) return;
-      const h = held[t.a] || 0, q = t.q || 0;
-      if (t.t !== 'Sell') { if (h <= thr) opened[t.a] = t.d; held[t.a] = h + q; return; }
-      held[t.a] = h - q;
-      if (CASH_LIKE.has(sectorOf[t.a]) || !(t.basis > 0)) return;
-      const pl = (t.amt || 0) - t.basis;
-      sales.push({ d: t.d, s: symOf[t.a] || '', n: t.a, kind: held[t.a] <= thr ? 'closed' : 'trimmed', pl, roi: pl / t.basis, days: opened[t.a] ? dayNum(t.d) - dayNum(opened[t.a]) : null });
-    });
+    const sales = salesOf(R, run.data.assets);
     const stats = (m) => {
       const list = sales.filter((x) => x.d.slice(0, 7) === m);
       if (!list.length) return null;
@@ -4366,7 +4418,7 @@ button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.pl
     return { r: r - 1, b: bOk ? b - 1 : null, from: rg.from, to: rg.to };
   }
 
-  const api = { headsUp, drawdownCheck, limitCheck, limitText, reportCard, volumeSpikes, riskModel, morningBrief, heldStocks, priceBook, makePricer, daily, dailyStats, dailyTwr, capWeights, benchWeights, holdingsAt, estimateMarks, attribution, activeWeights, tradeChecks, tradingHabits, portfolioRun, friendProfile, profilePeriod, income, trailing, calendar, TRADING_DAYS, TRADING_NOTE };
+  const api = { headsUp, drawdownCheck, limitCheck, limitText, reportCard, salesOf, yearWrapped, volumeSpikes, riskModel, morningBrief, heldStocks, priceBook, makePricer, daily, dailyStats, dailyTwr, capWeights, benchWeights, holdingsAt, estimateMarks, attribution, activeWeights, tradeChecks, tradingHabits, portfolioRun, friendProfile, profilePeriod, income, trailing, calendar, TRADING_DAYS, TRADING_NOTE };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.PA = api;
 })(this);
 
@@ -4853,7 +4905,7 @@ const S = {
   get readOnly(){ return !(window.pdCanEdit && window.pdCanEdit()); }, set readOnly(v){}, bench:null, imports:{}, sync:null, stmt:{list:null, busy:false, error:null, review:null}, fsMonth:null, fallback:null, heads:null,
   D:undefined, exportsList:null,
 };
-if(location.hash && /^#[a-z]+$/.test(location.hash) && location.hash!=='#today') S.tab = location.hash.slice(1);
+if(location.hash && /^#[a-z]+$/.test(location.hash) && location.hash!=='#today') S.tab = location.hash.slice(1);   // a section name: its tab, on that section (below)
 // Today: the home-screen view (value, today's P/L, every holding's move, heads-up). Opened by ?today or #today, by the
 // "Today" button, or on every launch once "Open the app on this screen" is ticked (pd.openToday; ?full skips it once).
 S.today = /[?&]today\b/.test(location.search) || location.hash==='#today' || (ls.get('pd.openToday',false)===true && !/[?&]full\b/.test(location.search));
@@ -4910,19 +4962,23 @@ function watchLiveState(){ const el=document.getElementById('pd-offline'); if(!e
 
 // ---------- tabs ----------
 // Seven tabs; the older, finer-grained names still work as links and jump to their section inside the merged tab.
-const TAB_ALIAS = {dailypl:'performance', trading:'analysis', attribution:'analysis', risk:'analysis', whatif:'analysis', income:'holdings', watchlist:'holdings', trades:'activity', ledger:'activity', statements:'settings', factsheet:'reports', inputs:'settings', checks:'settings'};
+// Five tabs; a tab with several sections shows ONE at a time (the bar at its top switches), remembered per tab.
+// Old names (links, bookmarks, data-go) still work: a section name opens its tab on that section.
 const TAB_VIEWS = {
-  overview: [['overview','Overview',()=>vOverview()]],
-  holdings: [['holdings','Holdings',()=>vHoldings()],['watchlist','Watchlist',()=>vWatchlist()],['income','Income & dividends',()=>vIncome()]],
-  performance: [['performance','Performance',()=>vPerformance()],['dailypl','Daily P/L',()=>vDailyPL()]],
-  analysis: [['trading','Your trading',()=>vTrading()],['analysis','What the numbers say',()=>vAnalysis()],['whatif','What if',()=>vWhatIf()],['attribution','Attribution vs EGX30 Capped',()=>vAttribution()]],
-  activity: [['trades','Closed trades',()=>vTrades()],['ledger','Ledger',()=>vLedger()]],
-  reports: [['factsheet','Monthly factsheet & Excel',()=>vFactsheet()]],
-  settings: [['inputs','Inputs & settings',()=>vInputs()],['statements','Statements & imports',()=>vStatements()],['checks','Checks',()=>vChecks()]],
+  overview: [['overview','Home',()=>vOverview()]],
+  holdings: [['holdings','Holdings',()=>vHoldings()],['watchlist','Watchlist',()=>vWatchlist()],['income','Income',()=>vIncome()]],
+  performance: [['performance','Returns',()=>vPerformance()],['dailypl','Daily P/L',()=>vDailyPL()]],
+  analysis: [['trading','Your trading',()=>vTrading()],['review','Review & risk',()=>vAnalysis()],['whatif','What if',()=>vWhatIf()],['attribution','Attribution',()=>vAttribution()]],
+  more: [['ledger','Activity',()=>vLedger()],['trades','Closed trades',()=>vTrades()],['factsheet','Reports',()=>vFactsheet()],['statements','Statements',()=>vStatements()],['inputs','Settings',()=>vInputs()],['checks','Checks',()=>vChecks()]],
 };
+const SEC_ALIAS = {activity:'ledger', reports:'factsheet', settings:'inputs', risk:'review'};
+const TAB_ALIAS = {}; Object.entries(TAB_VIEWS).forEach(([t,v])=>v.forEach(([id])=>{ if(id!==t) TAB_ALIAS[id]=t; })); Object.entries(SEC_ALIAS).forEach(([a,id])=>{ if(!TAB_VIEWS[a]) TAB_ALIAS[a]=TAB_ALIAS[id]; });
+S.sec = ls.get('pd.sec', {}) || {};
+const secOf = (t) => { const v=TAB_VIEWS[t]; const id=S.sec[t]; return v.some(x=>x[0]===id) ? id : v[0][0]; };
+{ const h=S.tab; if(!TAB_VIEWS[h] && TAB_ALIAS[h]){ S.tab=TAB_ALIAS[h]; S.sec[S.tab]=SEC_ALIAS[h]||h; } }   // #trades, #settings, an old saved tab
 const tabOf = (t) => (TAB_VIEWS[t] ? t : TAB_ALIAS[t] || 'overview');
-function setTab(t, sec){ const top=tabOf(t); if(!sec && TAB_ALIAS[t]) sec=t; S.tab=top; ls.set('pd.tab',top); try{ history.replaceState(null,'','#'+(sec||top)); }catch(e){} renderTab(true);
-  const el = sec && document.getElementById('sec-'+sec); if(el) el.scrollIntoView({block:'start'}); else window.scrollTo({top:0}); }
+function setTab(t, sec){ const top=tabOf(t); sec = SEC_ALIAS[sec||t] || sec || (TAB_ALIAS[t] ? t : null); if(sec && TAB_VIEWS[top].some(x=>x[0]===sec)){ S.sec[top]=sec; ls.set('pd.sec',S.sec); }
+  S.tab=top; ls.set('pd.tab',top); try{ history.replaceState(null,'','#'+secOf(top)); }catch(e){} renderTab(true); window.scrollTo({top:0}); }
 function editing(){ const a=document.activeElement; return inputsDirty() || !!(a && a.closest && a.closest('#main') && a.matches('input,select,textarea')); }
 document.addEventListener('focusout', ()=>{ setTimeout(()=>{ if(S.pending && !editing()){ S.pending=false; renderTab(false); } }, 0); });
 $('#tabs').addEventListener('click', e => { const b=e.target.closest('button[data-tab]'); if(b) setTab(b.dataset.tab); });
@@ -4931,11 +4987,10 @@ function renderTab(force){
   S.pending=false;
   S.tab = tabOf(S.tab);
   document.querySelectorAll('#tabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab===S.tab)));
-  const showPeriod = ['overview','performance','analysis','activity'].includes(S.tab);
-  $('#period').hidden = !showPeriod;
-  const views = TAB_VIEWS[S.tab];
-  const nav = views.length>1 ? `<nav class="subnav" aria-label="On this page"><span class="muted">On this page</span>${views.map(([id,label])=>`<a href="#${id}" data-sec="${id}" data-testid="sec-${id}">${esc(label)}</a>`).join('')}</nav>` : '';
-  $('#main').innerHTML = `<section class="view">${nav}${views.map(([id,label,fn],i)=>`<div class="tsec" id="sec-${id}">${views.length>1&&i>0?`<h2 class="secttl">${esc(label)}</h2>`:''}${fn()}</div>`).join('')}</section>`;
+  const views = TAB_VIEWS[S.tab], cur = secOf(S.tab), view = views.find(x=>x[0]===cur);
+  $('#period').hidden = !['overview','performance','dailypl','trading','review','attribution','trades'].includes(cur);   // only where the period changes the figures
+  const nav = views.length>1 ? `<nav class="secbar" role="tablist" aria-label="${esc(S.tab)} sections">${views.map(([id,label])=>`<button type="button" role="tab" data-sec="${id}" data-testid="sec-${id}" aria-selected="${id===cur}">${esc(label)}</button>`).join('')}</nav>` : '';
+  $('#main').innerHTML = `<section class="view">${nav}<div class="tsec" id="sec-${cur}">${view[2]()}</div></section>`;
   mountCharts(); disableReadOnlyForms(); markScrollables(); liveShown=pricesLive(); watchLiveState(); renderToday();
 }
 function renderToday(){ const el=$('#today'); if(!el) return; document.body.classList.toggle('today-on', !!S.today); el.hidden=!S.today; if(!S.today) return;
@@ -5137,13 +5192,12 @@ function vOverview(){
     // Thndr emails, or one step left); otherwise a plain pointer to where trades come from
     const fresh = !allTx().length, building = ((S.settings||{}).historyImport||{}).status==='pending';
     const msg = !fresh ? '<div class="panel empty"><h2>No data for this selection</h2><p>Pick another period at the top.</p></div>'
-      : building ? '' : `<div class="panel empty" data-testid="empty-portfolio"><h2>Nothing here yet</h2><p>${S.readOnly?'Your trades appear here once they are added.':'Add your trades on the Activity tab, or let the site add them from your Thndr emails (Account, then Thndr emails).'}</p></div>`;
+      : building ? '' : `<div class="panel empty" data-testid="empty-portfolio"><h2>Nothing here yet</h2><p>${S.readOnly?'Your trades appear here once they are added.':'Add your trades under More → Activity, or let the site add them from your Thndr emails (Account, then Thndr emails).'}</p></div>`;
     return `${window.pdFriendsPanel ? window.pdFriendsPanel() : ''}${msg}`;
   }
   const cashNow = R.liveCash ?? R.settings.cash; const total = cashNow + R.pos.mvTotal; const dp=dayPL(); const cs=checkSummary();
   const unreal = R.pos.open.reduce((s,r)=>s+(r.unreal||0),0);
   const rows=st.rows; const labels=rows.map(r=>Ms(r.month));
-  let invested=[]; let cap=st.opening; rows.forEach(r=>{ cap+=r.netFlow; invested.push(cap); });
   const benchLabel = st.benchComplete===false ? 'EGX30 Capped (price index, incomplete)' : BENCH;
   const ds=dailyS(), ind=smallSample(st)?IND:'';
   const maxW=Math.max(...R.pos.open.map(r=>r.weight),0.0001);
@@ -5154,31 +5208,23 @@ function vOverview(){
     <div data-testid="total-value-tile" data-live="${pricesLive()?1:0}" style="display:contents">${pricesLive() ? kpi('Total value · live', egp(total), `<span class="${sgn(dp.pl)}">${dp.pct!=null?`${dp.pl>=0?'+':'−'}${egp(Math.abs(dp.pl))} EGP last session (${pct(dp.pct,2)})`:'No session change yet'}</span>`,'hero','EGP')
       : kpi('Total value · saved copy', egp(total), `the copy saved on this device, not live prices${dp.pct!=null?` · <span class="${sgn(dp.pl)}">${dp.pl>=0?'+':'−'}${egp(Math.abs(dp.pl))} EGP</span> in its last session`:''}`,'','EGP')}</div>
     ${kpi(`Time-weighted return${ht.daily?' · daily-linked':''}`, `<span class="${sgn(ht.v)}" data-testid="headline-twr" data-method="${ht.daily?'daily':'dietz'}">${pct(ht.v)}</span>`, ht.daily ? `daily-linked · monthly ${pct(st.twr)} · ${benchLabel} ${pct(st.benchTwr)}` : `${benchLabel} ${pct(st.benchTwr)} · alpha <span class="${sgn(st.alpha)}">${pct(st.alpha)}</span>`)}
-    ${kpi('Money-weighted (XIRR)', `<span class="${sgn(st.xirr)}">${pct(st.xirr)}</span>`, `annualized · period ${pct(st.mwrPeriod)}`)}
     ${kpi('Return in USD', st.usdTwr!=null?`<span class="${sgn(st.usdTwr)}">${pct(st.usdTwr)}</span>`:'—', st.egpVsUsd!=null?`EGP vs USD ${pct(st.egpVsUsd)}`:'Enter USD/EGP marks')}
-    ${kpi('Real return', st.realTwr!=null?`<span class="${sgn(st.realTwr)}">${pct(st.realTwr)}</span>`:st.realTwrPartial!=null?`<span class="${sgn(st.realTwrPartial)}">${pct(st.realTwrPartial)}</span>`:'—', st.inflation!=null?`after ${pct(st.inflation,1,false)} Egypt CPI`:st.realTwrPartial!=null?`through ${M(st.realThrough)} · CPI for ${noCpi.join(', ')} pending`:`Needs CPI for ${noCpi.join(', ')}`)}
-    ${kpi('Max drawdown', `<span class="${sgn(st.maxDD)}">${pct(st.maxDD)}</span>`, `${ds&&ds.maxDD!=null?`<span class="neg">${pct(ds.maxDD)}</span> daily · `:''}Sharpe ${num(st.sharpe)}${st.sharpe!=null?ind:''} · vol ${pct(st.vol,1,false)}/mo`, '', 'month-end')}
   </div>
   ${headsUp()}
   ${briefPanel()}
-  <div class="grid g2">
+  <div class="grid">
     <div class="panel">
       <div class="phead"><div><h2>Growth of 1 EGP</h2><div class="sub">Cumulative time-weighted return, chain-linked monthly</div></div>
         <div class="legend"><span><i style="background:var(--s1)"></i>Portfolio ${pct(st.twr)}</span><span><i style="background:var(--s2)"></i>EGX30 Capped ${pct(st.benchTwr)}</span>${cc?`<span data-testid="growth-cash-legend"><i style="background:var(--s3)"></i>Cash (CBE policy rate) ${pct(st.cashTwr??cc[cc.length-1])}</span>`:''}</div></div>
       ${chartSlot('ch-growth',{kind:'line',title:'Cumulative return vs EGX30 Capped and cash',labels:[`${Ms(PE.addMonths(st.rows[0].month,-1))}`].concat(labels),series:[{name:'Portfolio',color:C.s1(),values:[0].concat(rows.map(r=>r.pCum))},{name:'EGX30 Capped',color:C.s2(),values:[0].concat(rows.map(r=>r.pBench))}].concat(cc?[{name:'Cash (CBE policy rate)',color:cssVar('--s3'),values:[0].concat(cc),dash:true}]:[]),yFmt:pctAxis,minZero:false},260)}
       ${cc?`<p class="note" style="margin:8px 0 0" data-testid="growth-cash-note">Cash line: ${CASH_NOTE}${st.cashComplete===false?'; months without a recorded rate use the risk-free rate in Settings':''}.</p>`:''}
     </div>
-    <div class="panel">
-      <div class="phead"><div><h2>Value vs capital invested</h2><div class="sub">Month-end value against opening value plus net deposits</div></div>
-        <div class="legend"><span><i style="background:var(--s1)"></i>Month-end value</span><span><i style="background:var(--s2)"></i>Capital invested</span></div></div>
-      ${chartSlot('ch-value',{kind:'line',title:'Value vs invested capital',labels,series:[{name:'Month-end value',color:C.s1(),values:rows.map(r=>r.value),area:true},{name:'Capital invested',color:C.s2(),values:invested,dash:true}],yFmt:egpAxis,tipExtra:(i)=>`<div>Gain <b>${egp(rows[i].value-invested[i])} EGP</b></div>`},260)}
-    </div>
   </div>
   <div class="grid g2">
     <div class="panel">
       <div class="phead"><div><h2>Largest holdings</h2><div class="sub">${pricesLive()?'Live market value':'Market value from the saved copy'} · ${R.pos.open.length} open positions</div></div><button class="btn sm" data-go="holdings" id="go-holdings">All holdings</button></div>
-      <div class="tbl"><table><thead><tr><th>Symbol</th><th class="n">Value</th><th class="n">Unrealized</th><th class="n">Return</th><th>Weight</th></tr></thead><tbody>
-      ${R.pos.open.slice().sort((a,b)=>(b.mv||0)-(a.mv||0)).slice(0,6).map(r=>`<tr><td><span class="sym">${esc(r.symbol||r.name)}</span></td><td class="n">${egp(r.mv)}</td><td class="n ${sgn(r.unreal)}">${egp(r.unreal)}</td><td class="n ${sgn(r.unreal)}">${pct(r.openCost?r.unreal/r.openCost:null)}</td><td><div class="wcell"><div class="bar"><i style="width:${(r.weight/maxW*100).toFixed(1)}%"></i></div><span class="num">${pct(r.weight,1,false)}</span></div></td></tr>`).join('')}
+      <div class="tbl"><table><thead><tr><th>Symbol</th><th class="n">Value</th><th class="n">Return</th><th class="n">Weight</th></tr></thead><tbody>
+      ${R.pos.open.slice().sort((a,b)=>(b.mv||0)-(a.mv||0)).slice(0,5).map(r=>`<tr><td><span class="sym">${esc(r.symbol||r.name)}</span></td><td class="n">${egp(r.mv)}</td><td class="n ${sgn(r.unreal)}">${pct(r.openCost?r.unreal/r.openCost:null)}</td><td class="n">${pct(r.weight,1,false)}</td></tr>`).join('')}
       </tbody></table></div>
       <div class="row" style="margin-top:12px;justify-content:space-between"><span class="note">Cash ${egp(cashNow)} EGP · Unrealized P/L <span class="${sgn(unreal)}">${egp(unreal)}</span> EGP</span><button type="button" class="chip ${cs.cls}" data-go="checks" data-testid="checks-chip">${esc(cs.text)}</button></div>
     </div>
@@ -5187,8 +5233,8 @@ function vOverview(){
       ${sectorBars()}
     </div>
   </div>
+  <details class="morenums" data-testid="more-numbers"><summary>More numbers <span class="muted">consistency, closed trades, session movers, what made the money</span></summary>
   <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,270px),1fr))">
-    <div class="panel"><div class="eyebrow">Capital roll-forward</div>${rollForward(st)}</div>
     <div class="panel"><div class="eyebrow">Consistency</div><dl class="kv">
       <dt>Months in period</dt><dd>${st.n}</dd><dt>Positive months</dt><dd>${pct(st.pctPos,0,false)}</dd><dt>Months beating EGX30 Capped</dt><dd>${pct(st.pctBeat,0,false)}</dd>
       <dt>Best month</dt><dd><span class="pos">${M(st.best.month)} ${pct(st.best.ret)}</span></dd><dt>Worst month</dt><dd><span class="neg">${M(st.worst.month)} ${pct(st.worst.ret)}</span></dd>
@@ -5197,7 +5243,8 @@ function vOverview(){
       <dt>Trades closed</dt><dd>${st.closedCount}</dd><dt>Win rate</dt><dd>${pct(st.winRate,1,false)}</dd><dt>Profit factor</dt><dd>${st.profitFactor!=null?num(st.profitFactor,1)+'×':'n/a'}</dd>
       <dt>Total P/L on closed</dt><dd class="${sgn(st.closedPL)}">${egp(st.closedPL)}</dd><dt>Average hold</dt><dd>${num(st.avgHold,0)} days</dd><dt>Realized trading P/L</dt><dd class="${sgn(st.realized)}">${egp(st.realized)}</dd></dl></div>
     <div class="panel" data-testid="session-movers"><div class="eyebrow">Session movers</div>${moversList()}</div>
-    <div class="panel" data-testid="contributors"><div class="eyebrow">What made the money · all time</div>${contributorsList()}</div>  </div>`;
+    <div class="panel" data-testid="contributors"><div class="eyebrow">What made the money · all time</div>${contributorsList()}</div>  </div>
+  </details>`;
 }
 // Plain-language summary of the selected period, for readers who don't want to decode the tiles.
 function briefPanel(){
@@ -5205,14 +5252,9 @@ function briefPanel(){
   const c=contributors(); const s=[];
   const vsIdx = st.benchTwr!=null&&st.alpha!=null ? ` against <b>${pct(st.benchTwr)}</b> for EGX30 Capped, ${st.alpha>=0?'ahead of the index by':'behind the index by'} <b class="${sgn(st.alpha)}">${pct(Math.abs(st.alpha),1,false)}</b>` : ' (the EGX30 Capped return is incomplete for this period, so there is no index comparison)';
   s.push(`<b>${esc(st.label)}</b>: the portfolio returned <b class="${sgn(st.twr)}">${pct(st.twr)}</b>${vsIdx}${st.n>1?`, with ${st.posMonths} of ${st.n} months positive and a worst month of ${pct(st.worst.ret)} (${M(st.worst.month)})`:''}.`);
-  const ahead=aheadOfCash(st);
-  if(st.cashTwr!=null && ahead!=null) s.push(`<span data-testid="brief-cash">Cash at the central-bank rate would have returned ${pct(st.cashTwr)}; the portfolio is <b class="${sgn(ahead)}">${num(Math.abs(ahead)*100,1)} points ${ahead>=0?'ahead':'behind'}</b>.</span>`);
   // the latest-month sentence only when the period is longer than that month (a one-month period already said it above)
   if(rows.length>1) s.push(`${M(last.month)}${last.live?' so far':''}: <b class="${sgn(last.ret)}">${pct(last.ret)}</b>${last.bench!=null?` vs ${pct(last.bench)} for the index`:''}.`);
-  s.push(`Today the portfolio is worth <b>${egp(total)} EGP</b>, of which ${egp(cash)} EGP is cash, across ${R.pos.open.length} positions; the largest is ${esc(R.conc.largest)} at ${pct(R.conc.largestWeight,1,false)}.`);
-  if(c.length) s.push(`Since inception the biggest contributors are ${c.slice(0,3).map(x=>`${esc(x.sym)} +${egp(x.total)}`).join(', ')}${c.some(x=>x.total<0)?`; the biggest detractor is ${esc(c[c.length-1].sym)} −${egp(Math.abs(c[c.length-1].total))}`:''} (EGP, realized + unrealized + dividends).`);
-  s.push(...moneyWeightedSentences(R));
-  return `<div class="panel brief" data-testid="brief"><div class="eyebrow">In brief</div><p>${s.join(' ')} <a href="#analysis" data-go="analysis">Read the full review on the Analysis tab →</a></p></div>`;
+  return `<div class="panel brief" data-testid="brief"><div class="eyebrow">In brief</div><p>${s.join(' ')} <a href="#review" data-go="review">The full review →</a></p></div>`;
 }
 // Heads-up list: ex-dividend dates, targets/stops hit and drawdown worked out live on the page (PA.headsUp, the same checks
 // the inbox job runs), plus the inbox job's overdue-statement items (sync/state.digest) when there is an inbox job.
@@ -5295,7 +5337,7 @@ function vHoldings(){
       const toT = r.target&&r.price? r.target/r.price-1 : null, toS = r.stop&&r.price? r.stop/r.price-1:null; const a=assetOf(r.name);
       return `<tr><td><span class="sym">${esc(r.symbol||'—')}</span>${noteBtn(a,'nt-h-'+i)}${duePill(a)}<div class="muted" style="font-size:11.5px;line-height:1.3;max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${esc(r.name)}">${esc(r.name)}</div></td><td class="ink2">${esc(r.sector)}</td><td class="n">${num(r.open,r.open%1?2:0)}</td><td class="n">${num(r.avgCost,3)}</td><td class="n">${num(r.price,2)}</td><td class="n ${sgn(r.chg)}">${r.chg!=null?pct(r.chg/100,2):'—'}</td><td class="n ${sgn(r.chg)}">${r.chg!=null&&r.mv?egp(r.mv-r.mv/(1+r.chg/100)):'—'}</td><td>${src}</td><td class="n">${egp(r.mv)}</td><td class="n ${sgn(r.unreal)}">${egp(r.unreal)}</td><td class="n ${sgn(r.unreal)}">${pct(r.openCost?r.unreal/r.openCost:null)}</td><td class="n">${egp(r.divs)}</td><td class="n ${sgn(r.total)}">${egp(r.total)}</td><td class="n">${pct(r.weight,1,false)}</td><td class="n">${r.target?num(r.target)+` <span class="muted">${pct(toT,0)}</span>`:'—'}</td><td class="n">${r.stop?num(r.stop)+` <span class="muted">${pct(toS,0)}</span>`:'—'}</td><td class="n">${r.holdDays}d</td></tr>${a.note||a.thesis?`<tr class="note-row" id="nt-h-${i}" hidden data-testid="note-row"><td colspan="17">${noteBody(a)}</td></tr>`:''}`; }).join('')}
     </tbody><tfoot><tr><td colspan="8">Total holdings</td><td class="n">${egp(R.pos.mvTotal)}</td><td class="n ${sgn(unreal)}">${egp(unreal)}</td><td class="n ${sgn(unreal)}">${pct(cost?unreal/cost:null)}</td><td class="n">${egp(R.pos.open.reduce((s,r)=>s+r.divs,0))}</td><td class="n">${egp(R.pos.open.reduce((s,r)=>s+r.total,0))}</td><td class="n">100.0%</td><td colspan="3"></td></tr></tfoot></table></div>
-    <p class="note" style="margin:10px 0 0">Total P/L = realized on shares already sold + unrealized + dividends, since first buy. Stocks at the latest EGX close; funds without a quote at their last traded NAV (gold funds move with the 24K gold price). Set targets and stops under Settings → Inputs & settings (Assets & prices).</p>
+    <p class="note" style="margin:10px 0 0">Total P/L = realized on shares already sold + unrealized + dividends, since first buy. Stocks at the latest EGX close; funds without a quote at their last traded NAV (gold funds move with the 24K gold price). Set targets and stops under More → Settings (Assets & prices).</p>
   </div>
   <div class="grid g2">
     <div class="panel"><div class="phead"><div><h2>Sector allocation</h2><div class="sub">Share of holdings value</div></div></div>${sectorBars()}</div>
@@ -5305,7 +5347,7 @@ function vHoldings(){
       <dt>Largest sector${c.largestSector?' ('+esc(c.largestSector.sector)+')':''}</dt><dd>${c.largestSector?pct(c.largestSector.weight,1,false):'—'}</dd>
       <dt>Herfindahl index (HHI)</dt><dd>${num(c.hhi,3)}</dd>
       <dt>Positions with a stop loss</dt><dd>${c.withStop} of ${c.openCount}</dd><dt>Loss if every stop is hit</dt><dd class="${c.lossIfStops?'neg':''}">${c.lossIfStops?egp(-c.lossIfStops):'—'}</dd></dl>
-      ${c.withStop<c.openCount?`<p class="note" style="margin:10px 0 0">${c.openCount-c.withStop} positions have no stop loss. Add them under Settings → Inputs & settings to measure downside.</p>`:''}</div>
+      ${c.withStop<c.openCount?`<p class="note" style="margin:10px 0 0">${c.openCount-c.withStop} positions have no stop loss. Add them under More → Settings to measure downside.</p>`:''}</div>
   </div>`;
 }
 
@@ -5342,13 +5384,14 @@ function vWatchlist(){
       <td class="n">${q&&q.price!=null?num(q.price):'—'}</td><td class="n ${sgn(q&&q.chg)}">${q&&q.chg!=null?pct(q.chg/100,2):'—'}</td><td class="n">${ratio(q&&q.pe)}</td><td class="n">${ratio(q&&q.pb)}</td><td class="n">${pc(q&&q.roe)}</td><td class="n">${pc(q&&q.dy)}</td><td class="n">${bn(q&&q.mcap)}</td><td>${rangeBar(q)}</td>
       <td class="wrap">${a.note?esc(a.note):'<span class="muted">—</span>'}</td>${ro?'':`<td>${a.watch===true?`<button class="btn sm" data-unwatch="${esc(a.name)}" data-testid="watchlist-remove" title="Stop watching (the asset itself is kept)">Remove</button>`:''}</td>`}</tr>`).join('')}
     </tbody></table></div>`:'<p class="muted">Nothing on the watchlist yet.</p>'}
-    <p class="note" style="margin:10px 0 0">P/E on the last 12 months' earnings, P/B on the latest quarter, ROE and dividend yield in %. Write the reason you watch or hold a stock in its Note (Settings → Inputs &amp; settings → Assets &amp; prices).</p></div>`;
+    <p class="note" style="margin:10px 0 0">P/E on the last 12 months' earnings, P/B on the latest quarter, ROE and dividend yield in %. Write the reason you watch or hold a stock in its Note (More → Settings → Assets &amp; prices).</p></div>`;
 }
 
 // ---------- Performance ----------
 function vPerformance(){
   const R=S.R, st=R.stats; if(!st.n) return `<div class="panel empty"><h2>No data for this selection</h2></div>`;
   const rows=st.rows, labels=rows.map(r=>Ms(r.month));
+  const invested=[]; { let cap=st.opening; rows.forEach(r=>{ cap+=r.netFlow; invested.push(cap); }); }
   const ds=dailyS(), ind=smallSample(st)?IND:'';
   const ht=headTwr(st), ahead=aheadOfCash(st);
   return `
@@ -5360,6 +5403,13 @@ function vPerformance(){
     <div data-testid="gross-tile" style="display:contents">${kpi('Return before trading costs', st.twrGross!=null?`<span class="${sgn(st.twrGross)}">${pct(st.twrGross)}</span>`:'—', st.tradingCost!=null?`Trading costs ${egp(st.tradingCost)} EGP (${pct(st.costPct,2,false)} of value traded) · approximate`:'commission on each buy and sell')}</div>
   </div>
   ${trailingStrip()}
+  <div class="grid">
+    <div class="panel">
+      <div class="phead"><div><h2>Value vs capital invested</h2><div class="sub">Month-end value against opening value plus net deposits</div></div>
+        <div class="legend"><span><i style="background:var(--s1)"></i>Month-end value</span><span><i style="background:var(--s2)"></i>Capital invested</span></div></div>
+      ${chartSlot('ch-value',{kind:'line',title:'Value vs invested capital',labels,series:[{name:'Month-end value',color:C.s1(),values:rows.map(r=>r.value),area:true},{name:'Capital invested',color:C.s2(),values:invested,dash:true}],yFmt:egpAxis,tipExtra:(i)=>`<div>Gain <b>${egp(rows[i].value-invested[i])} EGP</b></div>`},260)}
+    </div>
+  </div>
   <div class="grid g3">
     <div class="panel"><div class="eyebrow">Returns</div><dl class="kv">
       <dt>Portfolio TWR</dt><dd class="${sgn(st.twr)}">${pct(st.twr)}</dd><dt>${BENCH} TWR</dt><dd class="${sgn(st.benchTwr)}">${pct(st.benchTwr)}</dd>
@@ -5647,7 +5697,7 @@ function vChecks(){
   ${jobsPanel()}
   <div class="panel"><div class="phead"><div><h2>Methodology</h2><div class="sub">How every figure on this page is calculated</div></div></div><div class="prose">
     <h3>Time-weighted return (TWR)</h3><p>Monthly return is Modified Dietz: <code>(closing value − opening value − net deposits) ÷ (opening value + day-weighted net deposits)</code>. A deposit on the 1st counts fully for the month, one on the 16th about half. Months are then chain-linked (time-weighted): <code>TWR = Π(1 + r) − 1</code>. TWR removes the effect of your deposit timing and is the right figure to compare against the index.</p>
-    <h3>Daily-linked return</h3><p>The ledger is revalued at every EGX close (holdings × closing price + ledger cash) and the daily returns are chain-linked from the first day of the period. It needs no month-end statement, so it also sees moves inside a month. Settings → Inputs &amp; settings → Headline return method chooses which figure the headline tile shows; the monthly table always stays Modified Dietz.</p>
+    <h3>Daily-linked return</h3><p>The ledger is revalued at every EGX close (holdings × closing price + ledger cash) and the daily returns are chain-linked from the first day of the period. It needs no month-end statement, so it also sees moves inside a month. More → Settings → Headline return method chooses which figure the headline tile shows; the monthly table always stays Modified Dietz.</p>
     <h3>Money-weighted return (XIRR)</h3><p>The internal rate of return of your actual cash flows: the opening value on the day before the period, every deposit and withdrawal on its date, and the closing value at period end. It rewards or penalises the timing of your deposits. Actual/365 day count, same as Excel's XIRR.</p>
     <h3>Benchmark</h3><p>EGX30 Capped, the index most comparable to a retail EGX portfolio because no single stock can dominate it. It is a price index: it leaves dividends out, while your return includes the dividends you received, so the comparison flatters the portfolio a little. A month's return comes from consecutive month-end closes when both exist, otherwise from the typed %; when a month in the period has neither, the index return and alpha are left blank rather than counted as 0%. Alpha is the simple difference of returns. "With dividends (estimated)" compounds the index return with the index's estimated dividend yield (the EGX30 members' TradingView yields, weighted like the index): an estimate, not a published total-return index.</p>
     <h3>Cash benchmark</h3><p>What the money would have earned sitting in cash: each month at the Central Bank of Egypt policy rate in force, <code>(1 + annual rate)^(1/12) − 1</code>, chain-linked like the portfolio. The CBE policy rate is a proxy for what cash in a savings fund earns; a month without a recorded rate uses the risk-free rate in Settings. "Ahead of cash" is the portfolio's time-weighted return minus the cash return.</p>
@@ -5710,7 +5760,7 @@ function dailySection(){
     <div class="tbl"><table data-testid="recon-table"><thead><tr><th>Month</th><th>Last session</th><th class="n">From prices</th><th class="n">Your mark</th><th class="n">Difference</th><th class="n">%</th></tr></thead><tbody>
     ${D.recon.map(r=>`<tr><td>${M(r.month)}</td><td>${dfmt(r.day)}</td><td class="n">${egp(r.model)}</td><td class="n">${egp(r.marks)}</td><td class="n ${Math.abs(r.pct)>0.01?'neg':''}">${egp(r.diff)}</td><td class="n">${Math.abs(r.pct)>0.01?`<span class="pill stale">${pct(r.pct,2)}</span>`:pct(r.pct,2)}</td></tr>`).join('')}
     </tbody></table></div>
-    <p class="note" style="margin:10px 0 0">Large gaps usually mean the month-end mark was typed as a round number. Posting the Thndr statement (Settings → Statements &amp; imports) replaces it with the exact figure from the positions snapshot.</p></div>`;
+    <p class="note" style="margin:10px 0 0">Large gaps usually mean the month-end mark was typed as a round number. Posting the Thndr statement (More → Statements) replaces it with the exact figure from the positions snapshot.</p></div>`;
 }
 
 // ---------- Performance: Daily P/L calendar ----------
@@ -6755,7 +6805,7 @@ document.addEventListener('click', e => {
 
 // ---------- events (delegated) ----------
 document.addEventListener('click', async e=>{
-  const sc=e.target.closest('[data-sec]'); if(sc){ e.preventDefault(); const el=document.getElementById('sec-'+sc.dataset.sec); if(el){ el.scrollIntoView({behavior:'smooth',block:'start'}); try{ history.replaceState(null,'','#'+sc.dataset.sec); }catch(x){} } return; }
+  const sc=e.target.closest('[data-sec]'); if(sc){ e.preventDefault(); setTab(S.tab, sc.dataset.sec); return; }
   const go=e.target.closest('[data-go]'); if(go){ setTab(go.dataset.go); return; }
   const nt=e.target.closest('[data-note-t]'); if(nt){ const el=document.getElementById(nt.dataset.noteT); if(el){ el.hidden=!el.hidden; nt.setAttribute('aria-expanded', String(!el.hidden)); } return; }
   const uw=e.target.closest('[data-unwatch]'); if(uw){ const n=uw.dataset.unwatch, a=S.assets[n]; if(!a||S.readOnly) return; await save(()=>S.db.doc('portfolio/assets').set({items:{...S.assets,[n]:{...a, watch:false}}}),`${a.symbol||n} removed from the watchlist`); return; }
@@ -6809,7 +6859,7 @@ document.addEventListener('change', e=>{ if(e.target.dataset.pick!=null&&S.stmt.
 document.addEventListener('submit', async e=>{
   e.preventDefault();
   if(e.target.id==='tx-form'){ let t; try{ t=normTx({d:$('#tx-d').value,t:$('#tx-t').value,a:$('#tx-a').value,q:$('#tx-q').value,p:$('#tx-p').value,amt:$('#tx-amt').value,acc:$('#tx-acc').value}); }catch(err){ toast(err.message,'error'); return; }
-    if(t.a && !S.assets[t.a] && (t.t==='Buy')) toast(`"${t.a}" is a new asset. Add its symbol under Settings → Inputs & settings so it gets priced.`);
+    if(t.a && !S.assets[t.a] && (t.t==='Buy')) toast(`"${t.a}" is a new asset. Add its symbol under More → Settings so it gets priced.`);
     if(await addTx([t])){ toast(`${t.t} added`); e.target.reset(); } }
   if(e.target.id==='wl-form'){ await addToWatchlist($('#wl-sym').value); return; }
   if(e.target.id==='asset-form'){ const name=$('#na-name').value.trim(); if(!name) return; if(S.assets[name]){ toast('That asset already exists','error'); return; }

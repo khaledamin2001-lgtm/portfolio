@@ -43,8 +43,10 @@ its portfolio (the site says so when it is switched on). For each package this j
      with the late ones shown as no figure;
   6b. the monthly trading report card (prefs.reportCard; older packages follow the other emails): from the 1st to the
      10th, once, as soon as last month's statement is in or from the 5th: tools/report_card.js -> emails.report_card;
+  6c. the yearly wrap-up (January 1st-10th, once, for last year; with the report card's tick; the owner's account sends
+     the MAIN portfolio's): tools/wrapped.js -> emails.wrapped, ranked among friends on the year's return;
   7. writes status/{uid}.job {at, gmail, report, friends, error} for the site owner's admin screen (no figures);
-  8. saves {alertsSent, weeklySent, gmail, friendMailed, shares, leaderboardSent, reportCardSent, lastReport} back to the account as users/{uid}/docs/sync__mail, encrypted to the account key.
+  8. saves {alertsSent, weeklySent, gmail, friendMailed, shares, leaderboardSent, reportCardSent, wrappedSent, lastReport} back to the account as users/{uid}/docs/sync__mail, encrypted to the account key.
 Emails go from GMAIL_ADDRESS to the address in the package only. One account failing never stops the others; the job
 exits 1 (and emails the owner) only when nothing could be done at all. Logs carry counts, never figures or addresses.
 """
@@ -649,6 +651,8 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
     lb_on = prefs.get("leaderboard", owner_acct or any(prefs.get(k, True) for k in ("alerts", "weekly", "reports")))
     # the monthly trading report card: the same (the owner's sign-in account has no portfolio of its own: never)
     card_on = not owner_acct and prefs.get("reportCard", any(prefs.get(k, True) for k in ("alerts", "weekly", "reports")))
+    # the yearly wrap-up (January) goes with the report card tick; the owner's, from the main portfolio, always
+    wrap_on = owner_acct or card_on
     if owner_acct:
         prefs = {"alerts": False, "weekly": False, "reports": False, "gmail": False, "shareMain": prefs.get("shareMain")}
     today = now.strftime("%Y-%m-%d")
@@ -849,6 +853,46 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                                 changed = True
                 except Exception as e:      # friends never stop the rest
                     notes.append(f"friends not done ({getattr(e, 'step', type(e).__name__)})")
+            # the yearly wrap-up: the 1st to the 10th of January, once, for last year (the owner's from the MAIN portfolio),
+            # ranked among friends on the year's return once their copies cover December (or from the 8th)
+            WY = now.year - 1
+            if wrap_on and not dry and now.month == 1 and now.day <= 10 and state.get("wrappedSent") != WY:
+                try:
+                    cl = token_claims(tok)
+                    use_main = owner_acct and main_docs and cl.get("email_verified")
+                    wdocs = main_docs() if use_main else cur_docs
+                    wname = ((wdocs.get("portfolio/settings") or {}).get("data") or {}).get("name") or name
+                    if not ((wdocs.get("portfolio/settings") or {}).get("data") or {}).get("inception"):
+                        state["wrappedSent"] = WY       # no portfolio: nothing to wrap
+                        changed = True
+                    else:
+                        friends = [f for f in list_links(http, tok, pkg["uid"]) if f.get("status") == "friends" and f.get("pub")]
+                        theirs = [(f.get("name") or ("@" + f["handle"] if f.get("handle") else "A friend"), p) for f, p in friend_profiles(http, tok, pkg["uid"], priv, friends)] if friends else []
+                        DM = f"{WY}-12"
+                        if friends and now.day <= 7 and not (len(theirs) == len(friends) and all(fresh_for(p, DM) for _, p in theirs)):
+                            notes.append("wrapped waiting for friends' December")
+                        else:
+                            wd = os.path.join(work, "wdata")
+                            materialize({k: (v if isinstance(v, dict) and "data" in v else {"data": v}) for k, v in wdocs.items()}, shared, wd)
+                            r = subprocess.run(["node", os.path.join(code, "src", "tools", "wrapped.js"), "--data", wd, "--year", str(WY), "--today", today],
+                                               capture_output=True, text=True, timeout=300)
+                            out = json.loads((r.stdout or "{}").strip().splitlines()[-1] if (r.stdout or "").strip() else "{}")
+                            if not out.get("ok"):
+                                raise jc.JobError("wrapped", out.get("error") or "wrapped.js failed")
+                            w = out["wrapped"]
+                            if w.get("months"):
+                                ranking = None
+                                if theirs:
+                                    ranking = [{"who": "You", "me": True, "y": w.get("ret")}] + [
+                                        {"who": n, "y": month_figures(p, DM)[1] if fresh_for(p, DM) else None} for n, p in theirs]
+                                    ranking.sort(key=lambda r: (r["y"] is None, -(r["y"] or 0), not r.get("me")))
+                                subj, body, html = emails.wrapped(wname, w, ranking, emails.ACCOUNT_FOOT)
+                                send(pkg["email"], subj, body, html)
+                                notes.append("wrapped sent")
+                            state["wrappedSent"] = WY
+                            changed = True
+                except Exception as e:      # never stops the rest; the next run tries again (until the 10th)
+                    notes.append(f"wrapped not done ({getattr(e, 'step', type(e).__name__)})")
             # the owner hears about every new account (the admin list, read with the owner's verified sign-in)
             if owner_acct and not dry:
                 try:

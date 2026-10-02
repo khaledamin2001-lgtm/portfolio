@@ -701,6 +701,62 @@
     return { R: PE.run(data, sel || { type: 'Since Inception' }, { fallback, daily: D || undefined, today }), data, today };
   }
 
+  // Every sale of a stock (a part sale too; cash-like funds left out): its result over the average cost of the shares sold
+  // (the ledger's basis) and its days held from the buy that opened the position. [{d, s, n, kind, pl, roi, days}]
+  function salesOf(R, assets) {
+    const sectorOf = {}, symOf = {}; Object.values(assets || {}).forEach((a) => { if (a && a.name) { sectorOf[a.name] = a.sector; symOf[a.name] = a.symbol || ''; } });
+    const thr = typeof R.settings.openThreshold === 'number' ? R.settings.openThreshold : 0.5;
+    const held = {}, opened = {}, sales = [];
+    PE.sortLedger(R.ledger).forEach((t) => {
+      if (!t.a || (t.t !== 'Buy' && t.t !== 'Sell' && t.t !== 'Bonus')) return;
+      const h = held[t.a] || 0, q = t.q || 0;
+      if (t.t !== 'Sell') { if (h <= thr) opened[t.a] = t.d; held[t.a] = h + q; return; }
+      held[t.a] = h - q;
+      if (CASH_LIKE.has(sectorOf[t.a]) || !(t.basis > 0)) return;
+      const pl = (t.amt || 0) - t.basis;
+      sales.push({ d: t.d, s: symOf[t.a] || '', n: t.a, kind: held[t.a] <= thr ? 'closed' : 'trimmed', pl, roi: pl / t.basis, days: opened[t.a] ? dayNum(t.d) - dayNum(opened[t.a]) : null });
+    });
+    return sales;
+  }
+
+  // The yearly wrap-up (the email in early January): year Y in review. run: an all-time portfolioRun.
+  //   {year, ret, bench, months: [{m, r, b}], best / worst month, posMonths, sales: {n, wins, winRate, pl, best, worst},
+  //    mostTraded: {s, n, trades}, longest: {s, n, days, open}, buys, dividends, deposits, withdrawals, start, end}
+  // ret / bench compound the year's months (time-weighted: deposits and withdrawals do not count as gains).
+  function yearWrapped(run, Y) {
+    const R = run.R, y = String(Y);
+    const sectorOf = {}, symOf = {}; Object.values(run.data.assets || {}).forEach((a) => { if (a && a.name) { sectorOf[a.name] = a.sector; symOf[a.name] = a.symbol || ''; } });
+    const months = R.months.filter((r) => r.has && r.ret != null && r.month.slice(0, 4) === y).map((r) => ({ m: r.month, r: r.ret, b: r.bench, value: r.value, live: !!r.live }));
+    const comp = (k) => (months.length && months.every((x) => x[k] != null) ? months.reduce((a, x) => a * (1 + x[k]), 1) - 1 : null);
+    const byR = months.slice().sort((a, b) => b.r - a.r);
+    const sales = salesOf(R, run.data.assets).filter((x) => x.d.slice(0, 4) === y), wins = sales.filter((x) => x.pl > 0);
+    // best and worst by return, among sales of a real size (at least 0.5% of the average month-end value): a few shares
+    // left over are not "the worst trade of the year"
+    const avgV = months.length ? mean(months.map((x) => x.value || 0)) : 0, sized = sales.filter((x) => !avgV || Math.abs(x.pl / x.roi) >= 0.005 * avgV);
+    const bySale = (sized.length ? sized : sales).slice().sort((a, b) => b.roi - a.roi);
+    const rows = R.ledger.filter((t) => t.d && t.d.slice(0, 4) === y);
+    const count = {}; rows.forEach((t) => { if (t.a && (t.t === 'Buy' || t.t === 'Sell') && !CASH_LIKE.has(sectorOf[t.a])) count[t.a] = (count[t.a] || 0) + 1; });
+    const top = Object.keys(count).sort((a, b) => count[b] - count[a] || (a < b ? -1 : 1))[0];
+    // the longest hold: a sale in the year, or a position still open at the year's end (counted to 31 Dec, or to today)
+    const end = `${y}-12-31` < (run.today || '') ? `${y}-12-31` : run.today;
+    let longest = null;
+    sales.forEach((x) => { if (x.days != null && (!longest || x.days > longest.days)) longest = { s: x.s, n: x.n, days: x.days, open: false }; });
+    const thr = typeof R.settings.openThreshold === 'number' ? R.settings.openThreshold : 0.5, held = {}, opened = {};
+    PE.sortLedger(R.ledger).forEach((t) => { if (!t.a || t.d > end || (t.t !== 'Buy' && t.t !== 'Sell' && t.t !== 'Bonus')) return; const h = held[t.a] || 0;
+      if (t.t !== 'Sell' && h <= thr) opened[t.a] = t.d; held[t.a] = h + (t.t === 'Sell' ? -1 : 1) * (t.q || 0); });
+    Object.keys(held).forEach((n) => { if (held[n] > thr && opened[n] && !CASH_LIKE.has(sectorOf[n])) { const d = dayNum(end) - dayNum(opened[n]); if (!longest || d > longest.days) longest = { s: symOf[n] || '', n, days: d, open: true }; } });
+    const prevDec = R.months.find((r) => r.month === `${Number(y) - 1}-12` && r.has);
+    return { year: Number(y), ret: comp('r'), bench: comp('b'), months: months.map(({ m, r, b, live }) => ({ m, r, b, live })), partial: months.length < 12 || months.some((x) => x.live),
+      best: byR[0] ? { m: byR[0].m, r: byR[0].r } : null, worst: byR.length > 1 ? { m: byR[byR.length - 1].m, r: byR[byR.length - 1].r } : null,
+      posMonths: months.filter((x) => x.r > 0).length,
+      sales: { n: sales.length, wins: wins.length, winRate: sales.length ? wins.length / sales.length : null, pl: sum(sales.map((x) => x.pl)), best: bySale[0] || null, worst: bySale.length > 1 ? bySale[bySale.length - 1] : null },
+      mostTraded: top ? { s: symOf[top] || '', n: top, trades: count[top] } : null, longest,
+      buys: rows.filter((t) => t.t === 'Buy' && !CASH_LIKE.has(sectorOf[t.a])).length,
+      dividends: sum(rows.filter((t) => t.t === 'Dividend').map((t) => t.amt || 0)),
+      deposits: sum(rows.filter((t) => t.t === 'Deposit').map((t) => t.amt || 0)), withdrawals: -sum(rows.filter((t) => t.t === 'Withdrawal').map((t) => t.amt || 0)),
+      start: prevDec ? prevDec.value : null, end: months.length ? months[months.length - 1].value : null };
+  }
+
   // The monthly trading report card (the email on the 1st): how month M went next to the month before. run: an all-time
   // portfolioRun. Every sale counts (a part sale too), cash-like funds left out: its result is the money it brought in
   // over the average cost of the shares sold (the ledger's basis), its holding days from the buy that opened the position.
@@ -713,17 +769,7 @@
   function reportCard(run, M) {
     const R = run.R, prevMonth = PE.monthOf(addDays(M + '-01', -1));
     const sectorOf = {}, symOf = {}; Object.values(run.data.assets || {}).forEach((a) => { if (a && a.name) { sectorOf[a.name] = a.sector; symOf[a.name] = a.symbol || ''; } });
-    const thr = typeof R.settings.openThreshold === 'number' ? R.settings.openThreshold : 0.5;
-    const held = {}, opened = {}, sales = [];
-    PE.sortLedger(R.ledger).forEach((t) => {
-      if (!t.a || (t.t !== 'Buy' && t.t !== 'Sell' && t.t !== 'Bonus')) return;
-      const h = held[t.a] || 0, q = t.q || 0;
-      if (t.t !== 'Sell') { if (h <= thr) opened[t.a] = t.d; held[t.a] = h + q; return; }
-      held[t.a] = h - q;
-      if (CASH_LIKE.has(sectorOf[t.a]) || !(t.basis > 0)) return;
-      const pl = (t.amt || 0) - t.basis;
-      sales.push({ d: t.d, s: symOf[t.a] || '', n: t.a, kind: held[t.a] <= thr ? 'closed' : 'trimmed', pl, roi: pl / t.basis, days: opened[t.a] ? dayNum(t.d) - dayNum(opened[t.a]) : null });
-    });
+    const sales = salesOf(R, run.data.assets);
     const stats = (m) => {
       const list = sales.filter((x) => x.d.slice(0, 7) === m);
       if (!list.length) return null;
@@ -812,6 +858,6 @@
     return { r: r - 1, b: bOk ? b - 1 : null, from: rg.from, to: rg.to };
   }
 
-  const api = { headsUp, drawdownCheck, limitCheck, limitText, reportCard, volumeSpikes, riskModel, morningBrief, heldStocks, priceBook, makePricer, daily, dailyStats, dailyTwr, capWeights, benchWeights, holdingsAt, estimateMarks, attribution, activeWeights, tradeChecks, tradingHabits, portfolioRun, friendProfile, profilePeriod, income, trailing, calendar, TRADING_DAYS, TRADING_NOTE };
+  const api = { headsUp, drawdownCheck, limitCheck, limitText, reportCard, salesOf, yearWrapped, volumeSpikes, riskModel, morningBrief, heldStocks, priceBook, makePricer, daily, dailyStats, dailyTwr, capWeights, benchWeights, holdingsAt, estimateMarks, attribution, activeWeights, tradeChecks, tradingHabits, portfolioRun, friendProfile, profilePeriod, income, trailing, calendar, TRADING_DAYS, TRADING_NOTE };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.PA = api;
 })(this);

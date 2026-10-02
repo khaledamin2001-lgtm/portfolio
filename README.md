@@ -53,7 +53,11 @@ There are two kinds of portfolio:
    the last session, each holding's move, ex-dividend and earnings dates this week, holdings near their levels, unusual
    volume (also a heads-up alert: 3× the 30-session average), limits and a 5% stress line. Analysis shows what an index
    drop would likely do (beta) and which holdings move together (correlation); **Today** (`?today`, or the app's
-   long-press shortcut) is a one-screen view for the phone's home screen.
+   long-press shortcut) is a one-screen view for the phone's home screen. In early January, "your year, wrapped"
+   (`tools/wrapped.js`): the year's return, best and worst sale, most traded stock, and the ranking among friends.
+5. **The site is five tabs**: Home, Holdings, Returns, Trading, More (Activity, Closed trades, Reports, Statements,
+   Settings, Checks). A tab with several sections shows one at a time; Home keeps the essentials, with "More numbers"
+   folded away.
 
 ## What runs when (all times Cairo)
 

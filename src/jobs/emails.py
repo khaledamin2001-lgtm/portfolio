@@ -305,6 +305,67 @@ def morning(name, b, foot=None):
     return f"{name}: morning brief · {head}", text, html
 
 
+def wrapped(name, w, ranking=None, foot=None):
+    """The yearly wrap-up (tools/wrapped.js, engine2.js yearWrapped), early in January: the year's return against the index,
+    best and worst month and sale, the most traded stock, the longest hold, dividends, and the ranking among friends
+    (ranking: [{"who", "me", "y"}] best first, percentages only). The portfolio's own figures, so amounts are fine here."""
+    Y = w["year"]
+    mlabel = lambda m: month_name(m).split(" ")[0] if m else ""
+    days = lambda x: f"{x:,} day{'s' if x != 1 else ''}"
+    rank = None
+    if ranking:
+        me = next((r for r in ranking if r.get("me")), None)
+        if me and me.get("y") is not None:
+            rank = 1 + sum(1 for r in ranking if r.get("y") is not None and r["y"] > me["y"])
+    tiles = [(f"Your {Y}", pct(w.get("ret"), 1), "time-weighted", tone_of(w.get("ret"))),
+             ("EGX30 Capped", pct(w.get("bench"), 1), "the index", tone_of(w.get("bench")))]
+    tiles.append(("Among friends", f"#{rank} of {len(ranking)}", "by the year's return", None) if rank else ("Value now", egp(w.get("end")), "at the year's end", None))
+    blocks = []
+    if w.get("ret") is not None:
+        vs = "" if w.get("bench") is None else (f", ahead of the EGX30 Capped's {pct(w['bench'], 1)}" if w["ret"] > w["bench"] else f", behind the EGX30 Capped's {pct(w['bench'], 1)}")
+        blocks.append(("p", f"The portfolio returned {pct(w['ret'], 1)} in {Y}{vs}."))
+    blocks.append(("tiles", tiles))
+    sl = w.get("sales") or {}
+    facts = []
+    if w.get("best"):
+        facts.append(("Best month", f"{mlabel(w['best']['m'])} {pct(w['best']['r'], 1)}", tone_of(w["best"]["r"])))
+    if w.get("worst"):
+        facts.append(("Worst month", f"{mlabel(w['worst']['m'])} {pct(w['worst']['r'], 1)}", tone_of(w["worst"]["r"])))
+    if w.get("months"):
+        facts.append(("Months up", f"{w.get('posMonths', 0)} of {len(w['months'])}"))
+    if sl.get("n"):
+        facts.append(("Sales", f"{sl['n']} · {sl['wins']} at a profit ({sl['winRate'] * 100:.0f}%)"))
+        facts.append(("Profit or loss on sales", egp(sl.get("pl")), tone_of(sl.get("pl"))))
+    if w.get("mostTraded"):
+        mt = w["mostTraded"]; facts.append(("Most traded", f"{mt['s'] or mt['n']} ({mt['trades']} trades)"))
+    if w.get("longest"):
+        lg = w["longest"]; facts.append(("Longest hold", f"{lg['s'] or lg['n']}, {days(lg['days'])}" + (" and counting" if lg.get("open") else "")))
+    if w.get("buys"):
+        facts.append(("Buys", str(w["buys"])))
+    if w.get("dividends"):
+        facts.append(("Dividends received", egp(w["dividends"])))
+    if w.get("deposits") or w.get("withdrawals"):
+        facts.append(("Money in / out", f"{egp(w.get('deposits') or 0)} / {egp(w.get('withdrawals') or 0)}"))
+    blocks += [("h", f"{Y} in numbers"), ("facts", facts)]
+    sale = lambda x: f"{x['s'] or x['n']}: {pct(x['roi'], 1)} ({egp(x['pl'])}), held {days(x['days']) if x.get('days') is not None else '—'}"
+    if sl.get("best"):
+        blocks.append(("box", "good", "Best sale of the year", [sale(sl["best"])]))
+    if sl.get("worst") and sl["worst"]["roi"] < sl["best"]["roi"]:
+        blocks.append(("box", "bad" if sl["worst"]["pl"] < 0 else "info", "Weakest sale of the year", [sale(sl["worst"])]))
+    if ranking and len(ranking) > 1:
+        place = lambda r: 1 + sum(1 for o in ranking if o.get("y") is not None and o["y"] > r["y"]) if r.get("y") is not None else None
+        blocks += [("h", "You and your friends", f"{Y} return, percentages only"),
+                   ("table", ["", "Who", str(Y)], [[f"#{place(r)}" if place(r) else "", "You" if r.get("me") else r["who"], (pct(r.get("y"), 1), tone_of(r.get("y")))] for r in ranking], ["l", "l", "r"])]
+    ms = w.get("months") or []
+    if ms and ms[0]["m"] != f"{Y}-01":
+        blocks.append(("p", f"Counted from {month_name(ms[0]['m'])}, the portfolio's first month."))
+    elif ms and ms[-1].get("live"):
+        blocks.append(("p", f"{month_name(ms[-1]['m'])}'s month-end value is still provisional until its Thndr statement is posted."))
+    text, html = email(name, f"Your {Y}, wrapped", blocks, subtitle="A year in the market", button=("Open your portfolio", SITE), foot=foot,
+                       preheader=f"{pct(w.get('ret'), 1)} in {Y}" + (f" · #{rank} among friends" if rank else ""))
+    return f"{name}: your {Y} wrapped · {pct(w.get('ret'), 1)}", text, html
+
+
 def card_empty(card):
     """A report card with nothing in it (no sale, no return, no activity in the month or the one before): not sent."""
     a = card.get("activity") or {}

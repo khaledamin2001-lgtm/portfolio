@@ -1257,7 +1257,7 @@
       <label class="lk-check"><input type="checkbox" id="lk-ml-weekly" data-testid="mail-weekly" ${m.weekly ? 'checked' : ''}> Weekly summary (Thursday evening)</label>
       <label class="lk-check"><input type="checkbox" id="lk-ml-reports" data-testid="mail-reports" ${m.reports ? 'checked' : ''}> Month-end report (Excel + PDF)</label>
       <label class="lk-check"><input type="checkbox" id="lk-ml-leaderboard" data-testid="mail-leaderboard" ${m.leaderboard ? 'checked' : ''}> Friends leaderboard (1st of the month)</label>
-      <label class="lk-check"><input type="checkbox" id="lk-ml-card" data-testid="mail-report-card" ${m.reportCard ? 'checked' : ''}> Trading report card (early each month)</label>
+      <label class="lk-check"><input type="checkbox" id="lk-ml-card" data-testid="mail-report-card" ${m.reportCard ? 'checked' : ''}> Trading report card (early each month) and your year, wrapped (January)</label>
       <label class="lk-check"><input type="checkbox" id="lk-ml-morning" data-testid="mail-morning" ${m.morning ? 'checked' : ''}> Morning brief (Sunday to Thursday, about 9 am, before the market opens)</label>
       <button class="lk-btn" id="lk-ml-go" data-testid="mail-on">${on ? 'Save' : 'Turn on email updates'}</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>
       ${on ? '<button class="lk-btn ghost" id="lk-ml-off" data-testid="mail-off">Turn off email updates</button>' : ''}

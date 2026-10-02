@@ -13,8 +13,8 @@
    A new build is a new cache name: the new worker installs, skips waiting, takes over open pages, carries the saved data
    files over from the old cache (only those missing from the new one) and deletes the old caches. */
 'use strict';
-const BUILD = '934e282750d7 2026-10-02 04:40';     // the page's pd-build stamp
-const SITE = '4a8315eec9';       // hash over this site build (index.html, sw.js template, icons, manifest, fonts)
+const BUILD = '2ef1d674ae0a 2026-10-02 05:27';     // the page's pd-build stamp
+const SITE = 'd286011532';       // hash over this site build (index.html, sw.js template, icons, manifest, fonts)
 const PREFIX = 'portfolio-desk-';  // the github.io origin is shared by every Pages site of the account: touch only our caches
 const CACHE = PREFIX + BUILD.split(' ')[0] + '-' + SITE;
 const STATIC = ["manifest.webmanifest", "icon-180.png", "icon-192.png", "icon-512.png", "icon-maskable-192.png", "icon-maskable-512.png", "fonts/ibm-plex-mono-latin-500.woff2", "fonts/ibm-plex-mono-latin-ext-500.woff2", "fonts/public-sans-latin-400.woff2", "fonts/public-sans-latin-ext-400.woff2", "fonts/spectral-latin-500.woff2", "fonts/spectral-latin-600.woff2", "fonts/spectral-latin-ext-500.woff2", "fonts/spectral-latin-ext-600.woff2", "vendor/pdf.min.js", "vendor/pdf.worker.min.js"];      // cache-first files, relative to the scope

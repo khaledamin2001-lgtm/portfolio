@@ -153,7 +153,17 @@ const cleanup = [];
     const heads = await page.locator('[data-testid=heads-up-item]').allTextContents();
     check('heads-up worked out on the page: the synthetic target hit is listed', heads.some((t) => /reached its target/.test(t)), JSON.stringify(heads));
     await page.click('#tab-analysis'); await $t('trading').waitFor({ timeout: 10000 });
+    check('simpler layout: five tabs; a tab shows one section at a time, switched by the bar at its top',
+      (await page.locator('#tabs button').count()) === 5 && (await page.locator('#main .tsec').count()) === 1 && (await page.locator('.secbar button').count()) === 4
+      && (await $t('sec-trading').getAttribute('aria-selected')) === 'true');
+    await page.evaluate(() => { location.hash = ''; }); await page.click('#tab-overview');
+    await page.click('[data-go=review]'); await $t('analysis').waitFor({ timeout: 10000 });
+    check('Home → "The full review" opens Trading on Review & risk; the tab remembers it', (await $t('sec-review').getAttribute('aria-selected')) === 'true');
+    await page.click('#tab-overview'); await page.click('#tab-analysis');
+    check('... and comes back to it', (await $t('sec-review').getAttribute('aria-selected')) === 'true');
+    await $t('sec-trading').click(); await $t('trading').waitFor({ timeout: 10000 });
     check('Analysis opens on "Your trading"; with no trade closed yet it says so and still shows the open positions', await $t('trading-empty').isVisible() && /Winners held/.test(await $t('trading-open').textContent()) && (await page.locator('#sec-trading').count()) === 1);
+    await $t('sec-review').click(); await $t('stress').waitFor({ timeout: 10000 });
     const stressTxt = await $t('stress').textContent(), corrN = await page.locator('[data-testid=corr-matrix] tbody tr').count();
     check('Analysis: "If the market falls" (beta, 5/10/20% drops) and "Which holdings move together" (a row per holding)',
       /Portfolio beta/.test(stressTxt) && /EGX30 Capped −10%/.test(stressTxt) && corrN >= 2 && (await $t('corr-summary').isVisible()), `${corrN} rows`);
@@ -168,7 +178,7 @@ const cleanup = [];
     await $t('today-pin').uncheck(); await $t('today-full').click();
     check('Today: "Full portfolio" goes back', await page.locator('[data-testid=today]').isHidden() && await page.evaluate(() => localStorage.getItem('pd.openToday')) === 'false');
     await page.setViewportSize({ width: 1280, height: 900 });
-    await page.click('#tab-settings');
+    await page.click('#tab-more'); await page.click('[data-testid=sec-inputs]');
     check('view only: the settings save button is hidden', !(await $t('save-settings').isVisible()));
 
     // ---- turn editing on ----
@@ -186,7 +196,7 @@ const cleanup = [];
 
     // ---- 1. settings: the risk-free rate ----
     const s0 = readDoc('portfolio', 'settings');
-    await page.click('#tab-settings');
+    await page.click('#tab-more'); await page.click('[data-testid=sec-inputs]');
     check('editing on: the settings save button shows', await $t('save-settings').isVisible());
     await page.fill('#st-rf', '24.5');
     await $t('save-settings').click();
@@ -219,7 +229,7 @@ const cleanup = [];
     check('limits: switched off', await toastSaid(/Limit warnings are off/) && readDoc('portfolio', 'settings').data.limits.on === false);
     await page.click('#tab-overview');
     check('limits: off, nothing about them on the Overview', !(await page.locator('[data-testid=heads-up-item]').allTextContents()).some((t) => /^Limit/.test(t)));
-    await page.click('#tab-settings');
+    await page.click('#tab-more'); await page.click('[data-testid=sec-inputs]');
 
     // ---- 4. a stale remembered sha: the "job" rewrites settings, the page saves again ----
     jobWrite([{ op: 'update', collection: 'portfolio', doc_id: 'settings', data: { staleDays: 9 } }]);
@@ -236,7 +246,7 @@ const cleanup = [];
     // ---- 2. a transaction through the Activity form, while the "job" added a row ----
     jobWrite([{ op: 'update', collection: 'ledger', doc_id: 'y2026', data: { rows: readDoc('ledger', 'y2026').data.rows.concat([{ id: 'jobrow01', d: '2026-09-24', t: 'Deposit', amt: 1234, acc: 'Main', src: 'sync' }]) } }]);
     const l0 = readDoc('ledger', 'y2026');
-    await page.click('#tab-activity');
+    await page.click('#tab-more'); await page.click('[data-testid=sec-ledger]');
     await page.fill('#tx-d', '2026-09-27'); await page.selectOption('#tx-t', 'Deposit'); await page.fill('#tx-amt', '50000');
     await $t('add-tx-submit').click();
     await page.waitForTimeout(500);

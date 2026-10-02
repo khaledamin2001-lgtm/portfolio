@@ -68,6 +68,7 @@ materializes it).
 | `tools/sync.js` | Applies Thndr emails (invoices, requested and monthly statements) to the ledger; prints the writes to make and the inbox email. Holds a statement for review unless the month reconciles exactly. |
 | `tools/history_seed.js` | "Build it from my Thndr emails": a whole portfolio from the monthly statements since 2019. |
 | `tools/weekly.js` | The Thursday weekly summary email (HTML + text). |
+| `tools/wrapped.js` | The yearly wrap-up (`engine2.js` `yearWrapped`): the year's return vs the index, best and worst month and sale, most traded stock, longest hold, dividends. Emailed in early January by `run_account_mail.py`, ranked among friends. |
 | `tools/brief.js` | The morning brief (`engine2.js` `morningBrief`): the last session, each holding's move, ex-dividend and earnings dates this week, holdings near their target or stop, unusual volume, limits, a 5% index drop. Emailed by `jobs/run_morning.py`. |
 | `tools/report_card.js` | The monthly trading report card (`engine2.js` `reportCard`): last month's sales (part sales too), win rate, days held, best and worst sale, return vs the index, limits, tips. Emailed by `run_sync.py` (the owner) and `run_account_mail.py` (accounts). |
 | `tools/profile.js` | A portfolio's percentages profile for its friends (`engine2.js` `friendProfile`: returns by month, holdings by weight, trades as %, no amounts); the account job shares it. |
