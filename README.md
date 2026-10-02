@@ -46,6 +46,9 @@ There are two kinds of portfolio:
    `src/cloud/firestore.rules`. Friends compare in **percentages only**: what one shares with another is a profile of
    returns by month, holdings by weight and trades as % (`engine2.js` `friendProfile`), never an amount. On the 1st of
    the month each account can get a leaderboard email ranking it and its friends on last month's return.
+3. **Your rules.** Each portfolio can switch on its own limits (Holdings tab → Your limits: the most one stock and one
+   sector may be of the whole portfolio); crossing one shows on the Overview and is emailed once. Early each month a
+   trading report card email scores last month's sales next to the month before (`tools/report_card.js`).
 
 ## What runs when (all times Cairo)
 

@@ -128,6 +128,29 @@ try:
 finally:
     shutil.rmtree(tmp)
 
+# ---- the monthly report card: due once last month's statement is in; its email with and without sales
+tmp = tempfile.mkdtemp()
+try:
+    os.makedirs(f"{tmp}/data/imports"); os.makedirs(f"{tmp}/write")
+    check("report card: no statement for the month yet", not run_sync.statement_posted(f"{tmp}/data", f"{tmp}/write", "2026-09"))
+    json.dump({"id": "2026-09", "data": {"fullMonth": True}}, open(f"{tmp}/data/imports/2026-09.json", "w"))
+    json.dump({"fullMonth": True}, open(f"{tmp}/write/import_2026-10.json", "w"))
+    check("report card: a statement in the data, or one this run posted, counts",
+          run_sync.statement_posted(f"{tmp}/data", f"{tmp}/write", "2026-09") and run_sync.statement_posted(f"{tmp}/data", f"{tmp}/write", "2026-10"))
+    import emails
+    base = {"month": "2026-09", "prevMonth": "2026-08", "ret": 0.03, "bench": 0.05, "prevRet": 0.051, "prevBench": 0.01, "provisional": False,
+            "activity": {"buys": 2, "sells": 3, "deposits": 1000, "withdrawals": 0}, "limits": None, "tips": ["A tip."]}
+    cur = {"n": 3, "wins": 2, "losses": 1, "winRate": 2 / 3, "avgRoi": 0.05, "pl": 1234.5, "avgHold": 20, "holdWin": 10, "holdLoss": 40, "avgWin": 900, "avgLoss": -565.5}
+    s1, t1, h1 = emails.report_card("Demo", dict(base, cur=cur, prev=dict(cur, winRate=0.5), best={"d": "2026-09-07", "s": "COMI", "n": "x", "kind": "closed", "roi": 0.2, "pl": 900, "days": 12},
+                                                worst={"d": "2026-09-09", "s": "ETEL", "n": "y", "kind": "trimmed", "roi": -0.1, "pl": -565.5, "days": 40}))
+    check("report card email: the month, the score next to the month before, best and weakest sale",
+          s1 == "Demo: September 2026 report card · 2 of 3 sales at a profit" and "up 17 pts from Aug" in t1 and "COMI: +20.0% (900 EGP), held 12 days" in t1
+          and "ETEL: −10.0% (−566 EGP), held 40 days · part sale" in t1 and "A tip." in t1 and "<html" in h1.lower())
+    s2, t2, _ = emails.report_card("Demo", dict(base, cur=None, prev=None, best=None, worst=None, provisional=True))
+    check("report card email: a month with no sale, and a provisional month-end", s2.endswith("· no sales") and "You sold nothing in September 2026." in t2 and "provisional" in t2)
+finally:
+    shutil.rmtree(tmp)
+
 # ---- mail_send: recipient lock (no network: refused before connecting)
 class FakeCtx:
     live = True

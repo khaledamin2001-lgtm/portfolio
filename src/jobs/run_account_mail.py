@@ -41,8 +41,10 @@ its portfolio (the site says so when it is switched on). For each package this j
      return of the account and of each friend (their shares/{friend}/to/{uid} profiles), ranked, with the index and the
      month's best sale, percentages only; sent once every friend's copy covers the month, or from the 8th (to the 10th)
      with the late ones shown as no figure;
+  6b. the monthly trading report card (prefs.reportCard; older packages follow the other emails): from the 1st to the
+     10th, once, as soon as last month's statement is in or from the 5th: tools/report_card.js -> emails.report_card;
   7. writes status/{uid}.job {at, gmail, report, friends, error} for the site owner's admin screen (no figures);
-  8. saves {alertsSent, weeklySent, gmail, friendMailed, shares, leaderboardSent, lastReport} back to the account as users/{uid}/docs/sync__mail, encrypted to the account key.
+  8. saves {alertsSent, weeklySent, gmail, friendMailed, shares, leaderboardSent, reportCardSent, lastReport} back to the account as users/{uid}/docs/sync__mail, encrypted to the account key.
 Emails go from GMAIL_ADDRESS to the address in the package only. One account failing never stops the others; the job
 exits 1 (and emails the owner) only when nothing could be done at all. Logs carry counts, never figures or addresses.
 """
@@ -642,6 +644,8 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
     owner_acct = hashlib.sha256(str(token_claims(tok).get("email") or "").lower().encode()).hexdigest() == OWNER_HASH
     # the monthly friends leaderboard: its own tick on the site; packages from before it follow the other emails
     lb_on = prefs.get("leaderboard", owner_acct or any(prefs.get(k, True) for k in ("alerts", "weekly", "reports")))
+    # the monthly trading report card: the same (the owner's sign-in account has no portfolio of its own: never)
+    card_on = not owner_acct and prefs.get("reportCard", any(prefs.get(k, True) for k in ("alerts", "weekly", "reports")))
     if owner_acct:
         prefs = {"alerts": False, "weekly": False, "reports": False, "gmail": False, "shareMain": prefs.get("shareMain")}
     today = now.strftime("%Y-%m-%d")
@@ -765,6 +769,29 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                         state["lastReport"] = f"{jc.short(M)} sent {today}"
                         changed = True
                     cur_docs = read_account(http, tok, pkg["uid"], priv)     # with the months marked as sent
+            # the monthly trading report card: last month, once, from the 1st to the 10th, as soon as last month's statement
+            # is in (imports/<M> fullMonth) or from the 5th
+            CM = prev_month(now)
+            if card_on and not dry and now.day <= 10 and state.get("reportCardSent") != CM and (
+                    now.day >= 5 or (((cur_docs.get(f"imports/{CM}") or {}).get("data") or {}).get("fullMonth"))):
+                try:
+                    cdata = os.path.join(work, "cdata")
+                    materialize(cur_docs, shared, cdata)
+                    r = subprocess.run(["node", os.path.join(code, "src", "tools", "report_card.js"), "--data", cdata, "--month", CM, "--today", today],
+                                       capture_output=True, text=True, timeout=300)
+                    out = json.loads((r.stdout or "{}").strip().splitlines()[-1] if (r.stdout or "").strip() else "{}")
+                    if not out.get("ok"):
+                        raise jc.JobError("report card", out.get("error") or "report_card.js failed")
+                    if emails.card_empty(out["card"]):
+                        notes.append("report card skipped (nothing in the month)")
+                    else:
+                        subj, body, html = emails.report_card(name, out["card"], emails.ACCOUNT_FOOT)
+                        send(pkg["email"], subj, body, html)
+                        notes.append("report card sent")
+                    state["reportCardSent"] = CM
+                    changed = True
+                except Exception as e:      # the card never stops the rest; the next run tries again (until the 10th)
+                    notes.append(f"report card not done ({getattr(e, 'step', type(e).__name__)})")
             friends_n = None
             if not dry:
                 try:

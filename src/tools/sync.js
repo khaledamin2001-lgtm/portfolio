@@ -41,7 +41,8 @@
    The email subject starts with settings.name and links the site.
    Heads-up digest (digest()): after the emails, from the data dir as it stands after this run — (exdiv) a held stock
    whose market/latest quote goes ex-dividend within 7 days; (target/stop) a held stock whose latest price is at or past
-   its asset target (≥) or stop (≤); (drawdown) the portfolio's return index (deposits and withdrawals excluded) more
+   its asset target (≥) or stop (≤); (limit) a stock or sector above the portfolio's own limit (settings.limits, when
+   switched on; 'limit:stock:COMI:20'); (drawdown) the portfolio's return index (deposits and withdrawals excluded) more
    than 10% below its highest daily (else month-end) point of the last 12 months, the live month valued with
    ./engine.js + ./engine2.js; (statement) every month in missingStatements(). Each item has a stable key
    ('exdiv:COMI:2026-10-02', 'target:COMI:125', 'drawdown:2026-03-15:10', 'statement:2026-08'). sync/state.digest =

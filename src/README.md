@@ -42,7 +42,7 @@ Run by the workflows in the private `portfolio-engine` repository as `python3 sr
 | `run_market.py` | The daily market update for one portfolio: prices (`fetch_prices.py`), history, index, macro fields, then a site refresh and the "market updated" email. |
 | `run_shared_market.py` | The whole EGX market once a day for every account, published sealed to the members' key as `m/market.enc.json`. |
 | `run_sync.py` | The owner's Thndr inbox sync: new emails from Gmail (`imap_fetch.py`) → `tools/sync.js` → one write → the inbox email, the weekly summary, the month-end report, a site refresh. |
-| `run_account_mail.py` | Every opted-in site account: its Thndr emails from its own Gmail, "Build it from my Thndr emails", heads-up alerts, the weekly summary, the month-end report, friend requests, friends' percentages profiles, the monthly friends leaderboard (1st to 10th, once a month), new sign-ups for the owner. Each email goes to that account's own address only. |
+| `run_account_mail.py` | Every opted-in site account: its Thndr emails from its own Gmail, "Build it from my Thndr emails", heads-up alerts, the weekly summary, the month-end report, friend requests, friends' percentages profiles, the monthly friends leaderboard and trading report card (1st to 10th, once a month each), new sign-ups for the owner. Each email goes to that account's own address only. |
 | `run_reports.py` | Month-end reports for a portfolio without an inbox sync (Yassin's). |
 | `publish.py` | Encrypts a portfolio's documents (`../tools/export.py`) and pushes them to this repo's `p/<id>/`. |
 | `fetch_prices.py` | Prices from TradingView's public scanner plus a short daily-bar backfill. |
@@ -67,6 +67,7 @@ materializes it).
 | `tools/sync.js` | Applies Thndr emails (invoices, requested and monthly statements) to the ledger; prints the writes to make and the inbox email. Holds a statement for review unless the month reconciles exactly. |
 | `tools/history_seed.js` | "Build it from my Thndr emails": a whole portfolio from the monthly statements since 2019. |
 | `tools/weekly.js` | The Thursday weekly summary email (HTML + text). |
+| `tools/report_card.js` | The monthly trading report card (`engine2.js` `reportCard`): last month's sales (part sales too), win rate, days held, best and worst sale, return vs the index, limits, tips. Emailed by `run_sync.py` (the owner) and `run_account_mail.py` (accounts). |
 | `tools/profile.js` | A portfolio's percentages profile for its friends (`engine2.js` `friendProfile`: returns by month, holdings by weight, trades as %, no amounts); the account job shares it. |
 | `tools/excel.js` + `tools/excel.py` | The month-end Excel workbook (`excel.js` shapes the figures, `excel.py` writes the `.xlsx`). |
 | `tools/factsheet.js` | Renders the monthly factsheet with the page's own code, headless (Playwright): HTML, PDF and the headline figures. |
@@ -84,6 +85,8 @@ with only the public key; `jobs/publish.py` and `jobs/run_sync.py` call them.
 | `tests/test_dietz.js` | Modified Dietz, bonus shares, round trips, same-day ordering. Sections on the real data run only with private exports (`KHALED_EXPORT`, `YASSIN_EXPORT`, `EXPECTED_JSON`), otherwise `SKIP`. |
 | `tests/test.js` | Excel parity against the original workbook; needs two private fixtures, otherwise exits 0. |
 | `tests/test_statement.js` | Statement reading and matching (the right ledger row, quiet months). |
+| `tests/test_limits.js` | Your limits (`settings.limits`, `engine2.js` `limitCheck`): weights of the whole portfolio with cash, cash-like funds left out, the heads-up items and their keys. |
+| `tests/test_report_card.js` | The report card: every sale counted, cash-like funds left out, holding days, the month next to the one before, the tips. |
 | `tests/test_profile.js` | The friends' profile: only percentages (no amounts, share counts or prices), weights add up, returns equal the engine's, trades in order. |
 | `tests/test_trading.js` | The sums behind Analysis → Your trading (`engine2.js` `tradingHabits`): per trade, days held, groups, streaks, after the sale. |
 | `tests/test_checks.js` | The model checks that tell a real problem from how Thndr books things: cash dips, estimated months, trade prices on big-move days, typed fund rows. |

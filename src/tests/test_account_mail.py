@@ -417,6 +417,7 @@ try:
         sent.clear(); ram.main(["--engine", eng, "--code", code, "--now", now], http=FakeHttp(), send=send)
         return {m["to"]: m for m in sent if "leaderboard" in m["subject"]}
     lb = lb_run("2026-09-03T13:30:00Z")
+    rc3 = {m["to"]: m for m in sent if " report card" in m["subject"]}
     g = lb.get("friend2@example.com") or {}
     check("leaderboard: on the 3rd, an account whose friends' copies all cover August gets it (the owner too, ranked on the main portfolio)",
           g.get("subject", "").startswith("August 2026 leaderboard: you are #") and g["subject"].endswith(" of 3") and "Demo" in g["text"] and "Owner" in g["text"]
@@ -428,7 +429,18 @@ try:
           all(v[0] is not None and pct(v[0]) in g.get("text", "") and pct(v[1]) in g.get("text", "") for v in aug.values()), json.dumps(aug))
     check("leaderboard: percentages only (no EGP, no amounts)", lb and all("EGP" not in m["text"] and "EGP" not in m["html"] for m in lb.values()))
     check("leaderboard: not sent twice", lb_run("2026-09-03T17:30:00Z") == {})
+    check("report card: not sent twice", not [m for m in sent if " report card" in m["subject"] and m["to"] == "friend2@example.com"])
     lb = lb_run("2026-09-08T13:30:00Z")
+    rc8 = {m["to"]: m for m in sent if " report card" in m["subject"]}
+    check("report card: on the 3rd, only the account whose August statement is in gets it (to its own address); the others on the 5th or later",
+          sorted(rc3) == ["friend2@example.com", "hist2@example.com"] and rc3["friend2@example.com"]["subject"].startswith("Friend Portfolio: August 2026 report card · ")
+          and sorted(rc8) == ["friend@example.com"], json.dumps([list(rc3), list(rc8)]))
+    check("report card: an account with nothing in the month (still waiting to be built) gets none, and it is not asked again",
+          (adoc(WUID, wacct, "sync/mail") or {}).get("reportCardSent") == "2026-08")
+    check("report card: the site owner's sign-in account (no portfolio of its own) never gets one, the history accounts' empty months neither break the run",
+          "owner@example.com" not in rc3 and "owner@example.com" not in rc8)
+    check("report card: the account's own figures (its sales and its month), recorded as sent",
+          "AUGUST 2026 NEXT TO JULY 2026" in rc8["friend@example.com"]["text"] and "Sales  0  1" in rc8["friend@example.com"]["text"] and (adoc(UID, acct, "sync/mail") or {}).get("reportCardSent") == "2026-08", rc8["friend@example.com"]["text"][:400])
     check("leaderboard: on the 8th the waiting account gets it, with the friends whose copies are there", list(lb) == ["friend@example.com"]
           and lb["friend@example.com"]["subject"].endswith(" of 2") and "Friend Portfolio" in lb["friend@example.com"]["text"], json.dumps({k: v["subject"] for k, v in lb.items()}))
     st1 = adoc(UID, acct, "sync/mail") or {}

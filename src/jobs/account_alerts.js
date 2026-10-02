@@ -3,8 +3,8 @@
      node account_alerts.js --data <dir> [--today YYYY-MM-DD]
    <dir> holds <collection>/<doc>.json files (raw data or {data}): portfolio/settings, assets, marks, ledger/y*, market/latest,
    history/*. Prints ONE JSON line: {ok, items: [{kind, key, text}], drawdown, errors} from engine2.js PA.headsUp — the same
-   checks the page shows live and the inbox job emails (ex-dividend within a week, target / stop reached, more than 10%
-   below the 12-month high). Exit 1 on bad arguments or unreadable data. */
+   checks the page shows live and the inbox job emails (ex-dividend within a week, target / stop reached, a stock or
+   sector over the account's own limit, more than 10% below the 12-month high). Exit 1 on bad arguments or unreadable data. */
 'use strict';
 const fs = require('fs'), path = require('path');
 const TOOLS = path.join(__dirname, '..', 'tools');

@@ -265,6 +265,76 @@ def leaderboard(name, month_label, rows, bench, best, foot):
     return f"{month_label} leaderboard: {head}", text, html
 
 
+def card_empty(card):
+    """A report card with nothing in it (no sale, no return, no activity in the month or the one before): not sent."""
+    a = card.get("activity") or {}
+    return not (card.get("cur") or card.get("prev") or card.get("ret") is not None or any(a.get(k) for k in ("buys", "sells", "deposits", "withdrawals")))
+
+
+def report_card(name, card, foot=None):
+    """The monthly trading report card (tools/report_card.js, engine2.js reportCard), to the portfolio's own address: last
+    month's sales (every sale, a part sale too) next to the month before, the best and worst, the month's return vs the
+    index, and plain tips. The portfolio's own figures, so amounts are fine here."""
+    M, P = card["month"], card.get("prevMonth")
+    cur, prev = card.get("cur"), card.get("prev")
+    mn, pn = month_name(M), month_name(P) if P else "last month"
+    short = lambda m: MON[int(m[5:7]) - 1]
+    days = lambda x: "—" if x is None else f"{round(x)} day{'s' if round(x) != 1 else ''}"
+    delta = lambda a, b, unit: (None if a is None or b is None or abs(a - b) < 1e-9 else
+                                f"{'up' if a > b else 'down'} {abs(a - b) * 100:.0f} pts from {short(P)}" if unit == "pts" else
+                                f"{'up' if a > b else 'down'} from {b:.0f} in {short(P)}")
+    if cur:
+        lead = f"You sold {cur['n']} time{'s' if cur['n'] != 1 else ''} in {mn}: {cur['wins']} at a profit, {cur['losses']} at a loss."
+    else:
+        lead = f"You sold nothing in {mn}."
+    if card.get("ret") is not None:
+        lead += f" The portfolio returned {pct(card['ret'], 1)}" + (f", the EGX30 Capped {pct(card['bench'], 1)}." if card.get("bench") is not None else ".")
+    blocks = [("p", lead)]
+    if cur:
+        blocks.append(("tiles", [("Win rate", f"{cur['winRate'] * 100:.0f}%", delta(cur["winRate"], prev and prev["winRate"], "pts") or f"{cur['wins']} of {cur['n']} sale{'s' if cur['n'] != 1 else ''}", None),
+                                 ("Avg per sale", pct(cur["avgRoi"], 1), "on the cost of the shares sold", tone_of(cur["avgRoi"])),
+                                 ("Avg held", days(cur["avgHold"]), "from the buy", None)]))
+    row = lambda lab, a, b, f, tone=False: [lab, (f(a), tone_of(a) if tone else None), (f(b), tone_of(b) if tone else None)]
+    g = lambda k: (lambda x: x.get(k) if x else None)
+    num = lambda x: "—" if x is None else f"{x:.0f}"
+    rate = lambda x: "—" if x is None else f"{x * 100:.0f}%"
+    rows = [row("Sales", g("n")(cur) or 0, g("n")(prev) or 0, num),
+            row("Win rate", g("winRate")(cur), g("winRate")(prev), rate),
+            row("Avg return per sale", g("avgRoi")(cur), g("avgRoi")(prev), lambda x: pct(x, 1), True),
+            row("Profit or loss on sales", g("pl")(cur), g("pl")(prev), egp, True),
+            row("Days held, winners", g("holdWin")(cur), g("holdWin")(prev), days),
+            row("Days held, losers", g("holdLoss")(cur), g("holdLoss")(prev), days),
+            row("Portfolio return", card.get("ret"), card.get("prevRet"), lambda x: pct(x, 1), True),
+            row("EGX30 Capped", card.get("bench"), card.get("prevBench"), lambda x: pct(x, 1), True)]
+    rows = [r for i, r in enumerate(rows) if (cur or prev or i >= 6) and (i == 0 or r[1][0] != "—" or r[2][0] != "—")]    # no row of dashes
+    blocks += [("h", f"{mn} next to {pn}"), ("table", ["", short(M), short(P) if P else ""], rows, ["l", "r", "r"])]
+    sale = lambda x: f"{x['s'] or x['n']}: {pct(x['roi'], 1)} ({egp(x['pl'])}), held {days(x['days'])}" + (" · part sale" if x.get("kind") == "trimmed" else "")
+    if card.get("best"):
+        blocks.append(("box", "good", "Best sale", [sale(card["best"])]))
+    if card.get("worst") and card["worst"]["roi"] < card["best"]["roi"]:
+        blocks.append(("box", "bad" if card["worst"]["pl"] < 0 else "info", "Weakest sale", [sale(card["worst"])]))
+    a = card.get("activity") or {}
+    acts = [("Buys", str(a.get("buys", 0))), ("Sales", str(a.get("sells", 0)))]
+    if a.get("deposits"):
+        acts.append(("Money in", egp(a["deposits"])))
+    if a.get("withdrawals"):
+        acts.append(("Money out", egp(a["withdrawals"])))
+    blocks += [("h", "Activity"), ("facts", acts)]
+    lim = card.get("limits")
+    if lim:
+        blocks.append(("box", "bad" if lim.get("over") else "good", "Your limits", [
+            "All within your limits right now." if not lim.get("over") else
+            "; ".join(f"{(x['s'] or x['n']) if x['kind'] == 'stock' else 'The ' + x['n'] + ' sector'} is {x['w'] * 100:.1f}% (limit {x['limit'] * 100:g}%)" for x in lim["over"]) + "."]))
+    if card.get("tips"):
+        blocks.append(("box", "info", "What the numbers say", card["tips"]))
+    if card.get("provisional"):
+        blocks.append(("p", f"{mn}'s month-end value is provisional until its Thndr statement is posted, so the returns may still move a little."))
+    head = f"{cur['wins']} of {cur['n']} sale{'s' if cur['n'] != 1 else ''} at a profit" if cur else "no sales"
+    text, html = email(name, f"{mn} report card", blocks, subtitle="Your trading last month", button=("See your trading", SITE), foot=foot,
+                       preheader=f"{head} · portfolio {pct(card.get('ret'), 1)} vs index {pct(card.get('bench'), 1)}")
+    return f"{name}: {mn} report card · {head}", text, html
+
+
 def built(name, seed, summary, short):
     """'Build it from my Thndr emails' is done."""
     held = [e for e in summary.get("log") or [] if e.get("status") == "hold"]

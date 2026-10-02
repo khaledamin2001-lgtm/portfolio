@@ -1552,43 +1552,44 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   const sealTo = (pubB64, bytes, label) => seal(bytes, label, pubB64);
   async function writeMail(prefs) {
     const mk = await (await fetch('p/khaled/keys.json', { cache: 'no-store' })).json();
-    const pkg = { v: 1, uid: CLOUD.uid, email: prefs.email, refresh: CLOUD.refresh, pk8: b64big(acctKey()), prefs: { alerts: !!prefs.alerts, weekly: !!prefs.weekly, reports: !!prefs.reports, leaderboard: prefs.leaderboard !== false, gmail: !!prefs.gmail, shareMain: !!prefs.shareMain }, at: new Date().toISOString() };
+    const pkg = { v: 1, uid: CLOUD.uid, email: prefs.email, refresh: CLOUD.refresh, pk8: b64big(acctKey()), prefs: { alerts: !!prefs.alerts, weekly: !!prefs.weekly, reports: !!prefs.reports, leaderboard: prefs.leaderboard !== false, reportCard: prefs.reportCard !== false, gmail: !!prefs.gmail, shareMain: !!prefs.shareMain }, at: new Date().toISOString() };
     const env = Object.assign({ v: 1 }, await sealTo(mk.pub, enc.encode(JSON.stringify(pkg)), MAIL_LABEL));
     await fsReq('PATCH', `mail/${CLOUD.uid}`, { fields: { pkg: { stringValue: JSON.stringify(env) }, at: { stringValue: pkg.at } } });
     ls.set(mailLS(), Object.assign({}, prefs, { ref: await sha(CLOUD.refresh) }));
   }
   // nothing left on: the package is deleted, so the job no longer opens the portfolio
   async function setMail(prefs) {
-    if (prefs.alerts || prefs.weekly || prefs.reports || prefs.leaderboard || prefs.gmail || prefs.shareMain) return writeMail(prefs);
+    if (prefs.alerts || prefs.weekly || prefs.reports || prefs.leaderboard || prefs.reportCard || prefs.gmail || prefs.shareMain) return writeMail(prefs);
     await fsReq('DELETE', `mail/${CLOUD.uid}`); ls.del(mailLS());
   }
   // the job signs in with the saved refresh token: after a password change (which ends old sessions) it is sealed again
   async function resealMail() { const m = mailPrefs(); if (m && CLOUD && CLOUD.refresh && m.ref !== (await sha(CLOUD.refresh))) await writeMail(m); }
   function mailScreen(note) {
-    const on = mailOn(), m = on ? mailPrefs() : Object.assign({ email: CUR.email || (CLOUD && CLOUD.email) || '' }, mailPrefs() || {}, { alerts: true, weekly: true, reports: true, leaderboard: true });
-    screen(`<h1>Email updates</h1><p>Get an email when something needs your attention (a dividend coming up, a target or stop reached, a big drop), a summary every Thursday evening, your month-end report (Excel workbook + PDF factsheet) when each monthly statement is posted, and on the 1st of each month how you ranked among your friends (percentages only).</p>
+    const on = mailOn(), m = on ? mailPrefs() : Object.assign({ email: CUR.email || (CLOUD && CLOUD.email) || '' }, mailPrefs() || {}, { alerts: true, weekly: true, reports: true, leaderboard: true, reportCard: true });
+    screen(`<h1>Email updates</h1><p>Get an email when something needs your attention (a dividend coming up, a target or stop reached, a big drop), a summary every Thursday evening, your month-end report (Excel workbook + PDF factsheet) when each monthly statement is posted, and early each month a report card on your trading and how you ranked among your friends (percentages only).</p>
       <p class="lk-tip">To write these, the site owner's email job has to open your portfolio, so while this is on your figures are not private from that job. Switch it off any time: nothing is kept after that.</p>
       <form id="lk-ml" autocomplete="off"><input id="lk-ml-email" type="email" data-testid="mail-address" value="${esc(m.email)}" placeholder="Email address" aria-label="Email address">
       <label class="lk-check"><input type="checkbox" id="lk-ml-alerts" data-testid="mail-alerts" ${m.alerts ? 'checked' : ''}> Heads-up alerts</label>
       <label class="lk-check"><input type="checkbox" id="lk-ml-weekly" data-testid="mail-weekly" ${m.weekly ? 'checked' : ''}> Weekly summary (Thursday evening)</label>
       <label class="lk-check"><input type="checkbox" id="lk-ml-reports" data-testid="mail-reports" ${m.reports ? 'checked' : ''}> Month-end report (Excel + PDF)</label>
       <label class="lk-check"><input type="checkbox" id="lk-ml-leaderboard" data-testid="mail-leaderboard" ${m.leaderboard !== false ? 'checked' : ''}> Friends leaderboard (1st of the month)</label>
+      <label class="lk-check"><input type="checkbox" id="lk-ml-card" data-testid="mail-report-card" ${m.reportCard !== false ? 'checked' : ''}> Trading report card (early each month)</label>
       <button class="lk-btn" id="lk-ml-go" data-testid="mail-on">${on ? 'Save' : 'Turn on email updates'}</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>
       ${on ? '<button class="lk-btn ghost" id="lk-ml-off" data-testid="mail-off">Turn off email updates</button>' : ''}
       <div class="lk-links"><button type="button" class="lk-link" id="lk-ml-back" data-testid="mail-back">Back</button></div>`);
     $l('#lk-ml-back').onclick = accountScreen;
     $l('#lk-ml').onsubmit = async (ev) => {
-      ev.preventDefault(); const email = $l('#lk-ml-email').value.trim(), alerts = $l('#lk-ml-alerts').checked, weekly = $l('#lk-ml-weekly').checked, reports = $l('#lk-ml-reports').checked, leaderboard = $l('#lk-ml-leaderboard').checked;
+      ev.preventDefault(); const email = $l('#lk-ml-email').value.trim(), alerts = $l('#lk-ml-alerts').checked, weekly = $l('#lk-ml-weekly').checked, reports = $l('#lk-ml-reports').checked, leaderboard = $l('#lk-ml-leaderboard').checked, reportCard = $l('#lk-ml-card').checked;
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return err('Enter an email address.');
-      if (!alerts && !weekly && !reports && !leaderboard) return err('Pick at least one kind of email, or turn email updates off.');
+      if (!alerts && !weekly && !reports && !leaderboard && !reportCard) return err('Pick at least one kind of email, or turn email updates off.');
       const b = $l('#lk-ml-go'); b.disabled = true; err('Saving…');
-      try { await writeMail(Object.assign({}, mailPrefs() || {}, { email, alerts, weekly, reports, leaderboard, gmail: gmailOn() })); open(); toast('Email updates are on. The first ones come after the next market close.'); }
+      try { await writeMail(Object.assign({}, mailPrefs() || {}, { email, alerts, weekly, reports, leaderboard, reportCard, gmail: gmailOn() })); open(); toast('Email updates are on. The first ones come after the next market close.'); }
       catch (e) { console.error(e); b.disabled = false; err(e.message || String(e)); }
     };
     const off = $l('#lk-ml-off');
     if (off) off.onclick = async () => {
       off.disabled = true;
-      try { await setMail(Object.assign({}, mailPrefs(), { alerts: false, weekly: false, reports: false, leaderboard: false })); open(); toast('Email updates are off.'); }
+      try { await setMail(Object.assign({}, mailPrefs(), { alerts: false, weekly: false, reports: false, leaderboard: false, reportCard: false })); open(); toast('Email updates are off.'); }
       catch (e) { console.error(e); off.disabled = false; err(e.message || String(e)); }
     };
   }
@@ -1653,8 +1654,8 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
           const patch = {};
           if (!S0.trackFrom && !(S0.historyImport && S0.historyImport.status === 'pending')) patch.trackFrom = cairoDay(Date.now() / 1000);   // the ledger so far stands; emails count from the next day
           if (Object.keys(patch).length) await saveDoc('update', 'portfolio/settings', patch);
-          const m = Object.assign({ email: email || address, alerts: false, weekly: false, reports: false, leaderboard: false }, mailPrefs() || {});
-          if (also) Object.assign(m, { email: m.email || address, alerts: true, weekly: true, reports: true, leaderboard: true });
+          const m = Object.assign({ email: email || address, alerts: false, weekly: false, reports: false, leaderboard: false, reportCard: false }, mailPrefs() || {});
+          if (also) Object.assign(m, { email: m.email || address, alerts: true, weekly: true, reports: true, leaderboard: true, reportCard: true });
           await writeMail(Object.assign(m, { gmail: true }));
           return gmailDoneScreen(done, history || !!(S0.historyImport && S0.historyImport.status === 'pending'));
         }
@@ -2468,7 +2469,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   })();
 })();
 </script>
-<meta name="pd-build" content="2f009fede22e 2026-10-02 03:45">
+<meta name="pd-build" content="59a9ba8765fc 2026-10-02 04:01">
 <style>
 :root{
   /* Apple-style system: SF (the system font on iPhone and Mac) for everything, quiet greys, one blue accent, green / red
@@ -2647,6 +2648,11 @@ td.wrap{white-space:normal;min-width:180px;padding:8px 10px;margin:0;max-width:n
 .bar{height:6px;border-radius:3px;background:var(--surface-2);position:relative;min-width:60px}
 .bar i{position:absolute;inset:0 auto 0 0;border-radius:3px;background:var(--s1)}
 .wcell{display:flex;align-items:center;gap:8px}.wcell .bar{flex:1}.wcell .num{min-width:3.4em;text-align:right;font-size:12.5px}
+.lim-rows{display:grid;gap:14px}.lim-top{display:flex;justify-content:space-between;gap:12px;margin-bottom:6px;font-size:14px}
+.lim-bar{height:8px;overflow:visible}.lim-row.over .lim-bar i{background:var(--neg)}
+.lim-bar em{position:absolute;top:-4px;bottom:-4px;width:2px;margin-left:-1px;border-radius:1px;background:var(--ink)}
+.lim-form .lim-on{grid-column:1/-1}.lim-form .lim-on span{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--ink)}
+.lim-form .lim-on input{width:auto;margin:0}
 .pill{font-size:11px;font-weight:600;padding:2px 7px;border-radius:999px;letter-spacing:.03em}
 .pill.win{background:var(--pos-bg);color:var(--pos)} .pill.loss{background:var(--neg-bg);color:var(--neg)}
 .pill.auto{background:var(--accent-soft);color:var(--accent)} .pill.man{background:var(--surface-2);color:var(--ink-2)} .pill.stale{background:var(--warn-bg);color:var(--warn)}
@@ -3925,8 +3931,31 @@ button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.pl
     const peak = pts.reduce((a, p) => (p.idx > a.idx ? p : a)), now = pts[pts.length - 1];
     return { dd: now.idx / peak.idx - 1, peak: { d: peak.d, idx: peak.idx }, now: { d: now.d, value: now.value, live: !!now.live }, points: pts.length, basis };
   }
+  // ---------- your limits (settings.limits) ----------
+  // limits = {on, stock, sector}: the most one stock and one sector may be of the WHOLE portfolio (holdings at the latest
+  // prices + cash; cash-like funds count as cash, never as a stock or a sector), as fractions (0.2 = 20%); a missing or
+  // empty one is no limit. R: a PE.run result. Returns null when off, else {stock, sector, total, stocks: [{n, s, sec, w}],
+  // sectors: [{sec, w}] (largest first), over: [{kind 'stock' | 'sector', n, s, w, limit}]}.
+  function limitCheck(R, limits) {
+    const L = limits || {};
+    if (!L.on) return null;
+    const lim = (x) => (typeof x === 'number' && isFinite(x) && x > 0 ? x : null);
+    const cash = Math.max(0, R.liveCash != null ? R.liveCash : (R.settings && R.settings.cash) || 0), total = (R.pos.mvTotal || 0) + cash;
+    const stocks = total > 0 ? R.pos.open.filter((p) => (p.mv || 0) > 0 && !CASH_LIKE.has(p.sector))
+      .map((p) => ({ n: p.name, s: p.symbol || '', sec: p.sector || 'Unclassified', w: p.mv / total })).sort((a, b) => b.w - a.w) : [];
+    const m = {}; stocks.forEach((x) => { m[x.sec] = (m[x.sec] || 0) + x.w; });
+    const sectors = Object.keys(m).map((sec) => ({ sec, w: m[sec] })).sort((a, b) => b.w - a.w);
+    const out = { stock: lim(L.stock), sector: lim(L.sector), total, stocks, sectors, over: [] };
+    if (out.stock) stocks.filter((x) => x.w > out.stock + 1e-9).forEach((x) => out.over.push({ kind: 'stock', n: x.n, s: x.s, w: x.w, limit: out.stock }));
+    if (out.sector) sectors.filter((x) => x.w > out.sector + 1e-9).forEach((x) => out.over.push({ kind: 'sector', n: x.sec, s: '', w: x.w, limit: out.sector }));
+    return out;
+  }
+  // a limit crossed, as a heads-up line (the page, the owner's inbox email and the accounts' alerts use the same words)
+  const limitText = (x) => `${x.kind === 'stock' ? (x.s || x.n) : `The ${x.n} sector`} is ${pctTxt(x.w)} of your portfolio, over your ${+(x.limit * 100).toFixed(1)}% limit for one ${x.kind}`;
+
   // The heads-up items that follow from the data alone: ex-dividend within a week for a held stock, a held stock at or past
-  // its target / stop, and the portfolio more than 10% below its 12-month high. o = {today, tx, assets, settings, marks,
+  // its target / stop, a stock or sector over the portfolio's own limit (settings.limits, limitCheck), and the portfolio more than
+  // 10% below its 12-month high. o = {today, tx, assets, settings, marks,
   // market, history}. Every check is independent; one that fails is listed in errors. (The inbox job adds overdue statements.)
   function headsUp(o) {
     const items = [], errors = [];
@@ -3943,6 +3972,16 @@ button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.pl
       if (h.asset.target != null && h.asset.target !== '' && tg > 0 && px >= tg) items.push({ kind: 'target', key: `target:${h.sym}:${tg}`, text: `${h.sym} reached its target: ${hFmt(px)} vs target ${hFmt(tg)}` });
       if (h.asset.stop != null && h.asset.stop !== '' && sp > 0 && px <= sp) items.push({ kind: 'stop', key: `stop:${h.sym}:${sp}`, text: `${h.sym} is at or below its stop: ${hFmt(px)} vs stop ${hFmt(sp)}` });
     });
+    try {
+      const L = o.settings && o.settings.limits;
+      if (L && L.on && o.settings.inception) {
+        const pb = priceBook(o.history || {});
+        const pricer = makePricer(o.assets, PE.runLedger(o.tx || []), pb);
+        const fallback = (name) => { const p = pricer(name, o.today); return p ? { p: p.p, d: pb.last } : null; };
+        const R = PE.run({ settings: o.settings, marks: o.marks, assets: o.assets, tx: o.tx || [], market: o.market }, { type: 'Since Inception' }, { today: o.today, fallback });
+        limitCheck(R, L).over.forEach((x) => items.push({ kind: 'limit', key: `limit:${x.kind}:${x.s || x.n}:${Math.round(x.limit * 1000) / 10}`, text: limitText(x) }));
+      }
+    } catch (e) { errors.push('limits: ' + (e.message || e)); }
     try {
       drawdown = drawdownCheck(o);
       if (drawdown && drawdown.dd < -DRAWDOWN) {
@@ -4057,6 +4096,61 @@ button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.pl
     return { R: PE.run(data, sel || { type: 'Since Inception' }, { fallback, daily: D || undefined, today }), data, today };
   }
 
+  // The monthly trading report card (the email on the 1st): how month M went next to the month before. run: an all-time
+  // portfolioRun. Every sale counts (a part sale too), cash-like funds left out: its result is the money it brought in
+  // over the average cost of the shares sold (the ledger's basis), its holding days from the buy that opened the position.
+  // Returns {month, prevMonth, ret, bench, prevRet, prevBench, provisional, cur, prev, best, worst, activity, limits, tips}:
+  //   cur / prev  {n, wins, losses, winRate, avgRoi, pl, avgHold, holdWin, holdLoss, avgWin, avgLoss} (null: no sale)
+  //   best/worst  {d, s, n, kind 'closed' | 'trimmed', roi, pl, days} the month's best and worst sale by return on cost
+  //   activity    {buys, sells, deposits, withdrawals} rows in the month (deposits / withdrawals as positive EGP)
+  //   limits      limitCheck now (null when the portfolio has no limits switched on)
+  //   tips        plain sentences from the numbers (holding losers longer than winners, small wins and big losses, ...)
+  function reportCard(run, M) {
+    const R = run.R, prevMonth = PE.monthOf(addDays(M + '-01', -1));
+    const sectorOf = {}, symOf = {}; Object.values(run.data.assets || {}).forEach((a) => { if (a && a.name) { sectorOf[a.name] = a.sector; symOf[a.name] = a.symbol || ''; } });
+    const thr = typeof R.settings.openThreshold === 'number' ? R.settings.openThreshold : 0.5;
+    const held = {}, opened = {}, sales = [];
+    PE.sortLedger(R.ledger).forEach((t) => {
+      if (!t.a || (t.t !== 'Buy' && t.t !== 'Sell' && t.t !== 'Bonus')) return;
+      const h = held[t.a] || 0, q = t.q || 0;
+      if (t.t !== 'Sell') { if (h <= thr) opened[t.a] = t.d; held[t.a] = h + q; return; }
+      held[t.a] = h - q;
+      if (CASH_LIKE.has(sectorOf[t.a]) || !(t.basis > 0)) return;
+      const pl = (t.amt || 0) - t.basis;
+      sales.push({ d: t.d, s: symOf[t.a] || '', n: t.a, kind: held[t.a] <= thr ? 'closed' : 'trimmed', pl, roi: pl / t.basis, days: opened[t.a] ? dayNum(t.d) - dayNum(opened[t.a]) : null });
+    });
+    const stats = (m) => {
+      const list = sales.filter((x) => x.d.slice(0, 7) === m);
+      if (!list.length) return null;
+      const w = list.filter((x) => x.pl > 0), l = list.filter((x) => x.pl <= 0), days = (a) => { const d = a.filter((x) => x.days != null); return d.length ? mean(d.map((x) => x.days)) : null; };
+      return { n: list.length, wins: w.length, losses: l.length, winRate: w.length / list.length, avgRoi: mean(list.map((x) => x.roi)), pl: sum(list.map((x) => x.pl)),
+        avgHold: days(list), holdWin: days(w), holdLoss: days(l), avgWin: w.length ? mean(w.map((x) => x.pl)) : null, avgLoss: l.length ? mean(l.map((x) => x.pl)) : null, list };
+    };
+    const cur = stats(M), prev = stats(prevMonth);
+    const byRoi = cur ? cur.list.slice().sort((a, b) => b.roi - a.roi) : [];
+    const best = byRoi[0] || null, worst = byRoi.length > 1 ? byRoi[byRoi.length - 1] : null;
+    const rows = R.ledger.filter((t) => t.d && t.d.slice(0, 7) === M);
+    const activity = { buys: rows.filter((t) => t.t === 'Buy' && !CASH_LIKE.has(sectorOf[t.a])).length, sells: rows.filter((t) => t.t === 'Sell' && !CASH_LIKE.has(sectorOf[t.a])).length,
+      deposits: sum(rows.filter((t) => t.t === 'Deposit').map((t) => t.amt || 0)), withdrawals: -sum(rows.filter((t) => t.t === 'Withdrawal').map((t) => t.amt || 0)) };
+    const mo = (m) => R.months.find((r) => r.month === m && r.has) || null;
+    const m0 = mo(M), m1 = mo(prevMonth);
+    const tips = [], pc = (x) => `${Math.round(x * 1000) / 10}%`;
+    if (!cur) tips.push('You sold nothing this month, so there is no trade to score: the month\'s return came from holding.');
+    if (cur && cur.wins && cur.losses && cur.holdLoss != null && cur.holdWin != null && cur.holdLoss > cur.holdWin * 1.5 && cur.holdLoss - cur.holdWin >= 5)
+      tips.push(`You held the losing sales ${Math.round(cur.holdLoss)} days on average and the winners ${Math.round(cur.holdWin)}: the losers were kept longer than the winners.`);
+    if (cur && cur.wins && cur.losses && cur.winRate >= 0.5 && Math.abs(cur.avgLoss) > cur.avgWin * 1.5)
+      tips.push('Most sales made money, but the average loss was much bigger than the average win: a stop loss caps the losers.');
+    if (cur && cur.n >= 3 && cur.winRate < 0.4) tips.push(`Only ${cur.wins} of your ${cur.n} sales made money this month.`);
+    const sp = (x) => (x > 0 ? '+' : x < 0 ? '−' : '') + pc(Math.abs(x));
+    if (m0 && m0.ret != null && m0.bench != null && m0.ret < m0.bench - 0.01) tips.push(`The index did better this month: the EGX30 Capped ${sp(m0.bench)}, the portfolio ${sp(m0.ret)}.`);
+    if (m0 && m0.ret != null && m0.bench != null && m0.ret > m0.bench + 0.01) tips.push(`You beat the index this month: the portfolio ${sp(m0.ret)}, the EGX30 Capped ${sp(m0.bench)}.`);
+    const lim = limitCheck(R, R.settings.limits);
+    if (lim && lim.over.length) tips.push(`${lim.over.length} of your limits ${lim.over.length > 1 ? 'are' : 'is'} crossed right now: ${lim.over.map((x) => (x.kind === 'stock' ? x.s || x.n : x.n) + ' ' + pc(x.w)).join(', ')}.`);
+    const strip = (x) => (x ? (({ list, ...r }) => r)(x) : null);
+    return { month: M, prevMonth, ret: m0 ? m0.ret : null, bench: m0 ? m0.bench : null, prevRet: m1 ? m1.ret : null, prevBench: m1 ? m1.bench : null,
+      provisional: !!(m0 && (m0.provisional || m0.live || m0.estimate)), cur: strip(cur), prev: strip(prev), best, worst, activity, limits: lim, tips };
+  }
+
   // What friends see of a portfolio: PERCENTAGES ONLY, never an amount (no EGP, no share counts, no prices), so the copy
   // sealed to a friend cannot reveal how much money is in it. From an all-time portfolioRun:
   //   months   [{m, r, b, live}] each month's time-weighted return and the index's: any period is compounded from these
@@ -4111,7 +4205,7 @@ button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.pl
     return { r: r - 1, b: bOk ? b - 1 : null, from: rg.from, to: rg.to };
   }
 
-  const api = { headsUp, drawdownCheck, heldStocks, priceBook, makePricer, daily, dailyStats, dailyTwr, capWeights, benchWeights, holdingsAt, estimateMarks, attribution, activeWeights, tradeChecks, tradingHabits, portfolioRun, friendProfile, profilePeriod, income, trailing, calendar, TRADING_DAYS, TRADING_NOTE };
+  const api = { headsUp, drawdownCheck, limitCheck, limitText, reportCard, heldStocks, priceBook, makePricer, daily, dailyStats, dailyTwr, capWeights, benchWeights, holdingsAt, estimateMarks, attribution, activeWeights, tradeChecks, tradingHabits, portfolioRun, friendProfile, profilePeriod, income, trailing, calendar, TRADING_DAYS, TRADING_NOTE };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.PA = api;
 })(this);
 
@@ -4935,7 +5029,7 @@ function briefPanel(){
 }
 // Heads-up list: ex-dividend dates, targets/stops hit and drawdown worked out live on the page (PA.headsUp, the same checks
 // the inbox job runs), plus the inbox job's overdue-statement items (sync/state.digest) when there is an inbox job.
-const HEADS = {exdiv:['Ex-dividend','auto'], target:['Target','win'], stop:['Stop','loss'], drawdown:['Drawdown','loss'], statement:['Statement','stale']};
+const HEADS = {exdiv:['Ex-dividend','auto'], target:['Target','win'], stop:['Stop','loss'], drawdown:['Drawdown','loss'], limit:['Limit','loss'], statement:['Statement','stale']};
 function headsUp(){ const dg=S.sync&&S.sync.digest; const live=(S.heads&&S.heads.items)||[];
   const job=(dg&&Array.isArray(dg.items))?dg.items.filter(x=>x&&x.text&&(x.kind==='statement'||!S.heads)):[];
   const seen=new Set(), items=[...live,...job].filter(x=>x&&x.text&&!seen.has(x.key||x.text)&&seen.add(x.key||x.text)); if(!items.length) return '';
@@ -4970,6 +5064,26 @@ function rollForward(st){ return `<dl class="kv">
 function sectorBars(){ const secs=S.R.sectors; if(!secs.length) return '<p class="muted">No open positions.</p>'; const max=secs[0].weight;
   return `<div style="display:grid;gap:10px">${secs.map(s=>`<div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;align-items:center"><span>${esc(s.sector)}</span><span class="num"><b>${pct(s.weight,1,false)}</b> <span class="muted">${short(s.mv)}</span></span><div class="bar" style="grid-column:1/-1;height:8px"><i style="width:${(s.weight/max*100).toFixed(1)}%"></i></div></div>`).join('')}</div>`; }
 
+// ---------- Your limits (settings.limits = {on, stock, sector}, fractions; PA.limitCheck) ----------
+// Each portfolio sets its own: the most one stock and one sector may be of the whole portfolio (cash included). Crossing
+// one shows on the Overview heads-up and is emailed once (the inbox job, the account job) like a target or a stop.
+function limitsPanel(){ const L=(S.settings&&S.settings.limits)||{}; const on=!!L.on, ro=!!S.readOnly;
+  const lc=PA.limitCheck(S.R,{...L,on:true}); const pc=(x)=>x?+(x*100).toFixed(1):'';
+  const row=(label,top,lim,tid)=>{ const w=top?top.w:0, over=lim&&w>lim+1e-9, scale=Math.max(w,lim||0,0.0001);
+    return `<div class="lim-row${over?' over':''}" data-testid="${tid}"><div class="lim-top"><span>${label}${top?` · <b>${esc(top.label)}</b>`:''}</span><span class="num"><b class="${over?'neg':''}">${top?pct(w,1,false):'—'}</b>${lim?` <span class="muted">/ ${pc(lim)}% limit</span>`:' <span class="muted">· no limit</span>'}</span></div>
+      <div class="bar lim-bar"><i style="width:${(w/scale*100).toFixed(1)}%"></i>${lim?`<em style="left:${(lim/scale*100).toFixed(1)}%" title="Your limit"></em>`:''}</div></div>`; };
+  const st=lc.stocks[0], se=lc.sectors[0];
+  const status = !on ? '<span class="pill stale">Off</span>' : lc.over.length ? `<span class="pill loss">${lc.over.length} over</span>` : '<span class="pill win">Within limits</span>';
+  return `<div class="panel" data-testid="limits"><div class="phead"><div><h2>Your limits ${status}</h2><div class="sub">The most one stock and one sector may be of your whole portfolio (cash included). Crossing one shows on the Overview and is emailed once.</div></div></div>
+    <div class="lim-rows">${row('Largest stock', st&&{label:st.s||st.n, w:st.w}, on&&lc.stock, 'limit-stock')}${row('Largest sector', se&&{label:se.sec, w:se.w}, on&&lc.sector, 'limit-sector')}</div>
+    ${on?`${lc.over.length?`<ul class="heads" style="margin-top:10px">${lc.over.map(x=>`<li data-testid="limit-over"><span class="pill loss">Over</span><span>${esc(PA.limitText(x))}</span></li>`).join('')}</ul>`:''}`:''}
+    <form class="form lim-form" id="limits-form" data-testid="limits-form" style="margin-top:14px">
+      <label class="lim-on"><span><input type="checkbox" id="lm-on" data-testid="limits-on" ${on?'checked':''}> Warn me when I cross a limit</span></label>
+      <label>Most in one stock, %<input type="number" step="any" id="lm-stock" class="inp" data-testid="limits-stock" value="${pc(L.stock)}" placeholder="e.g. 20"></label>
+      <label>Most in one sector, %<input type="number" step="any" id="lm-sector" class="inp" data-testid="limits-sector" value="${pc(L.sector)}" placeholder="e.g. 50"></label>
+      <button class="btn primary" type="submit" data-testid="limits-save" ${ro?'disabled':''}>Save limits</button>
+    </form>${ro?'<p class="note" style="margin:8px 0 0">Turn on editing at the bottom of the page to change your limits.</p>':''}</div>`; }
+
 // ---------- Holdings ----------
 function vHoldings(){
   const R=S.R, c=R.conc; const cashNow=R.liveCash ?? R.settings.cash; const total=cashNow+R.pos.mvTotal; const unreal=R.pos.open.reduce((s,r)=>s+(r.unreal||0),0); const cost=R.pos.open.reduce((s,r)=>s+r.openCost,0); const dp=dayPL();
@@ -4984,6 +5098,7 @@ function vHoldings(){
     ${kpi('Largest position', esc(c.largest), `${pct(c.largestWeight,1,false)} · top 3 ${pct(c.top3,1,false)}`)}
     ${kpi('Effective positions', num(c.hhi?1/c.hhi:0,1), `1 ÷ HHI · ${c.sectorCount} sectors`)}
   </div>
+  ${limitsPanel()}
   <div class="panel">
     <div class="phead"><div><h2>Open positions</h2><div class="sub">Average-cost basis · prices refresh automatically after each EGX session</div></div><button class="btn sm" id="dl-holdings" data-testid="download-holdings">Download CSV</button></div>
     <div class="hcards" data-testid="holdings-cards">${rows.map((r,i)=>holdingCard(r,i)).join('')}</div>
@@ -6483,6 +6598,12 @@ document.addEventListener('submit', async e=>{
   if(e.target.id==='asset-form'){ const name=$('#na-name').value.trim(); if(!name) return; if(S.assets[name]){ toast('That asset already exists','error'); return; }
     const a={name}; const sym=$('#na-sym').value.trim().toUpperCase(); const sec=$('#na-sec').value.trim(); if(sym) a.symbol=sym; if(sec) a.sector=sec;
     await save(()=>S.db.doc('portfolio/assets').set({items:{...S.assets,[name]:a}}),`${name} added; it will be priced at the next run`); }
+  if(e.target.id==='limits-form'){ const v=(id)=>{ const t=$(id).value.trim(); if(t==='') return null; const x=parseFloat(t); return isFinite(x)?x:NaN; };
+    const on=$('#lm-on').checked, st=v('#lm-stock'), se=v('#lm-sector');
+    if([st,se].some(x=>x!==null&&(!isFinite(x)||x<=0||x>100))){ toast('Limits are percentages between 0 and 100','error'); return; }
+    if(on&&st===null&&se===null){ toast('Set at least one limit, or untick the warning','error'); return; }
+    const limits={on, stock:st===null?null:st/100, sector:se===null?null:se/100};
+    await save(()=>S.db.doc('portfolio/settings').set({...S.settings, limits}), on?'Limits saved: you will be warned when you cross one':'Limit warnings are off'); return; }
   if(e.target.id==='settings-form'){ const g=id=>$(id).value; const n=id=>parseFloat($(id).value);
     const s={...S.settings, name:g('#st-name').trim()||'Portfolio', inception:g('#st-inc')||S.settings.inception, openingValue:n('#st-open'), cash:n('#st-cash'), cashDate:g('#st-cashd')||null, riskFree:n('#st-rf')/100, fxStart:n('#st-fx'), volLow:n('#st-vl')/100, volHigh:n('#st-vh')/100, openThreshold:n('#st-thr'), staleDays:n('#st-stale'), priceDate:g('#st-pd')||null, factsheetEmail:g('#st-email').trim()||null, returnMethod:g('#st-ret')==='daily'?'daily':'dietz', benchCloseStart:isFinite(n('#st-bcs'))?n('#st-bcs'):null, account:{holder:g('#st-holder').trim(), unifiedCode:g('#st-ucode').trim()}};
     if(['openingValue','cash','riskFree','fxStart','volLow','volHigh','openThreshold','staleDays'].some(k=>!isFinite(s[k]))){ toast('Every number field needs a value','error'); return; }

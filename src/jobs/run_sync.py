@@ -25,6 +25,10 @@ Steps (numbered as in the code's comments):
  [9b]  Weekly email: PLAN.weekday Thu and PLAN.hour >= 21, once per week-ending date (jobs.json), when the portfolio has
        it (config.weeklyEmail, default on for portfolioId "khaled" only):
        weekly.js --week-ending PLAN.today; exit 2 = no closing prices, skipped. Failure is reported, not FAILED.
+ [9c]  Report card (config.reportCard, default on for "khaled" only): from the 1st to the 10th, once per month
+       (jobs.json sync.reportCardSent), as soon as last month's statement is posted or from the 5th: report_card.js
+       -> emails.report_card (last month's sales, win rate, holding days, best / worst, return vs the index, limits,
+       tips). Failure is reported, not FAILED.
  [11]  For each month M in summary.monthlyPending: build the desk page from src/ (src/build.py), factsheet.js
        (--overlay run/write) -> HTML + PDF, excel.js + excel.py -> workbook, both encrypted with the site key as
        exports/<Prefix>-Portfolio-<Mon-YY>.{xlsx,pdf}.enc.json with an exports/index.json entry (without "pdf" when only
@@ -93,6 +97,18 @@ def run_sync_js(ctx, data, inbox, run, plan):
 
 
 # ---------------------------------------------------------------- step 11: month-end reports
+def statement_posted(data, write_dir, M):
+    """True when month M's monthly Thndr statement is in (imports/M fullMonth, in the data or written by this run)."""
+    for p in (os.path.join(write_dir, f"import_{M}.json"), os.path.join(data, "imports", f"{M}.json")):
+        try:
+            d = jc.load_data(p, None)
+        except Exception:
+            d = None
+        if isinstance(d, dict) and (d.get("data") if isinstance(d.get("data"), dict) else d).get("fullMonth"):
+            return True
+    return False
+
+
 def prefix(ctx):
     return ctx.config.get("filePrefix") or ctx.config["portfolioId"].capitalize()
 
@@ -408,6 +424,24 @@ def main(argv=None):
                     notes.append(f"weekly email failed: {e.step}")
         else:
             jc.log("weekly: not due")
+        # [9c] monthly trading report card: last month, once, from the run that sees its statement posted (or the 5th)
+        card_on = ctx.config.get("reportCard", ctx.config["portfolioId"] == "khaled")
+        CM, day = plan["prevMonth"], int(plan["today"][8:10])
+        if card_on and day <= 10 and sj.get("reportCardSent") != CM and (day >= 5 or statement_posted(data, write_dir, CM)):
+            try:
+                out = json.loads(jc.run(["node", ctx.tool("report_card.js"), "--data", data, "--overlay", write_dir, "--month", CM, "--today", plan["today"]], "report card").strip().splitlines()[-1])
+                import emails
+                if emails.card_empty(out["card"]):
+                    jc.log("report card: nothing in the month, not sent")
+                else:
+                    subj, text, html = emails.report_card(out.get("name") or portfolio_label(ctx), out["card"])
+                    jc.log("report card: " + mail_send.send(ctx, subj, text, html))
+                sj["reportCardSent"] = CM
+            except (jc.JobError, ValueError, KeyError) as e:
+                jc.log(f"report card: FAILED (not fatal): {getattr(e, 'step', type(e).__name__)}: {jc.mask(str(getattr(e, 'detail', e)))}")
+                notes.append("report card email failed")
+        else:
+            jc.log("report card: not due")
         # [11] month-end reports
         step = "month-end"
         pending = summary.get("monthlyPending") or []

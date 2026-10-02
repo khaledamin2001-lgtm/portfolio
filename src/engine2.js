@@ -419,8 +419,31 @@
     const peak = pts.reduce((a, p) => (p.idx > a.idx ? p : a)), now = pts[pts.length - 1];
     return { dd: now.idx / peak.idx - 1, peak: { d: peak.d, idx: peak.idx }, now: { d: now.d, value: now.value, live: !!now.live }, points: pts.length, basis };
   }
+  // ---------- your limits (settings.limits) ----------
+  // limits = {on, stock, sector}: the most one stock and one sector may be of the WHOLE portfolio (holdings at the latest
+  // prices + cash; cash-like funds count as cash, never as a stock or a sector), as fractions (0.2 = 20%); a missing or
+  // empty one is no limit. R: a PE.run result. Returns null when off, else {stock, sector, total, stocks: [{n, s, sec, w}],
+  // sectors: [{sec, w}] (largest first), over: [{kind 'stock' | 'sector', n, s, w, limit}]}.
+  function limitCheck(R, limits) {
+    const L = limits || {};
+    if (!L.on) return null;
+    const lim = (x) => (typeof x === 'number' && isFinite(x) && x > 0 ? x : null);
+    const cash = Math.max(0, R.liveCash != null ? R.liveCash : (R.settings && R.settings.cash) || 0), total = (R.pos.mvTotal || 0) + cash;
+    const stocks = total > 0 ? R.pos.open.filter((p) => (p.mv || 0) > 0 && !CASH_LIKE.has(p.sector))
+      .map((p) => ({ n: p.name, s: p.symbol || '', sec: p.sector || 'Unclassified', w: p.mv / total })).sort((a, b) => b.w - a.w) : [];
+    const m = {}; stocks.forEach((x) => { m[x.sec] = (m[x.sec] || 0) + x.w; });
+    const sectors = Object.keys(m).map((sec) => ({ sec, w: m[sec] })).sort((a, b) => b.w - a.w);
+    const out = { stock: lim(L.stock), sector: lim(L.sector), total, stocks, sectors, over: [] };
+    if (out.stock) stocks.filter((x) => x.w > out.stock + 1e-9).forEach((x) => out.over.push({ kind: 'stock', n: x.n, s: x.s, w: x.w, limit: out.stock }));
+    if (out.sector) sectors.filter((x) => x.w > out.sector + 1e-9).forEach((x) => out.over.push({ kind: 'sector', n: x.sec, s: '', w: x.w, limit: out.sector }));
+    return out;
+  }
+  // a limit crossed, as a heads-up line (the page, the owner's inbox email and the accounts' alerts use the same words)
+  const limitText = (x) => `${x.kind === 'stock' ? (x.s || x.n) : `The ${x.n} sector`} is ${pctTxt(x.w)} of your portfolio, over your ${+(x.limit * 100).toFixed(1)}% limit for one ${x.kind}`;
+
   // The heads-up items that follow from the data alone: ex-dividend within a week for a held stock, a held stock at or past
-  // its target / stop, and the portfolio more than 10% below its 12-month high. o = {today, tx, assets, settings, marks,
+  // its target / stop, a stock or sector over the portfolio's own limit (settings.limits, limitCheck), and the portfolio more than
+  // 10% below its 12-month high. o = {today, tx, assets, settings, marks,
   // market, history}. Every check is independent; one that fails is listed in errors. (The inbox job adds overdue statements.)
   function headsUp(o) {
     const items = [], errors = [];
@@ -437,6 +460,16 @@
       if (h.asset.target != null && h.asset.target !== '' && tg > 0 && px >= tg) items.push({ kind: 'target', key: `target:${h.sym}:${tg}`, text: `${h.sym} reached its target: ${hFmt(px)} vs target ${hFmt(tg)}` });
       if (h.asset.stop != null && h.asset.stop !== '' && sp > 0 && px <= sp) items.push({ kind: 'stop', key: `stop:${h.sym}:${sp}`, text: `${h.sym} is at or below its stop: ${hFmt(px)} vs stop ${hFmt(sp)}` });
     });
+    try {
+      const L = o.settings && o.settings.limits;
+      if (L && L.on && o.settings.inception) {
+        const pb = priceBook(o.history || {});
+        const pricer = makePricer(o.assets, PE.runLedger(o.tx || []), pb);
+        const fallback = (name) => { const p = pricer(name, o.today); return p ? { p: p.p, d: pb.last } : null; };
+        const R = PE.run({ settings: o.settings, marks: o.marks, assets: o.assets, tx: o.tx || [], market: o.market }, { type: 'Since Inception' }, { today: o.today, fallback });
+        limitCheck(R, L).over.forEach((x) => items.push({ kind: 'limit', key: `limit:${x.kind}:${x.s || x.n}:${Math.round(x.limit * 1000) / 10}`, text: limitText(x) }));
+      }
+    } catch (e) { errors.push('limits: ' + (e.message || e)); }
     try {
       drawdown = drawdownCheck(o);
       if (drawdown && drawdown.dd < -DRAWDOWN) {
@@ -551,6 +584,61 @@
     return { R: PE.run(data, sel || { type: 'Since Inception' }, { fallback, daily: D || undefined, today }), data, today };
   }
 
+  // The monthly trading report card (the email on the 1st): how month M went next to the month before. run: an all-time
+  // portfolioRun. Every sale counts (a part sale too), cash-like funds left out: its result is the money it brought in
+  // over the average cost of the shares sold (the ledger's basis), its holding days from the buy that opened the position.
+  // Returns {month, prevMonth, ret, bench, prevRet, prevBench, provisional, cur, prev, best, worst, activity, limits, tips}:
+  //   cur / prev  {n, wins, losses, winRate, avgRoi, pl, avgHold, holdWin, holdLoss, avgWin, avgLoss} (null: no sale)
+  //   best/worst  {d, s, n, kind 'closed' | 'trimmed', roi, pl, days} the month's best and worst sale by return on cost
+  //   activity    {buys, sells, deposits, withdrawals} rows in the month (deposits / withdrawals as positive EGP)
+  //   limits      limitCheck now (null when the portfolio has no limits switched on)
+  //   tips        plain sentences from the numbers (holding losers longer than winners, small wins and big losses, ...)
+  function reportCard(run, M) {
+    const R = run.R, prevMonth = PE.monthOf(addDays(M + '-01', -1));
+    const sectorOf = {}, symOf = {}; Object.values(run.data.assets || {}).forEach((a) => { if (a && a.name) { sectorOf[a.name] = a.sector; symOf[a.name] = a.symbol || ''; } });
+    const thr = typeof R.settings.openThreshold === 'number' ? R.settings.openThreshold : 0.5;
+    const held = {}, opened = {}, sales = [];
+    PE.sortLedger(R.ledger).forEach((t) => {
+      if (!t.a || (t.t !== 'Buy' && t.t !== 'Sell' && t.t !== 'Bonus')) return;
+      const h = held[t.a] || 0, q = t.q || 0;
+      if (t.t !== 'Sell') { if (h <= thr) opened[t.a] = t.d; held[t.a] = h + q; return; }
+      held[t.a] = h - q;
+      if (CASH_LIKE.has(sectorOf[t.a]) || !(t.basis > 0)) return;
+      const pl = (t.amt || 0) - t.basis;
+      sales.push({ d: t.d, s: symOf[t.a] || '', n: t.a, kind: held[t.a] <= thr ? 'closed' : 'trimmed', pl, roi: pl / t.basis, days: opened[t.a] ? dayNum(t.d) - dayNum(opened[t.a]) : null });
+    });
+    const stats = (m) => {
+      const list = sales.filter((x) => x.d.slice(0, 7) === m);
+      if (!list.length) return null;
+      const w = list.filter((x) => x.pl > 0), l = list.filter((x) => x.pl <= 0), days = (a) => { const d = a.filter((x) => x.days != null); return d.length ? mean(d.map((x) => x.days)) : null; };
+      return { n: list.length, wins: w.length, losses: l.length, winRate: w.length / list.length, avgRoi: mean(list.map((x) => x.roi)), pl: sum(list.map((x) => x.pl)),
+        avgHold: days(list), holdWin: days(w), holdLoss: days(l), avgWin: w.length ? mean(w.map((x) => x.pl)) : null, avgLoss: l.length ? mean(l.map((x) => x.pl)) : null, list };
+    };
+    const cur = stats(M), prev = stats(prevMonth);
+    const byRoi = cur ? cur.list.slice().sort((a, b) => b.roi - a.roi) : [];
+    const best = byRoi[0] || null, worst = byRoi.length > 1 ? byRoi[byRoi.length - 1] : null;
+    const rows = R.ledger.filter((t) => t.d && t.d.slice(0, 7) === M);
+    const activity = { buys: rows.filter((t) => t.t === 'Buy' && !CASH_LIKE.has(sectorOf[t.a])).length, sells: rows.filter((t) => t.t === 'Sell' && !CASH_LIKE.has(sectorOf[t.a])).length,
+      deposits: sum(rows.filter((t) => t.t === 'Deposit').map((t) => t.amt || 0)), withdrawals: -sum(rows.filter((t) => t.t === 'Withdrawal').map((t) => t.amt || 0)) };
+    const mo = (m) => R.months.find((r) => r.month === m && r.has) || null;
+    const m0 = mo(M), m1 = mo(prevMonth);
+    const tips = [], pc = (x) => `${Math.round(x * 1000) / 10}%`;
+    if (!cur) tips.push('You sold nothing this month, so there is no trade to score: the month\'s return came from holding.');
+    if (cur && cur.wins && cur.losses && cur.holdLoss != null && cur.holdWin != null && cur.holdLoss > cur.holdWin * 1.5 && cur.holdLoss - cur.holdWin >= 5)
+      tips.push(`You held the losing sales ${Math.round(cur.holdLoss)} days on average and the winners ${Math.round(cur.holdWin)}: the losers were kept longer than the winners.`);
+    if (cur && cur.wins && cur.losses && cur.winRate >= 0.5 && Math.abs(cur.avgLoss) > cur.avgWin * 1.5)
+      tips.push('Most sales made money, but the average loss was much bigger than the average win: a stop loss caps the losers.');
+    if (cur && cur.n >= 3 && cur.winRate < 0.4) tips.push(`Only ${cur.wins} of your ${cur.n} sales made money this month.`);
+    const sp = (x) => (x > 0 ? '+' : x < 0 ? '−' : '') + pc(Math.abs(x));
+    if (m0 && m0.ret != null && m0.bench != null && m0.ret < m0.bench - 0.01) tips.push(`The index did better this month: the EGX30 Capped ${sp(m0.bench)}, the portfolio ${sp(m0.ret)}.`);
+    if (m0 && m0.ret != null && m0.bench != null && m0.ret > m0.bench + 0.01) tips.push(`You beat the index this month: the portfolio ${sp(m0.ret)}, the EGX30 Capped ${sp(m0.bench)}.`);
+    const lim = limitCheck(R, R.settings.limits);
+    if (lim && lim.over.length) tips.push(`${lim.over.length} of your limits ${lim.over.length > 1 ? 'are' : 'is'} crossed right now: ${lim.over.map((x) => (x.kind === 'stock' ? x.s || x.n : x.n) + ' ' + pc(x.w)).join(', ')}.`);
+    const strip = (x) => (x ? (({ list, ...r }) => r)(x) : null);
+    return { month: M, prevMonth, ret: m0 ? m0.ret : null, bench: m0 ? m0.bench : null, prevRet: m1 ? m1.ret : null, prevBench: m1 ? m1.bench : null,
+      provisional: !!(m0 && (m0.provisional || m0.live || m0.estimate)), cur: strip(cur), prev: strip(prev), best, worst, activity, limits: lim, tips };
+  }
+
   // What friends see of a portfolio: PERCENTAGES ONLY, never an amount (no EGP, no share counts, no prices), so the copy
   // sealed to a friend cannot reveal how much money is in it. From an all-time portfolioRun:
   //   months   [{m, r, b, live}] each month's time-weighted return and the index's: any period is compounded from these
@@ -605,6 +693,6 @@
     return { r: r - 1, b: bOk ? b - 1 : null, from: rg.from, to: rg.to };
   }
 
-  const api = { headsUp, drawdownCheck, heldStocks, priceBook, makePricer, daily, dailyStats, dailyTwr, capWeights, benchWeights, holdingsAt, estimateMarks, attribution, activeWeights, tradeChecks, tradingHabits, portfolioRun, friendProfile, profilePeriod, income, trailing, calendar, TRADING_DAYS, TRADING_NOTE };
+  const api = { headsUp, drawdownCheck, limitCheck, limitText, reportCard, heldStocks, priceBook, makePricer, daily, dailyStats, dailyTwr, capWeights, benchWeights, holdingsAt, estimateMarks, attribution, activeWeights, tradeChecks, tradingHabits, portfolioRun, friendProfile, profilePeriod, income, trailing, calendar, TRADING_DAYS, TRADING_NOTE };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.PA = api;
 })(this);

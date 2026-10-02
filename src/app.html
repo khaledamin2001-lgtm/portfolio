@@ -180,6 +180,11 @@ td.wrap{white-space:normal;min-width:180px;padding:8px 10px;margin:0;max-width:n
 .bar{height:6px;border-radius:3px;background:var(--surface-2);position:relative;min-width:60px}
 .bar i{position:absolute;inset:0 auto 0 0;border-radius:3px;background:var(--s1)}
 .wcell{display:flex;align-items:center;gap:8px}.wcell .bar{flex:1}.wcell .num{min-width:3.4em;text-align:right;font-size:12.5px}
+.lim-rows{display:grid;gap:14px}.lim-top{display:flex;justify-content:space-between;gap:12px;margin-bottom:6px;font-size:14px}
+.lim-bar{height:8px;overflow:visible}.lim-row.over .lim-bar i{background:var(--neg)}
+.lim-bar em{position:absolute;top:-4px;bottom:-4px;width:2px;margin-left:-1px;border-radius:1px;background:var(--ink)}
+.lim-form .lim-on{grid-column:1/-1}.lim-form .lim-on span{display:flex;align-items:center;gap:8px;font-size:14px;color:var(--ink)}
+.lim-form .lim-on input{width:auto;margin:0}
 .pill{font-size:11px;font-weight:600;padding:2px 7px;border-radius:999px;letter-spacing:.03em}
 .pill.win{background:var(--pos-bg);color:var(--pos)} .pill.loss{background:var(--neg-bg);color:var(--neg)}
 .pill.auto{background:var(--accent-soft);color:var(--accent)} .pill.man{background:var(--surface-2);color:var(--ink-2)} .pill.stale{background:var(--warn-bg);color:var(--warn)}
@@ -749,7 +754,7 @@ function briefPanel(){
 }
 // Heads-up list: ex-dividend dates, targets/stops hit and drawdown worked out live on the page (PA.headsUp, the same checks
 // the inbox job runs), plus the inbox job's overdue-statement items (sync/state.digest) when there is an inbox job.
-const HEADS = {exdiv:['Ex-dividend','auto'], target:['Target','win'], stop:['Stop','loss'], drawdown:['Drawdown','loss'], statement:['Statement','stale']};
+const HEADS = {exdiv:['Ex-dividend','auto'], target:['Target','win'], stop:['Stop','loss'], drawdown:['Drawdown','loss'], limit:['Limit','loss'], statement:['Statement','stale']};
 function headsUp(){ const dg=S.sync&&S.sync.digest; const live=(S.heads&&S.heads.items)||[];
   const job=(dg&&Array.isArray(dg.items))?dg.items.filter(x=>x&&x.text&&(x.kind==='statement'||!S.heads)):[];
   const seen=new Set(), items=[...live,...job].filter(x=>x&&x.text&&!seen.has(x.key||x.text)&&seen.add(x.key||x.text)); if(!items.length) return '';
@@ -784,6 +789,26 @@ function rollForward(st){ return `<dl class="kv">
 function sectorBars(){ const secs=S.R.sectors; if(!secs.length) return '<p class="muted">No open positions.</p>'; const max=secs[0].weight;
   return `<div style="display:grid;gap:10px">${secs.map(s=>`<div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;align-items:center"><span>${esc(s.sector)}</span><span class="num"><b>${pct(s.weight,1,false)}</b> <span class="muted">${short(s.mv)}</span></span><div class="bar" style="grid-column:1/-1;height:8px"><i style="width:${(s.weight/max*100).toFixed(1)}%"></i></div></div>`).join('')}</div>`; }
 
+// ---------- Your limits (settings.limits = {on, stock, sector}, fractions; PA.limitCheck) ----------
+// Each portfolio sets its own: the most one stock and one sector may be of the whole portfolio (cash included). Crossing
+// one shows on the Overview heads-up and is emailed once (the inbox job, the account job) like a target or a stop.
+function limitsPanel(){ const L=(S.settings&&S.settings.limits)||{}; const on=!!L.on, ro=!!S.readOnly;
+  const lc=PA.limitCheck(S.R,{...L,on:true}); const pc=(x)=>x?+(x*100).toFixed(1):'';
+  const row=(label,top,lim,tid)=>{ const w=top?top.w:0, over=lim&&w>lim+1e-9, scale=Math.max(w,lim||0,0.0001);
+    return `<div class="lim-row${over?' over':''}" data-testid="${tid}"><div class="lim-top"><span>${label}${top?` · <b>${esc(top.label)}</b>`:''}</span><span class="num"><b class="${over?'neg':''}">${top?pct(w,1,false):'—'}</b>${lim?` <span class="muted">/ ${pc(lim)}% limit</span>`:' <span class="muted">· no limit</span>'}</span></div>
+      <div class="bar lim-bar"><i style="width:${(w/scale*100).toFixed(1)}%"></i>${lim?`<em style="left:${(lim/scale*100).toFixed(1)}%" title="Your limit"></em>`:''}</div></div>`; };
+  const st=lc.stocks[0], se=lc.sectors[0];
+  const status = !on ? '<span class="pill stale">Off</span>' : lc.over.length ? `<span class="pill loss">${lc.over.length} over</span>` : '<span class="pill win">Within limits</span>';
+  return `<div class="panel" data-testid="limits"><div class="phead"><div><h2>Your limits ${status}</h2><div class="sub">The most one stock and one sector may be of your whole portfolio (cash included). Crossing one shows on the Overview and is emailed once.</div></div></div>
+    <div class="lim-rows">${row('Largest stock', st&&{label:st.s||st.n, w:st.w}, on&&lc.stock, 'limit-stock')}${row('Largest sector', se&&{label:se.sec, w:se.w}, on&&lc.sector, 'limit-sector')}</div>
+    ${on?`${lc.over.length?`<ul class="heads" style="margin-top:10px">${lc.over.map(x=>`<li data-testid="limit-over"><span class="pill loss">Over</span><span>${esc(PA.limitText(x))}</span></li>`).join('')}</ul>`:''}`:''}
+    <form class="form lim-form" id="limits-form" data-testid="limits-form" style="margin-top:14px">
+      <label class="lim-on"><span><input type="checkbox" id="lm-on" data-testid="limits-on" ${on?'checked':''}> Warn me when I cross a limit</span></label>
+      <label>Most in one stock, %<input type="number" step="any" id="lm-stock" class="inp" data-testid="limits-stock" value="${pc(L.stock)}" placeholder="e.g. 20"></label>
+      <label>Most in one sector, %<input type="number" step="any" id="lm-sector" class="inp" data-testid="limits-sector" value="${pc(L.sector)}" placeholder="e.g. 50"></label>
+      <button class="btn primary" type="submit" data-testid="limits-save" ${ro?'disabled':''}>Save limits</button>
+    </form>${ro?'<p class="note" style="margin:8px 0 0">Turn on editing at the bottom of the page to change your limits.</p>':''}</div>`; }
+
 // ---------- Holdings ----------
 function vHoldings(){
   const R=S.R, c=R.conc; const cashNow=R.liveCash ?? R.settings.cash; const total=cashNow+R.pos.mvTotal; const unreal=R.pos.open.reduce((s,r)=>s+(r.unreal||0),0); const cost=R.pos.open.reduce((s,r)=>s+r.openCost,0); const dp=dayPL();
@@ -798,6 +823,7 @@ function vHoldings(){
     ${kpi('Largest position', esc(c.largest), `${pct(c.largestWeight,1,false)} · top 3 ${pct(c.top3,1,false)}`)}
     ${kpi('Effective positions', num(c.hhi?1/c.hhi:0,1), `1 ÷ HHI · ${c.sectorCount} sectors`)}
   </div>
+  ${limitsPanel()}
   <div class="panel">
     <div class="phead"><div><h2>Open positions</h2><div class="sub">Average-cost basis · prices refresh automatically after each EGX session</div></div><button class="btn sm" id="dl-holdings" data-testid="download-holdings">Download CSV</button></div>
     <div class="hcards" data-testid="holdings-cards">${rows.map((r,i)=>holdingCard(r,i)).join('')}</div>
@@ -1235,6 +1261,12 @@ document.addEventListener('submit', async e=>{
   if(e.target.id==='asset-form'){ const name=$('#na-name').value.trim(); if(!name) return; if(S.assets[name]){ toast('That asset already exists','error'); return; }
     const a={name}; const sym=$('#na-sym').value.trim().toUpperCase(); const sec=$('#na-sec').value.trim(); if(sym) a.symbol=sym; if(sec) a.sector=sec;
     await save(()=>S.db.doc('portfolio/assets').set({items:{...S.assets,[name]:a}}),`${name} added; it will be priced at the next run`); }
+  if(e.target.id==='limits-form'){ const v=(id)=>{ const t=$(id).value.trim(); if(t==='') return null; const x=parseFloat(t); return isFinite(x)?x:NaN; };
+    const on=$('#lm-on').checked, st=v('#lm-stock'), se=v('#lm-sector');
+    if([st,se].some(x=>x!==null&&(!isFinite(x)||x<=0||x>100))){ toast('Limits are percentages between 0 and 100','error'); return; }
+    if(on&&st===null&&se===null){ toast('Set at least one limit, or untick the warning','error'); return; }
+    const limits={on, stock:st===null?null:st/100, sector:se===null?null:se/100};
+    await save(()=>S.db.doc('portfolio/settings').set({...S.settings, limits}), on?'Limits saved: you will be warned when you cross one':'Limit warnings are off'); return; }
   if(e.target.id==='settings-form'){ const g=id=>$(id).value; const n=id=>parseFloat($(id).value);
     const s={...S.settings, name:g('#st-name').trim()||'Portfolio', inception:g('#st-inc')||S.settings.inception, openingValue:n('#st-open'), cash:n('#st-cash'), cashDate:g('#st-cashd')||null, riskFree:n('#st-rf')/100, fxStart:n('#st-fx'), volLow:n('#st-vl')/100, volHigh:n('#st-vh')/100, openThreshold:n('#st-thr'), staleDays:n('#st-stale'), priceDate:g('#st-pd')||null, factsheetEmail:g('#st-email').trim()||null, returnMethod:g('#st-ret')==='daily'?'daily':'dietz', benchCloseStart:isFinite(n('#st-bcs'))?n('#st-bcs'):null, account:{holder:g('#st-holder').trim(), unifiedCode:g('#st-ucode').trim()}};
     if(['openingValue','cash','riskFree','fxStart','volLow','volHigh','openThreshold','staleDays'].some(k=>!isFinite(s[k]))){ toast('Every number field needs a value','error'); return; }

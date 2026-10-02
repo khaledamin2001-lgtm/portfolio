@@ -1227,43 +1227,44 @@
   const sealTo = (pubB64, bytes, label) => seal(bytes, label, pubB64);
   async function writeMail(prefs) {
     const mk = await (await fetch('p/khaled/keys.json', { cache: 'no-store' })).json();
-    const pkg = { v: 1, uid: CLOUD.uid, email: prefs.email, refresh: CLOUD.refresh, pk8: b64big(acctKey()), prefs: { alerts: !!prefs.alerts, weekly: !!prefs.weekly, reports: !!prefs.reports, leaderboard: prefs.leaderboard !== false, gmail: !!prefs.gmail, shareMain: !!prefs.shareMain }, at: new Date().toISOString() };
+    const pkg = { v: 1, uid: CLOUD.uid, email: prefs.email, refresh: CLOUD.refresh, pk8: b64big(acctKey()), prefs: { alerts: !!prefs.alerts, weekly: !!prefs.weekly, reports: !!prefs.reports, leaderboard: prefs.leaderboard !== false, reportCard: prefs.reportCard !== false, gmail: !!prefs.gmail, shareMain: !!prefs.shareMain }, at: new Date().toISOString() };
     const env = Object.assign({ v: 1 }, await sealTo(mk.pub, enc.encode(JSON.stringify(pkg)), MAIL_LABEL));
     await fsReq('PATCH', `mail/${CLOUD.uid}`, { fields: { pkg: { stringValue: JSON.stringify(env) }, at: { stringValue: pkg.at } } });
     ls.set(mailLS(), Object.assign({}, prefs, { ref: await sha(CLOUD.refresh) }));
   }
   // nothing left on: the package is deleted, so the job no longer opens the portfolio
   async function setMail(prefs) {
-    if (prefs.alerts || prefs.weekly || prefs.reports || prefs.leaderboard || prefs.gmail || prefs.shareMain) return writeMail(prefs);
+    if (prefs.alerts || prefs.weekly || prefs.reports || prefs.leaderboard || prefs.reportCard || prefs.gmail || prefs.shareMain) return writeMail(prefs);
     await fsReq('DELETE', `mail/${CLOUD.uid}`); ls.del(mailLS());
   }
   // the job signs in with the saved refresh token: after a password change (which ends old sessions) it is sealed again
   async function resealMail() { const m = mailPrefs(); if (m && CLOUD && CLOUD.refresh && m.ref !== (await sha(CLOUD.refresh))) await writeMail(m); }
   function mailScreen(note) {
-    const on = mailOn(), m = on ? mailPrefs() : Object.assign({ email: CUR.email || (CLOUD && CLOUD.email) || '' }, mailPrefs() || {}, { alerts: true, weekly: true, reports: true, leaderboard: true });
-    screen(`<h1>Email updates</h1><p>Get an email when something needs your attention (a dividend coming up, a target or stop reached, a big drop), a summary every Thursday evening, your month-end report (Excel workbook + PDF factsheet) when each monthly statement is posted, and on the 1st of each month how you ranked among your friends (percentages only).</p>
+    const on = mailOn(), m = on ? mailPrefs() : Object.assign({ email: CUR.email || (CLOUD && CLOUD.email) || '' }, mailPrefs() || {}, { alerts: true, weekly: true, reports: true, leaderboard: true, reportCard: true });
+    screen(`<h1>Email updates</h1><p>Get an email when something needs your attention (a dividend coming up, a target or stop reached, a big drop), a summary every Thursday evening, your month-end report (Excel workbook + PDF factsheet) when each monthly statement is posted, and early each month a report card on your trading and how you ranked among your friends (percentages only).</p>
       <p class="lk-tip">To write these, the site owner's email job has to open your portfolio, so while this is on your figures are not private from that job. Switch it off any time: nothing is kept after that.</p>
       <form id="lk-ml" autocomplete="off"><input id="lk-ml-email" type="email" data-testid="mail-address" value="${esc(m.email)}" placeholder="Email address" aria-label="Email address">
       <label class="lk-check"><input type="checkbox" id="lk-ml-alerts" data-testid="mail-alerts" ${m.alerts ? 'checked' : ''}> Heads-up alerts</label>
       <label class="lk-check"><input type="checkbox" id="lk-ml-weekly" data-testid="mail-weekly" ${m.weekly ? 'checked' : ''}> Weekly summary (Thursday evening)</label>
       <label class="lk-check"><input type="checkbox" id="lk-ml-reports" data-testid="mail-reports" ${m.reports ? 'checked' : ''}> Month-end report (Excel + PDF)</label>
       <label class="lk-check"><input type="checkbox" id="lk-ml-leaderboard" data-testid="mail-leaderboard" ${m.leaderboard !== false ? 'checked' : ''}> Friends leaderboard (1st of the month)</label>
+      <label class="lk-check"><input type="checkbox" id="lk-ml-card" data-testid="mail-report-card" ${m.reportCard !== false ? 'checked' : ''}> Trading report card (early each month)</label>
       <button class="lk-btn" id="lk-ml-go" data-testid="mail-on">${on ? 'Save' : 'Turn on email updates'}</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>
       ${on ? '<button class="lk-btn ghost" id="lk-ml-off" data-testid="mail-off">Turn off email updates</button>' : ''}
       <div class="lk-links"><button type="button" class="lk-link" id="lk-ml-back" data-testid="mail-back">Back</button></div>`);
     $l('#lk-ml-back').onclick = accountScreen;
     $l('#lk-ml').onsubmit = async (ev) => {
-      ev.preventDefault(); const email = $l('#lk-ml-email').value.trim(), alerts = $l('#lk-ml-alerts').checked, weekly = $l('#lk-ml-weekly').checked, reports = $l('#lk-ml-reports').checked, leaderboard = $l('#lk-ml-leaderboard').checked;
+      ev.preventDefault(); const email = $l('#lk-ml-email').value.trim(), alerts = $l('#lk-ml-alerts').checked, weekly = $l('#lk-ml-weekly').checked, reports = $l('#lk-ml-reports').checked, leaderboard = $l('#lk-ml-leaderboard').checked, reportCard = $l('#lk-ml-card').checked;
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return err('Enter an email address.');
-      if (!alerts && !weekly && !reports && !leaderboard) return err('Pick at least one kind of email, or turn email updates off.');
+      if (!alerts && !weekly && !reports && !leaderboard && !reportCard) return err('Pick at least one kind of email, or turn email updates off.');
       const b = $l('#lk-ml-go'); b.disabled = true; err('Saving…');
-      try { await writeMail(Object.assign({}, mailPrefs() || {}, { email, alerts, weekly, reports, leaderboard, gmail: gmailOn() })); open(); toast('Email updates are on. The first ones come after the next market close.'); }
+      try { await writeMail(Object.assign({}, mailPrefs() || {}, { email, alerts, weekly, reports, leaderboard, reportCard, gmail: gmailOn() })); open(); toast('Email updates are on. The first ones come after the next market close.'); }
       catch (e) { console.error(e); b.disabled = false; err(e.message || String(e)); }
     };
     const off = $l('#lk-ml-off');
     if (off) off.onclick = async () => {
       off.disabled = true;
-      try { await setMail(Object.assign({}, mailPrefs(), { alerts: false, weekly: false, reports: false, leaderboard: false })); open(); toast('Email updates are off.'); }
+      try { await setMail(Object.assign({}, mailPrefs(), { alerts: false, weekly: false, reports: false, leaderboard: false, reportCard: false })); open(); toast('Email updates are off.'); }
       catch (e) { console.error(e); off.disabled = false; err(e.message || String(e)); }
     };
   }
@@ -1328,8 +1329,8 @@
           const patch = {};
           if (!S0.trackFrom && !(S0.historyImport && S0.historyImport.status === 'pending')) patch.trackFrom = cairoDay(Date.now() / 1000);   // the ledger so far stands; emails count from the next day
           if (Object.keys(patch).length) await saveDoc('update', 'portfolio/settings', patch);
-          const m = Object.assign({ email: email || address, alerts: false, weekly: false, reports: false, leaderboard: false }, mailPrefs() || {});
-          if (also) Object.assign(m, { email: m.email || address, alerts: true, weekly: true, reports: true, leaderboard: true });
+          const m = Object.assign({ email: email || address, alerts: false, weekly: false, reports: false, leaderboard: false, reportCard: false }, mailPrefs() || {});
+          if (also) Object.assign(m, { email: m.email || address, alerts: true, weekly: true, reports: true, leaderboard: true, reportCard: true });
           await writeMail(Object.assign(m, { gmail: true }));
           return gmailDoneScreen(done, history || !!(S0.historyImport && S0.historyImport.status === 'pending'));
         }

@@ -184,6 +184,29 @@ const cleanup = [];
     check('settings: every other field unchanged', diffKeys.length === 0, diffKeys.map((k) => k + ': ' + JSON.stringify(s0.data[k]) + ' -> ' + JSON.stringify(s1.data[k])).join('; '));
     check('settings: the page shows the saved value', (await page.inputValue('#st-rf')).startsWith('24.5'));
 
+    // ---- your limits: set on the Holdings tab, saved in portfolio/settings, warned about on the Overview ----
+    await page.click('#tab-holdings'); await $t('limits').waitFor({ timeout: 10000 });
+    check('limits: off at first, the largest stock and sector shown without a limit', /Off/.test(await $t('limits').textContent()) && /no limit/.test(await $t('limit-stock').textContent()) && (await page.locator('[data-testid=limit-over]').count()) === 0);
+    await page.check('#lm-on'); await page.fill('#lm-stock', '120'); await $t('limits-save').click();
+    check('limits: a limit over 100% is refused', await toastSaid(/between 0 and 100/));
+    const lv0 = readDoc('portfolio', 'settings').version;
+    await page.fill('#lm-stock', '5'); await page.fill('#lm-sector', '10'); await $t('limits-save').click();
+    check('limits: "Limits saved"', await toastSaid(/Limits saved/));
+    const ls1 = readDoc('portfolio', 'settings');
+    check('limits: saved as fractions in portfolio/settings, the rest unchanged', ls1.version === lv0 + 1 && JSON.stringify(ls1.data.limits) === JSON.stringify({ on: true, stock: 0.05, sector: 0.1 }) && Math.abs(ls1.data.riskFree - 0.245) < 1e-9, JSON.stringify(ls1.data.limits));
+    await $t('limits').waitFor({ timeout: 10000 });
+    const over = await page.locator('[data-testid=limit-over]').allTextContents();
+    check('limits: the stocks and sectors over the limits are listed', over.some((t) => /limit for one stock/.test(t)) && over.some((t) => /sector is .* limit for one sector/.test(t)) && /over/.test(await $t('limits').textContent()), JSON.stringify(over));
+    await page.setViewportSize({ width: 390, height: 844 }); await $t('limits').scrollIntoViewIfNeeded(); await shot('limits-phone'); await page.setViewportSize({ width: 1280, height: 900 });
+    await page.click('#tab-overview');
+    const hl = await page.locator('[data-testid=heads-up-item]').allTextContents();
+    check('limits: the Overview heads-up lists them', hl.some((t) => /^Limit/.test(t) && /over your 5% limit for one stock/.test(t)), JSON.stringify(hl));
+    await page.click('#tab-holdings'); await page.uncheck('#lm-on'); await $t('limits-save').click();
+    check('limits: switched off', await toastSaid(/Limit warnings are off/) && readDoc('portfolio', 'settings').data.limits.on === false);
+    await page.click('#tab-overview');
+    check('limits: off, nothing about them on the Overview', !(await page.locator('[data-testid=heads-up-item]').allTextContents()).some((t) => /^Limit/.test(t)));
+    await page.click('#tab-settings');
+
     // ---- 4. a stale remembered sha: the "job" rewrites settings, the page saves again ----
     jobWrite([{ op: 'update', collection: 'portfolio', doc_id: 'settings', data: { staleDays: 9 } }]);
     const conflicts0 = API.conflicts;
