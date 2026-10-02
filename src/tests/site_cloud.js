@@ -549,6 +549,24 @@ print(r.seal_json(json.load(open(${JSON.stringify(path.join(TMP, 'snap.json'))})
     check("the owner's own sign-in account (no trades) says it is not the portfolio and offers the main one",
       await G.$t('owner-main-hint').isVisible() && /Open .*Portfolio/.test(await G.$t('owner-open-main').textContent()));
     await G.shot('owner-hint');
+    // from the account, "Open <main>" asks for the setup key ONCE, keeps it in the account and opens the main portfolio here
+    const H1 = await device('H1');
+    await H1.page.goto(ORIGIN + '/index.html'); await H1.$t('live-signin').waitFor({ timeout: 30000 }); await H1.$t('live-signin').click();
+    await H1.$t('signin-email').fill(OWNER_EMAIL); await H1.$t('signin-password').fill('owner pass 777'); await H1.$t('signin-submit').click();
+    await H1.lockHidden(60000).catch(() => {}); if (await H1.$t('live-bio-skip').count()) await H1.$t('live-bio-skip').click(); await H1.lockHidden().catch(() => {});
+    await H1.$t('owner-open-main').waitFor({ timeout: 20000 }); await H1.$t('owner-open-main').click();
+    await H1.$t('mainkey-setup-key').waitFor({ timeout: 15000 });
+    await H1.$t('mainkey-setup-key').fill('WRONG-WRONG-WRONG-WRONG'); await H1.$t('mainkey-submit').click();
+    await H1.page.waitForFunction(() => /not right/.test((document.querySelector('#lock .lk-err') || {}).textContent || ''), null, { timeout: 15000 }).catch(() => {});
+    check('from the account: a wrong setup key is refused', /not right/.test(await H1.lockErr()));
+    await H1.$t('mainkey-setup-key').fill(fs.readFileSync(path.join(TMP, 'mailsec', 'setup_key.txt'), 'utf8').trim()); await H1.$t('mainkey-submit').click();
+    await H1.$t('live-new-password').waitFor({ timeout: 20000 });
+    await H1.$t('live-new-password').fill('owner pass 777'); await H1.$t('live-new-password-repeat').fill('owner pass 777'); await H1.$t('live-password-continue').click();
+    await H1.lockHidden(60000).catch(() => {}); if (await H1.$t('live-bio-skip').count()) await H1.$t('live-bio-skip').click(); await H1.lockHidden().catch(() => {});
+    await H1.page.waitForTimeout(800);
+    check('from the account: the setup key once opens the main portfolio here, and the account now holds its key (sealed)',
+      /Demo Portfolio/.test(await H1.page.locator('#pf-name-text').textContent()) && !!FB.docs['users/' + FB.byEmail[OWNER_EMAIL].uid].fields.mainKey
+      && (await H1.page.evaluate(() => JSON.parse(localStorage.getItem('pd.accounts') || '[]').length)) === 0);
     check('before verifying the email, the owner cannot list accounts', firestore('GET', FSU + 'status', { authorization: 'Bearer ' + tokG0 })[0] === 403);
     check('an ordinary account can never list accounts', firestore('GET', FSU + 'status', { authorization: 'Bearer ' + tokB })[0] === 403);
     await G.$t('account-menu').click();
@@ -617,6 +635,24 @@ print(r.seal_json(json.load(open(${JSON.stringify(path.join(TMP, 'snap.json'))})
     check('signing in from the main portfolio links the site account and removes its separate entry here',
       await G.$t('account-friends').isVisible() && await G.$t('account-admin').isVisible() && (await G.page.evaluate(() => JSON.parse(localStorage.getItem('pd.accounts') || '[]').length)) === 0);
     await G.shot('linked-account');
+    check('linking also keeps the main portfolio\'s key in the account, sealed (one login from now on)',
+      !!(FB.docs['users/' + FB.byEmail[OWNER_EMAIL].uid] && FB.docs['users/' + FB.byEmail[OWNER_EMAIL].uid].fields.mainKey) && !/"pk8"/.test(JSON.stringify(FB.docs['users/' + FB.byEmail[OWNER_EMAIL].uid].fields.mainKey)));
+    // ---- 10b. one login: on a brand-new device, the account's email and password open the MAIN portfolio ----
+    const H2 = await device('H2');
+    await H2.page.goto(ORIGIN + '/index.html'); await H2.$t('live-signin').waitFor({ timeout: 30000 }); await H2.$t('live-signin').click();
+    await H2.$t('signin-email').fill(OWNER_EMAIL); await H2.$t('signin-password').fill('owner pass 777'); await H2.$t('signin-submit').click();
+    await H2.lockHidden(60000).catch(() => {}); if (await H2.$t('live-bio-skip').count()) await H2.$t('live-bio-skip').click(); await H2.lockHidden().catch(() => {});
+    await H2.page.waitForTimeout(800);
+    check('one login: email and password on a new device open the main portfolio directly (no setup key, no empty account)',
+      /Demo Portfolio/.test(await H2.page.locator('#pf-name-text').textContent()) && (await H2.page.evaluate(() => JSON.parse(localStorage.getItem('pd.accounts') || '[]').length)) === 0
+      && !(await H2.$t('owner-main-hint').count()));
+    await H2.$t('account-menu').click(); await H2.$t('account-friends').waitFor({ timeout: 15000 });
+    check('... with the account inside it (Friends and Admin under Account)', await H2.$t('account-friends').isVisible() && await H2.$t('link-signout').isVisible());
+    await H2.$t('account-back').click();
+    await H2.page.reload(); await H2.$t('live-password').waitFor({ timeout: 30000 }).catch(() => {});
+    check('... and the next time this device opens it with the same password', await H2.$t('live-password').isVisible());
+    await H2.$t('live-password').fill('owner pass 777'); await H2.$t('live-password-submit').click(); await H2.lockHidden(30000).catch(() => {});
+    check('... which unlocks it', /Demo Portfolio/.test(await H2.page.locator('#pf-name-text').textContent()) && await H2.page.evaluate(() => document.getElementById('lock').hidden));
     await G.$t('account-friends').click(); await G.$t('friend-email').fill(EMAIL); await G.$t('friend-add').click();
     await G.$t('friend-sent').waitFor({ timeout: 15000 }).catch(() => {});
     await E.$t('account-menu').click(); await E.$t('account-friends').click(); await E.$t('friend-accept').waitFor({ timeout: 15000 }); await E.$t('friend-accept').click();

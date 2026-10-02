@@ -782,6 +782,7 @@
     if (!CUR.cloud) await loadLink().catch((e) => { console.warn('linked account not opened', e); LINK = null; CLOUD = null; });
     editBar();
     if (CUR.cloud || LINK) housekeeping().catch((e) => console.warn('account housekeeping', e));
+    if (LINK && !CUR.cloud && CUR.id === 'khaled') ensureMainKey().catch((e) => console.warn('main key not stored', e));   // one login from now on
     updateLive().catch((e) => { console.warn('live prices unavailable', e); notice('Live prices are unavailable right now: showing prices from the last daily update.'); }); }
   async function refresh() { if (!PK8) return; fetchTry = Date.now(); try { const b = await fetchData(); if (b.exportedAt !== DATA_AT) publish(b); else offlineBanner(); } catch (e) { console.warn('refresh failed', e); }
     if (CUR && (CUR.cloud || LINK) && CLOUD) listFriends().catch(() => {}); }
@@ -1000,7 +1001,7 @@
   }
   async function readProfile(uid) {
     const j = await fsReq('GET', `users/${uid}`);
-    return { keys: JSON.parse(fStr(j, 'keys')), name: fStr(j, 'name') };
+    return { keys: JSON.parse(fStr(j, 'keys')), name: fStr(j, 'name'), mainKey: fStr(j, 'mainKey') };
   }
   function signUpScreen(note) {
     screen(`<h1>Create your portfolio</h1><p>Your portfolio is private: it is locked with your password on this device. Nobody else can read it unless you add them as a friend.</p>
@@ -1149,6 +1150,8 @@
         let pk8;
         try { pk8 = await unwrapKey(prof.keys.pwrap, p); }
         catch (x) { if (x && x.name === 'OperationError') return recoverScreen(a, prof, p, e); throw x; }   // the password was reset: the key needs the recovery code once
+        const mk = await mainKeyOf(prof, pk8);
+        if (mk) return openMainWithAccount(mk.portfolio, mk.pk8, { uid: a.localId, email: a.email || e, refresh: a.refreshToken, pk8, pub: prof.keys.pub, name: prof.name }, p, a);
         await adoptAccount(a, pk8, prof.keys, prof.name, p, e);
         await start(); open(); await offerBio(PK8);
       } catch (x) { console.error(x); go.disabled = false; err(x.message || String(x)); }
@@ -1894,6 +1897,72 @@
      session and private key on this device in IndexedDB 'link:<id>', sealed to the portfolio's own key ('portfolio-link-v1'):
      unlocking the portfolio opens both; locking forgets both. The account's separate entry on this device is removed. */
   const LINK_LABEL = 'portfolio-link-v1';
+  /* ---------- one login: the account holds its main portfolio's key ----------
+     users/{uid}.mainKey = {id, pk8} of a setup-key portfolio (the owner's main one), sealed to the account's own key
+     ('portfolio-mainkey-v1'), so only someone who can open the account (its password, or its recovery code) can open it.
+     Signing in with the account's email and password then opens that portfolio directly, set up on this device with the
+     same password, with the account linked inside it (Friends, Admin): one login, no setup key, no second portfolio.
+     It is stored the first time the portfolio and the account are open together (a linked portfolio, or "Open ..." from
+     the account with the setup key once). */
+  const MAINKEY_LABEL = 'portfolio-mainkey-v1';
+  async function mainKeyOf(prof, acctPk8) {
+    if (!prof || !prof.mainKey) return null;
+    try {
+      const o = JSON.parse(dec.decode(await unseal(JSON.parse(prof.mainKey), MAINKEY_LABEL, acctPk8)));
+      const portfolio = PORTFOLIOS.find((x) => x.id === o.id);
+      return portfolio ? { portfolio, pk8: ub64(o.pk8) } : null;
+    } catch (e) { console.warn('main key not opened', e); return null; }
+  }
+  // a portfolio already linked on this device (before one login existed): store its key in the account once
+  async function ensureMainKey() {
+    if (ensureMainKey.done === CUR.id) return; ensureMainKey.done = CUR.id;
+    const prof = await readProfile(LINK.uid);
+    if (!prof.mainKey) await saveMainKey(LINK.uid, LINK.pub, CUR.id, PK8);
+  }
+  async function saveMainKey(uid, acctPub, id, mainPk8) {
+    const env = Object.assign({ v: 1 }, await seal(enc.encode(JSON.stringify({ v: 1, id, pk8: b64big(mainPk8) })), MAINKEY_LABEL, acctPub));
+    await fsReq('PATCH', `users/${uid}`, { fields: { mainKey: { stringValue: JSON.stringify(env) } } }, 'updateMask.fieldPaths=mainKey');
+  }
+  // the account's own entry on this device goes: the main portfolio is now the one place for it
+  async function absorbAccountEntry(uid) {
+    const id = 'u_' + uid, mp = ls.get('pd.mail.' + id);
+    if (mp && !ls.get('pd.mail.' + CUR.id)) ls.set('pd.mail.' + CUR.id, mp);
+    ls.del('pd.dev.' + id); for (const k of ['dev:', 'bio:', 'tok:', 'acct:', 'cache:']) await idbDel(k + id).catch(() => {});
+    dropAccount(id); ['pd.mail.', 'pd.dir.', 'pd.status.'].forEach((k) => ls.del(k + id));
+  }
+  // switch this page to the main portfolio, opened with its key; the account (link) rides inside it. pw: the device password
+  // (the account's own when signing in); without one, the person chooses it.
+  async function openMainWithAccount(portfolio, mainPk8, link, pw, auth) {
+    if (OPENED && OPENED !== portfolio.id) resetSession();
+    CUR = portfolio; ls.set(CUR_LS, portfolio.id); PK8 = null; EXPORTS = null; EDIT = null;
+    KEYS = await (await fetch(base() + 'keys.json', { cache: 'no-store' })).json();
+    if (!(await keyMatches(mainPk8))) return rotatedScreen();
+    LINK = link; CLOUD = auth ? session(auth) : CLOUD;
+    const finish = async (devPw) => { await storeV3(mainPk8, devPw); await storeLink(); await absorbAccountEntry(link.uid); await afterSetup(mainPk8); };
+    if (pw) return finish(pw);
+    passwordScreen({ title: 'Choose a password for this device', intro: `It unlocks ${esc(CUR.name)} on this device. Your account password works too: you may use the same one.`, done: finish });
+  }
+  // from the account (the owner's sign-in): open the main portfolio, keeping its key in the account for next time
+  async function openMainFromAccount(portfolio) {
+    const link = { uid: CLOUD.uid, email: CLOUD.email, refresh: CLOUD.refresh, pk8: PK8, pub: KEYS.pub, name: CUR.name };
+    let mk = null;
+    try { mk = await mainKeyOf(await readProfile(CLOUD.uid), PK8); } catch (e) { mk = null; }
+    if (mk && mk.portfolio.id === portfolio.id) return openMainWithAccount(portfolio, mk.pk8, link, null);
+    screen(`<h1>Open ${esc(portfolio.name)}</h1><p>Enter its setup key once. It is then kept in your account, locked with your account, so from now on signing in with your email and password opens ${esc(portfolio.name)} directly, on any device.</p>
+      <form id="lk-mk" autocomplete="off"><input id="lk-mk-code" data-testid="mainkey-setup-key" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX" autocapitalize="characters" spellcheck="false" aria-label="Setup key">
+      <button class="lk-btn" id="lk-mk-go" data-testid="mainkey-submit">Continue</button><div class="lk-err" role="alert"></div></form>
+      <div class="lk-links"><button type="button" class="lk-link" id="lk-mk-back">Back</button></div>`);
+    $l('#lk-mk-back').onclick = open;
+    $l('#lk-mk').onsubmit = async (ev) => {
+      ev.preventDefault(); const b = $l('#lk-mk-go'); b.disabled = true; err('Checking…');
+      try {
+        const mkeys = await (await fetch('p/' + portfolio.id + '/keys.json', { cache: 'no-store' })).json();
+        const mainPk8 = new Uint8Array(await unwrapKey(mkeys.wrap, $l('#lk-mk-code').value.toUpperCase().replace(/[^A-Z0-9]/g, '')));
+        await saveMainKey(link.uid, link.pub, portfolio.id, mainPk8);
+        await openMainWithAccount(portfolio, mainPk8, link, null);
+      } catch (e) { console.error(e); b.disabled = false; err(e && e.name === 'OperationError' ? 'That setup key is not right. Check it and try again.' : (e.message || String(e))); }
+    };
+  }
   const acctKey = () => (LINK ? LINK.pk8 : PK8), acctPub = () => (LINK ? LINK.pub : KEYS.pub);
   async function storeLink() { const o = { uid: LINK.uid, email: LINK.email, refresh: (CLOUD && CLOUD.refresh) || LINK.refresh, pk8: b64big(LINK.pk8), pub: LINK.pub, name: LINK.name };
     await idbPut('link:' + CUR.id, Object.assign({ v: 1 }, await seal(enc.encode(JSON.stringify(o)), LINK_LABEL))); }
@@ -1924,6 +1993,7 @@
         catch (x) { CLOUD = null; b.disabled = false; return err(x && x.name === 'OperationError' ? 'That account\'s password was reset: open it once on its own (Switch portfolio, Sign in) to finish with the recovery code, then link it here.' : (x.message || String(x))); }
         LINK = { uid: a.localId, email: a.email || email, refresh: a.refreshToken, pk8, pub: prof.keys.pub, name: prof.name };
         await storeLink();
+        if (!prof.mainKey) await saveMainKey(a.localId, prof.keys.pub, CUR.id, PK8).catch((x) => console.warn('main key not stored', x));   // one login from now on
         // the account's own entry on this device goes: this portfolio is now the one place for it
         const id = 'u_' + a.localId, mp = ls.get('pd.mail.' + id);
         if (mp && !ls.get('pd.mail.' + CUR.id)) ls.set('pd.mail.' + CUR.id, mp);
@@ -2068,10 +2138,11 @@
     const empty = !Object.keys(DOCS).some((k) => k.startsWith('ledger/') && ((DOCS[k] || {}).rows || []).length);
     if (!OWNER.yes || !main || !empty) return '';
     return `<section class="pd-friends pd-building" data-testid="owner-main-hint"><h3>This is your sign-in account, not your portfolio</h3>
-      <p class="pdf-empty">It is only for friends and the admin screen, so it has no trades. Your real portfolio is <b>${esc(main.name)}</b>${ls.get('pd.dev.' + main.id) ? '' : ': the first time on this device it asks for your setup key, then your own password or Face ID'}.</p>
+      <p class="pdf-empty">It is only for friends and the admin screen, so it has no trades. Your real portfolio is <b>${esc(main.name)}</b>${ls.get('pd.dev.' + main.id) ? '' : '. Open it once with its setup key: from then on, signing in with your email and password opens it directly, on any device'}.</p>
       <button type="button" class="btn primary" style="margin-top:10px" data-open-main="${esc(main.id)}" data-testid="owner-open-main">Open ${esc(main.name)}</button></section>`;
   }
-  document.addEventListener('click', (e) => { const b = e.target.closest && e.target.closest('[data-open-main]'); if (!b) return; const p = findPortfolio(b.dataset.openMain); if (p) select(p); });
+  document.addEventListener('click', (e) => { const b = e.target.closest && e.target.closest('[data-open-main]'); if (!b) return; const p = PORTFOLIOS.find((x) => x.id === b.dataset.openMain); if (!p) return;
+    if (ls.get('pd.dev.' + p.id)) select(p); else openMainFromAccount(p).catch((x) => { console.error(x); toast(x.message || String(x)); }); });
   function hubHTML() {
     const acct = hasAcct(), rows = hubRows(), P = period();
     const row = (r, i) => `<button type="button" class="hub-row${r.me ? ' cur' : ''}" data-hub="profile" data-uid="${esc(r.uid)}" data-testid="hub-${r.me ? 'me' : 'friend'}">
