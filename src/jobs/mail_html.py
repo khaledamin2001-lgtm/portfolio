@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""One look for every email the jobs send (the weekly summary's design, src/tools/weekly.js): a white card on a grey
-page, the portfolio name and a title over an accent rule, then blocks, one button and a small footer. Inline styles
+"""One look for every email the jobs send, matching the site (app.html :root) and the weekly summary (src/tools/weekly.js):
+a white card on a light grey page, the portfolio name in blue over a bold title, then blocks, one pill button and a small
+footer. Inline styles
 only (Gmail drops most <style>), tables for layout, readable at phone width and in Gmail's dark mode.
 
     html = page(kicker, title, blocks, subtitle=None, button=None, foot=None, preheader=None)
@@ -17,9 +18,10 @@ blocks (each a tuple; text is escaped here, never pass HTML):
 button = (label, url); foot = text or [texts]."""
 import html as _h
 
-C = {"page": "#EEF1F4", "card": "#FFFFFF", "ink": "#17212B", "ink2": "#4A5563", "mute": "#6B7582", "line": "#E2E7EC",
-     "soft": "#F5F7F9", "pos": "#15803D", "neg": "#C62828", "accent": "#0F5E6E"}
-BOX = {"info": ("#EAF4F6", "#0F5E6E"), "good": ("#E7F4EC", "#15803D"), "warn": ("#FFF7E6", "#B7791F"), "bad": ("#FCEBEB", "#C62828")}
+# the site's palette (light): near-black ink, grey labels, one blue accent, green / red only for gains and losses
+C = {"page": "#F2F2F7", "card": "#FFFFFF", "ink": "#1D1D1F", "ink2": "#424245", "mute": "#6E6E73", "line": "#E5E5EA",
+     "soft": "#F5F5F7", "pos": "#1A7F37", "neg": "#D70015", "accent": "#0071E3"}
+BOX = {"info": ("#E8F1FD", "#0071E3"), "good": ("#E4F5E9", "#1A7F37"), "warn": ("#FFF2E0", "#B25000"), "bad": ("#FDE9EB", "#D70015")}
 FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
 TONE = {None: C["ink"], "pos": C["pos"], "neg": C["neg"], "mute": C["mute"]}
 
@@ -52,9 +54,9 @@ def _block(b):
         return _row(f'<div style="font-size:16px;line-height:22px;font-weight:700;color:{C["ink"]};padding-top:16px">{esc(b[1])}</div>{sub}', "0 24px 4px")
     if k == "tiles":
         cells = "".join(
-            f'<td valign="top" width="{100 // len(b[1])}%" style="padding:10px 12px;background:{C["soft"]};border-radius:8px">'
+            f'<td valign="top" width="{100 // len(b[1])}%" style="padding:12px 14px;background:{C["soft"]};border-radius:12px">'
             f'<div style="font-size:11px;line-height:16px;letter-spacing:.04em;text-transform:uppercase;color:{C["mute"]}">{esc(lab)}</div>'
-            f'<div style="font-size:19px;line-height:26px;font-weight:700;color:{TONE.get(t, C["ink"])};white-space:nowrap">{esc(val)}</div>'
+            f'<div style="font-size:20px;line-height:26px;font-weight:700;letter-spacing:-.02em;color:{TONE.get(t, C["ink"])};white-space:nowrap">{esc(val)}</div>'
             + (f'<div style="font-size:12px;line-height:16px;color:{C["mute"]}">{esc(sub)}</div>' if sub else "") + "</td>"
             for lab, val, sub, t in b[1])
         return f'<tr><td class="m-tiles" style="padding:6px 18px"><table role="presentation" width="100%" cellpadding="0" cellspacing="6" border="0" style="width:100%;border-collapse:separate"><tr>{cells}</tr></table></td></tr>'
@@ -77,7 +79,7 @@ def _block(b):
         bg, bar = BOX[b[1]]
         title = f'<div style="font-size:14px;line-height:20px;font-weight:700;color:{bar}">{esc(b[2])}</div>' if b[2] else ""
         lines = "".join(f'<div style="font-size:14px;line-height:21px;color:{C["ink"]};padding-top:4px">{esc(x)}</div>' for x in (b[3] if len(b) > 3 else []))
-        return _row(f'<div style="background:{bg};border-left:4px solid {bar};border-radius:6px;padding:10px 14px;margin:8px 0">{title}{lines}</div>')
+        return _row(f'<div style="background:{bg};border-radius:12px;padding:12px 16px;margin:8px 0">{title}{lines}</div>')
     if k == "table":
         head, rows = b[1], b[2]
         al = b[3] if len(b) > 3 else ["l"] + ["r"] * (len(head) - 1)
@@ -95,7 +97,7 @@ def _block(b):
 def page(kicker, title, blocks, subtitle=None, button=None, foot=None, preheader=None):
     sub = f'<div style="font-size:13px;line-height:19px;color:{C["mute"]};padding-bottom:12px">{esc(subtitle)}</div>' if subtitle else '<div style="height:12px"></div>'
     btn = (f'<tr><td class="m-px" style="padding:18px 24px 6px"><a href="{esc(button[1])}" style="display:inline-block;background:{C["accent"]};color:#ffffff;'
-           f'text-decoration:none;font-size:15px;line-height:20px;font-weight:600;padding:11px 20px;border-radius:8px">{esc(button[0])}</a></td></tr>') if button else ""
+           f'text-decoration:none;font-size:15px;line-height:20px;font-weight:600;padding:12px 24px;border-radius:999px">{esc(button[0])}</a></td></tr>') if button else ""
     feet = [foot] if isinstance(foot, str) else (foot or [])
     ft = "".join(f'<div style="padding-top:6px">{esc(x)}</div>' for x in feet)
     ft = f'<tr><td class="m-px" style="padding:18px 24px 20px;font-size:12px;line-height:18px;color:{C["mute"]}"><div style="border-top:1px solid {C["line"]};padding-top:8px">{ft}</div></td></tr>' if ft else '<tr><td style="height:16px"></td></tr>'
@@ -109,10 +111,10 @@ def page(kicker, title, blocks, subtitle=None, button=None, foot=None, preheader
         f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{C["page"]};width:100%"><tr>'
         f'<td class="m-outer" align="center" style="padding:16px 8px">'
         f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;background:{C["card"]};'
-        f'border:1px solid {C["line"]};border-radius:12px;border-collapse:separate;font-family:{FONT};color:{C["ink"]}">'
-        f'<tr><td class="m-px" style="padding:20px 24px 4px;border-bottom:3px solid {C["accent"]}">'
+        f'border:1px solid {C["line"]};border-radius:18px;border-collapse:separate;font-family:{FONT};color:{C["ink"]}">'
+        f'<tr><td class="m-px" style="padding:24px 24px 4px;border-bottom:1px solid {C["line"]}">'
         f'<div style="font-size:12px;line-height:16px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:{C["accent"]}">{esc(kicker)}</div>'
-        f'<div style="font-size:22px;line-height:29px;font-weight:700;color:{C["ink"]};padding-top:2px">{esc(title)}</div>{sub}</td></tr>'
+        f'<div style="font-size:24px;line-height:30px;font-weight:700;letter-spacing:-.02em;color:{C["ink"]};padding-top:4px">{esc(title)}</div>{sub}</td></tr>'
         '<tr><td style="height:8px"></td></tr>'
         + "".join(_block(b) for b in blocks) + btn + ft +
         "</table></td></tr></table></body></html>")

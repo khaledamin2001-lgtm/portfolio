@@ -158,8 +158,9 @@ const px = (x) => (x == null ? '—' : new Intl.NumberFormat('en-US', { minimumF
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const stockLbl = (x) => (x.symbol ? `${x.symbol} · ${x.name}` : x.name);
 
-// email palette: mid-tone greens/reds that stay readable when Gmail's apps invert the page for dark mode
-const C = { page: '#EEF1F4', card: '#FFFFFF', ink: '#17212B', ink2: '#4A5563', mute: '#6B7582', line: '#E2E7EC', soft: '#F5F7F9', pos: '#15803D', neg: '#C62828', posBg: '#E7F4EC', negBg: '#FCEBEB', accent: '#0F5E6E' };
+// email palette: the site's (app.html :root, light) and every other email's (jobs/mail_html.py); mid-tone greens / reds that stay
+// readable when Gmail's apps invert the page for dark mode
+const C = { page: '#F2F2F7', card: '#FFFFFF', ink: '#1D1D1F', ink2: '#424245', mute: '#6E6E73', line: '#E5E5EA', soft: '#F5F5F7', pos: '#1A7F37', neg: '#D70015', posBg: '#E4F5E9', negBg: '#FDE9EB', accent: '#0071E3' };
 const tone = (x, eps = 0.5) => (x == null || Math.abs(x) < eps ? C.ink : x > 0 ? C.pos : C.neg);
 const toneR = (x) => (x == null || Math.abs(x) < 0.00005 ? C.ink : x > 0 ? C.pos : C.neg);
 const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
@@ -173,7 +174,7 @@ function renderHTML(s) {
   const block = (inner) => `<tr><td class="wk-px" style="padding:0 24px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:100%">${inner}</table></td></tr>`;
   const stockCell = (x) => `<span style="font-weight:700;color:${C.ink}">${esc(x.symbol || x.name)}</span>${x.symbol ? `<br><span style="font-size:12px;line-height:16px;color:${C.mute}">${esc(x.name)}${x.traded ? ' · traded' : ''}</span>` : x.traded ? `<br><span style="font-size:12px;color:${C.mute}">traded</span>` : ''}`;
   const moverRows = (list) => list.map((x) => `<tr>${td(stockCell(x))}${td(`<span style="color:${toneR(x.chg)}">${pctS(x.chg)}</span>`, num)}${td(`<span style="color:${tone(x.pnl)};font-weight:600">${signed(x.pnl)}</span>`, num)}</tr>`).join('');
-  const kpi = (label, value, sub) => `<td valign="top" style="padding:10px 12px;background:${C.soft};border-radius:8px"><div style="font-size:11px;line-height:16px;letter-spacing:.04em;text-transform:uppercase;color:${C.mute}">${label}</div><div style="font-size:17px;line-height:24px;font-weight:700;color:${C.ink};white-space:nowrap">${value}</div>${sub ? `<div style="font-size:12px;line-height:16px;color:${C.mute}">${sub}</div>` : ''}</td>`;
+  const kpi = (label, value, sub) => `<td valign="top" style="padding:12px 14px;background:${C.soft};border-radius:12px"><div style="font-size:11px;line-height:16px;letter-spacing:.04em;text-transform:uppercase;color:${C.mute}">${label}</div><div style="font-size:17px;line-height:24px;font-weight:700;color:${C.ink};white-space:nowrap">${value}</div>${sub ? `<div style="font-size:12px;line-height:16px;color:${C.mute}">${sub}</div>` : ''}</td>`;
   const flowTxt = Math.abs(w.netFlows) >= 0.5 ? `${w.netFlows > 0 ? 'Net deposits' : 'Net withdrawals'} ${money(Math.abs(w.netFlows))} EGP${w.deposits && w.withdrawals ? ` (in ${money(w.deposits)}, out ${money(-w.withdrawals)})` : ''}` : 'No deposits or withdrawals';
   const alpha = w.bench != null ? w.ret - w.bench : null;
   const sessionsTxt = `${w.sessions} session${w.sessions === 1 ? '' : 's'}, ${dayLbl(s.days.find((d) => d.status === 'session').d)}–${dayLbl(s.to)} · previous close ${dayLbl(s.from)}`;
@@ -181,9 +182,9 @@ function renderHTML(s) {
   // day row: Sun..Thu, one cell each
   const dayCells = s.days.map((d) => {
     const head = `<div style="font-size:11px;line-height:15px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:${C.mute}">${d.weekday}</div><div style="font-size:12px;line-height:16px;color:${C.mute}">${dayLbl(d.d)}</div>`;
-    if (d.status !== 'session') return `<td width="20%" valign="top" style="padding:8px 2px;text-align:center;background:${C.soft};border:1px solid ${C.card};border-radius:8px">${head}<div style="font-size:13px;line-height:20px;color:${C.mute};padding-top:4px">${d.status === 'closed' ? 'Closed' : '—'}</div><div style="font-size:12px;line-height:16px">&nbsp;</div></td>`;
+    if (d.status !== 'session') return `<td width="20%" valign="top" style="padding:8px 2px;text-align:center;background:${C.soft};border:1px solid ${C.card};border-radius:12px">${head}<div style="font-size:13px;line-height:20px;color:${C.mute};padding-top:4px">${d.status === 'closed' ? 'Closed' : '—'}</div><div style="font-size:12px;line-height:16px">&nbsp;</div></td>`;
     const bg = Math.abs(d.pnl) < 0.5 ? C.soft : d.pnl > 0 ? C.posBg : C.negBg;
-    return `<td width="20%" valign="top" style="padding:8px 2px;text-align:center;background:${bg};border:1px solid ${C.card};border-radius:8px">${head}<div class="wk-day" style="font-size:14px;line-height:20px;font-weight:700;color:${tone(d.pnl)};padding-top:4px;white-space:nowrap">${signed(d.pnl)}</div><div style="font-size:12px;line-height:16px;color:${toneR(d.ret)};white-space:nowrap">${pctS(d.ret)}</div>${Math.abs(d.flow) >= 0.5 ? `<div style="font-size:11px;line-height:14px;color:${C.mute}">${d.flow > 0 ? 'dep' : 'wdr'} ${money(Math.abs(d.flow))}</div>` : ''}</td>`;
+    return `<td width="20%" valign="top" style="padding:8px 2px;text-align:center;background:${bg};border:1px solid ${C.card};border-radius:12px">${head}<div class="wk-day" style="font-size:14px;line-height:20px;font-weight:700;color:${tone(d.pnl)};padding-top:4px;white-space:nowrap">${signed(d.pnl)}</div><div style="font-size:12px;line-height:16px;color:${toneR(d.ret)};white-space:nowrap">${pctS(d.ret)}</div>${Math.abs(d.flow) >= 0.5 ? `<div style="font-size:11px;line-height:14px;color:${C.mute}">${d.flow > 0 ? 'dep' : 'wdr'} ${money(Math.abs(d.flow))}</div>` : ''}</td>`;
   }).join('');
 
   const perRow = (label, p) => (p ? `<tr>${td(`${label}<br><span style="font-size:12px;color:${C.mute}">since ${dayLbl(p.from)} close · ${p.sessions} session${p.sessions === 1 ? '' : 's'}</span>`)}${td(`<span style="color:${toneR(p.ret)};font-weight:600">${pctS(p.ret)}</span>`, num)}${td(`<span style="color:${toneR(p.bench)}">${pctS(p.bench)}</span>`, num)}${td(`<span style="color:${tone(p.pnl)}">${signed(p.pnl)}</span>`, num)}</tr>` : '');
@@ -220,10 +221,10 @@ function renderHTML(s) {
 <body style="margin:0;padding:0;background:${C.page};-webkit-text-size-adjust:100%">
 <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:${C.page}">${esc(pre)}</div>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${C.page};width:100%"><tr><td class="wk-outer" align="center" style="padding:16px 8px">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:640px;background:${C.card};border:1px solid ${C.line};border-radius:12px;border-collapse:separate;font-family:${FONT};color:${C.ink}" data-testid="weekly-email">
-<tr><td class="wk-px" style="padding:20px 24px 4px;border-bottom:3px solid ${C.accent};border-radius:12px 12px 0 0">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:640px;background:${C.card};border:1px solid ${C.line};border-radius:18px;border-collapse:separate;font-family:${FONT};color:${C.ink}" data-testid="weekly-email">
+<tr><td class="wk-px" style="padding:24px 24px 4px;border-bottom:1px solid ${C.line};border-radius:18px 18px 0 0">
   <div style="font-size:12px;line-height:16px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:${C.accent}">${esc(s.name)}</div>
-  <div style="font-size:22px;line-height:30px;font-weight:700;color:${C.ink}">Week to ${dayLblY(s.to)}</div>
+  <div style="font-size:24px;line-height:30px;font-weight:700;letter-spacing:-.02em;color:${C.ink}">Week to ${dayLblY(s.to)}</div>
   <div style="font-size:12px;line-height:18px;color:${C.mute};padding-bottom:12px">${sessionsTxt} · EGX closing prices</div>
 </td></tr>
 <tr><td class="wk-px" style="padding:18px 24px 6px" data-testid="weekly-headline">

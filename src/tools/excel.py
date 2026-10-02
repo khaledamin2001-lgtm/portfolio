@@ -12,9 +12,9 @@ from openpyxl.utils import get_column_letter
 
 d = json.load(open(sys.argv[1]))
 wb = Workbook()
-INK = "0F1A17"; ACC = "0B6E5F"; RULE = "DAE2DE"; INPUT = "2256C7"
+INK = "1D1D1F"; ACC = "0071E3"; RULE = "D2D2D7"; INPUT = "2256C7"   # the site's palette; typed-input cells keep the usual finance blue
 H = Font(bold=True, color="FFFFFF", size=10); HF = PatternFill("solid", fgColor=ACC)
-T = Font(bold=True, size=14, color=INK); S = Font(size=9, color="6F7D78"); B = Font(bold=True)
+T = Font(bold=True, size=14, color=INK); S = Font(size=9, color="6E6E73"); B = Font(bold=True)
 thin = Side(style="thin", color=RULE); bottom = Border(bottom=thin)
 PCT = "+0.0%;-0.0%;0.0%"; PCT2 = "+0.00%;-0.00%;0.00%"; PCTU = "0.0%"; EGP = "#,##0;(#,##0);-"; EGP2 = "#,##0.00;(#,##0.00);-"; NUM = "0.00"; DT = "yyyy-mm-dd"
 MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -64,7 +64,7 @@ unsigned_keys = {"Monthly volatility", "Annualized volatility", "Tracking error 
 small_pct_keys = {"Trading costs as % of value traded"}  # ~0.1-0.5%: two decimals
 labels = d.get("labels") or {}
 for g, keys in groups:
-    put(ws, r, 1, g.upper()).font = Font(bold=True, size=9, color="6F7D78"); r += 1
+    put(ws, r, 1, g.upper()).font = Font(bold=True, size=9, color="6E6E73"); r += 1
     for k in keys:
         v = d["summary"].get(k)
         put(ws, r, 1, labels.get(k, k)).border = bottom
@@ -72,7 +72,7 @@ for g, keys in groups:
         c.number_format = PCT2 if k in ret_keys else PCTU if k in unsigned_keys else "0.00%" if k in small_pct_keys else EGP if "(EGP)" in k else NUM if isinstance(v, float) else "0"
         r += 1
     r += 1
-put(ws, r, 1, "TRAILING RETURNS").font = Font(bold=True, size=9, color="6F7D78"); r += 1
+put(ws, r, 1, "TRAILING RETURNS").font = Font(bold=True, size=9, color="6E6E73"); r += 1
 for j, h in enumerate(["Period", "Portfolio", "Benchmark", "Difference"], 1):
     c = put(ws, r, j, h); c.font = H; c.fill = HF
 r += 1
@@ -125,7 +125,7 @@ rows = [[Y["year"]] + Y["div"] + [Y["divT"], Y["rebT"], Y["feeT"], Y["net"]] for
 ws, r0 = sheet("Income", ["Year"] + MON + ["Dividends", "Rebates", "Fees", "Net income"], rows, [None] + [EGP] * 16, [8] + [9] * 12 + [12, 11, 10, 12],
       note="Dividends by month (EGP). Rebates are Thndr commission kickbacks; fees are subscriptions, custody and transfers.")
 r = r0 + len(rows) + 3
-put(ws, r, 1, "DIVIDENDS BY STOCK").font = Font(bold=True, size=9, color="6F7D78"); r += 1
+put(ws, r, 1, "DIVIDENDS BY STOCK").font = Font(bold=True, size=9, color="6E6E73"); r += 1
 for j, h in enumerate(["Stock", "Symbol", "Payments", "Total received", "Last paid"], 1):
     c = put(ws, r, j, h); c.font = H; c.fill = HF
 r += 1
@@ -159,11 +159,11 @@ ws, r0 = sheet("Marks & inputs", [t for t, _, _, _ in mcols], rows, [x for _, _,
 for row in ws.iter_rows(min_row=r0 + 1, max_row=r0 + len(rows), min_col=2, max_col=7):
     for c in row: c.font = Font(color=INPUT)
 r = r0 + len(rows) + 3
-put(ws, r, 1, "SETTINGS").font = Font(bold=True, size=9, color="6F7D78"); r += 1
+put(ws, r, 1, "SETTINGS").font = Font(bold=True, size=9, color="6E6E73"); r += 1
 for k in ["name", "inception", "openingValue", "benchCloseStart", "fxStart", "riskFree", "cash", "cashDate", "cashSource", "openThreshold", "staleDays"]:
     put(ws, r, 1, k); c = put(ws, r, 2, d["settings"].get(k)); c.font = Font(color=INPUT); r += 1
 r += 2
-put(ws, r, 1, "ASSETS").font = Font(bold=True, size=9, color="6F7D78"); r += 1
+put(ws, r, 1, "ASSETS").font = Font(bold=True, size=9, color="6E6E73"); r += 1
 for j, h in enumerate(["Asset", "Symbol", "Sector", "Target", "Stop loss", "Fund"], 1):
     c = put(ws, r, j, h); c.font = H; c.fill = HF
 r += 1
