@@ -1,6 +1,7 @@
 """Draw the Portfolio Desk app icons (run once; build_site.py copies the PNGs). Usage: python3 make_icons.py
-The mark: a deep-green field (the lock screen's accent, #0B6E5F, with a soft top-left light), three ascending ledger bars in
-translucent white and a white trend line rising over them to an amber "latest" point, echoing the lock screen's trend mark.
+The mark: a blue field (the site's accent, #0071E3, as an iOS-style gradient with a soft top-left light), three ascending
+ledger bars in translucent white and a white trend line rising over them to an amber "latest" point, echoing the lock
+screen's trend mark.
   icon-192.png / icon-512.png                   purpose "any": rounded square, transparent corners, larger mark
   icon-maskable-192.png / icon-maskable-512.png purpose "maskable": full bleed, mark inside the 80% safe circle
   icon-180.png                                  apple-touch-icon: full bleed and opaque (iOS rounds the corners itself)
@@ -9,8 +10,8 @@ import os
 from PIL import Image, ImageDraw, ImageFilter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-TOP, BOTTOM = (16, 128, 110), (8, 84, 72)       # field gradient around #0B6E5F
-BAR = (255, 255, 255, 64)                        # translucent mint-white ledger bars
+TOP, BOTTOM = (40, 140, 255), (0, 86, 196)       # field gradient around #0071E3
+BAR = (255, 255, 255, 64)                        # translucent white ledger bars
 LINE = (255, 255, 255, 255)
 TIP = (246, 196, 92, 255)                        # warm amber dot at the latest point
 

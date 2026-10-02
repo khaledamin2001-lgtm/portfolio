@@ -354,14 +354,15 @@ function factsheetData(m){
   return { m, R, st:R.stats, row, live, tr, cal, top, sectors, A1, Ay, ddDaily, value: row?row.value:tot, incM: inc(m+'-01',PE.eom(m)), incY: inc(y+'-01',PE.eom(m)) };
 }
 function factsheetHTML(F){
-  const ink='#0F1A17', ink2='#46534E', ink3='#5F6C67', rule='#DAE2DE', acc='#0B6E5F', pos='#137a3a', neg='#c02f2f', bg2='#EDF2EF';
+  // the site's palette (app.html :root, light): near-black ink, grey labels, one blue accent, green / red for gains and losses
+  const ink='#1D1D1F', ink2='#424245', ink3='#6E6E73', rule='#D2D2D7', acc='#0071E3', pos='#1A7F37', neg='#D70015', bg2='#F2F2F7';
   const col=(x)=>x==null?ink3:x>0?pos:x<0?neg:ink; const P=(x,dp=1)=>`<span style="color:${col(x)}">${pct(x,dp)}</span>`;
   const th=(t,al='right')=>`<th style="text-align:${al};font:600 10px Arial,sans-serif;letter-spacing:.06em;text-transform:uppercase;color:${ink3};padding:6px 8px;border-bottom:1px solid ${rule}">${t}</th>`;
   const td=(t,al='right',extra='')=>`<td style="text-align:${al};padding:6px 8px;border-bottom:1px solid ${bg2};font:13px Arial,sans-serif;color:${ink};${extra}">${t}</td>`;
-  const h2=(t)=>`<h2 style="font:600 15px Georgia,serif;color:${ink};margin:22px 0 8px">${t}</h2>`;
+  const h2=(t)=>`<h2 style="font:600 15px "Helvetica Neue",Helvetica,Arial,sans-serif;color:${ink};margin:22px 0 8px">${t}</h2>`;
   const st=F.st, set=S.settings;
   const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const fact=(l,v,sub)=>`<td style="padding:10px 12px;border:1px solid ${rule};vertical-align:top;width:16.6%"><div style="font:600 10px Arial;letter-spacing:.06em;text-transform:uppercase;color:${ink3}">${l}</div><div style="font:600 19px Georgia,serif;color:${ink};margin-top:4px">${v}</div>${sub?`<div style="font:11px Arial;color:${ink2};margin-top:2px">${sub}</div>`:''}</td>`;
+  const fact=(l,v,sub)=>`<td style="padding:10px 12px;border:1px solid ${rule};vertical-align:top;width:16.6%"><div style="font:600 10px Arial;letter-spacing:.06em;text-transform:uppercase;color:${ink3}">${l}</div><div style="font:600 19px "Helvetica Neue",Helvetica,Arial,sans-serif;color:${ink};margin-top:4px">${v}</div>${sub?`<div style="font:11px Arial;color:${ink2};margin-top:2px">${sub}</div>`:''}</td>`;
   const small = smallSample(st), ind = small ? ` <span style="font:600 9px Arial;letter-spacing:.04em;text-transform:uppercase;color:${ink3}">indicative</span>` : '';
   const incM = +String(set.inception||'').slice(5,7), incY = String(set.inception||'').slice(0,4);   // a first calendar year that starts after January is partial
   const eff = (A)=> A ? `${P(A.active,2)} = allocation ${P(A.alloc,2)} + selection ${P(A.sel,2)} + trading ${P(A.trading,2)} + model gap ${P(A.replication,2)}` : '—';
@@ -372,7 +373,7 @@ function factsheetHTML(F){
   return `<div style="box-sizing:border-box;width:100%;max-width:760px;margin:0 auto;background:#fff;color:${ink};font:13px Arial,sans-serif;padding:28px 30px;border:1px solid ${rule}">
   <table role="presentation" width="100%" style="border-collapse:collapse"><tr><td style="border-bottom:3px solid ${acc};padding-bottom:10px">
     <div style="font:600 11px Arial;letter-spacing:.1em;text-transform:uppercase;color:${acc}">Monthly factsheet · ${M(F.m)}${F.live?' (month to date)':''}</div>
-    <div style="font:600 24px Georgia,serif;color:${ink};margin-top:4px">${esc(set.name)}</div>
+    <div style="font:600 24px "Helvetica Neue",Helvetica,Arial,sans-serif;color:${ink};margin-top:4px">${esc(set.name)}</div>
     <div style="font:12px Arial;color:${ink2};margin-top:2px">Egyptian equities via Thndr · Benchmark ${BENCH} · Reporting currency EGP · Inception ${M(set.inception)}</div></td></tr></table>
   <table role="presentation" width="100%" style="border-collapse:collapse;margin-top:16px"><tr>
     ${fact('Portfolio value', egp(F.value), 'EGP, month-end')}
