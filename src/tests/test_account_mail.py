@@ -452,6 +452,9 @@ try:
     rows, bench, best = ram.leaderboard(me, [("Omar", a), ("Old copy", old), ("Nobody", {"months": []})], "2026-08")
     check("leaderboard: ranked by the month's return, a copy from mid-month and one without the month last, the index from the account",
           [r["who"] for r in rows] == ["Omar", "You", "Old copy", "Nobody"] and rows[2]["m"] is None and abs(rows[1]["ytd"] - (1.1 * 1.02 - 1)) < 1e-9 and bench == 0.01, json.dumps(rows))
+    check("leaderboard: a copy counts for September only from its last session (Wed 30 Sep), for October from Thu 29 Oct (the 30th and 31st are Fri-Sat)",
+          ram.fresh_for({"asOf": "2026-09-30T15:10:00+03:00"}, "2026-09") and not ram.fresh_for({"asOf": "2026-09-29T15:10:00+03:00"}, "2026-09")
+          and ram.fresh_for({"asOf": "2026-10-29"}, "2026-10") and not ram.fresh_for({"asOf": "2026-10-28"}, "2026-10"))
     check("leaderboard: the best sale of the month among the ranked (not another month's)", best == {"who": "Omar", "s": "SWDY", "ret": 0.3}, json.dumps(best))
     gk = ec.generate_private_key(ec.SECP256R1())
     gpk = base64.b64encode(gk.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)).decode()

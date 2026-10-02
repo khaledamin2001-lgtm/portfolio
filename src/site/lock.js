@@ -314,6 +314,7 @@
     if (!PK8) return;
     OVERLAY.set(p, { data, at: Date.now() });
     if (data === undefined) delete DOCS[p]; else DOCS[p] = data;
+    dropMyProfile();
     listeners.forEach(fire);
     if (CUR && (CUR.cloud || LINK)) shareSoon();   // friends see the change too
   }
@@ -322,6 +323,7 @@
       if (Date.now() - o.at > 30 * 60e3 || Date.parse(DATA_AT) > o.at + 120e3 || pdStore.canon(DOCS[p]) === pdStore.canon(o.data)) OVERLAY.delete(p);
       else if (o.data === undefined) delete DOCS[p]; else DOCS[p] = o.data;
     }
+    dropMyProfile();
   }
   const expDate = () => { const x = EDIT && (EDIT.expires || ghExp); const t = x ? Date.parse(String(x).replace(' UTC', 'Z').replace(' ', 'T')) : NaN; return isFinite(t) ? t : null; };
   const dayText = (t) => new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(t));
@@ -1222,34 +1224,40 @@
   const MAIL_LABEL = 'portfolio-mail-v1';
   const mailLS = () => 'pd.mail.' + CUR.id;
   const mailPrefs = () => ls.get(mailLS());
-  const mailOn = () => { const m = mailPrefs(); return !!(m && (m.alerts || m.weekly || m.reports)); };
+  // the email kinds; a choice missing from an older package follows the other emails (as the job reads it), and the site
+  // owner's friends leaderboard is on unless switched off
+  const MAIL_KINDS = ['alerts', 'weekly', 'reports', 'leaderboard', 'reportCard', 'morning'];
+  const mailWith = (m) => { m = m || {}; const any = !!(m.alerts || m.weekly || m.reports);
+    return Object.assign({}, m, { leaderboard: !!(m.leaderboard ?? (any || isOwner())), reportCard: !!(m.reportCard ?? any), morning: !!m.morning }); };
+  const mailAny = (m) => !!m && MAIL_KINDS.some((k) => mailWith(m)[k]);
+  const mailOn = () => mailAny(mailPrefs());
   const gmailOn = () => !!(mailPrefs() || {}).gmail;
   const sha = async (s) => b64big(await crypto.subtle.digest('SHA-256', enc.encode(s)));
   const sealTo = (pubB64, bytes, label) => seal(bytes, label, pubB64);
   async function writeMail(prefs) {
     const mk = await (await fetch('p/khaled/keys.json', { cache: 'no-store' })).json();
-    const pkg = { v: 1, uid: CLOUD.uid, email: prefs.email, refresh: CLOUD.refresh, pk8: b64big(acctKey()), prefs: { alerts: !!prefs.alerts, weekly: !!prefs.weekly, reports: !!prefs.reports, leaderboard: prefs.leaderboard !== false, reportCard: prefs.reportCard !== false, morning: !!prefs.morning, gmail: !!prefs.gmail, shareMain: !!prefs.shareMain }, at: new Date().toISOString() };
+    const pkg = { v: 1, uid: CLOUD.uid, email: prefs.email, refresh: CLOUD.refresh, pk8: b64big(acctKey()), prefs: { alerts: !!prefs.alerts, weekly: !!prefs.weekly, reports: !!prefs.reports, leaderboard: mailWith(prefs).leaderboard, reportCard: mailWith(prefs).reportCard, morning: !!prefs.morning, gmail: !!prefs.gmail, shareMain: !!prefs.shareMain }, at: new Date().toISOString() };
     const env = Object.assign({ v: 1 }, await sealTo(mk.pub, enc.encode(JSON.stringify(pkg)), MAIL_LABEL));
     await fsReq('PATCH', `mail/${CLOUD.uid}`, { fields: { pkg: { stringValue: JSON.stringify(env) }, at: { stringValue: pkg.at } } });
     ls.set(mailLS(), Object.assign({}, prefs, { ref: await sha(CLOUD.refresh) }));
   }
   // nothing left on: the package is deleted, so the job no longer opens the portfolio
   async function setMail(prefs) {
-    if (prefs.alerts || prefs.weekly || prefs.reports || prefs.leaderboard || prefs.reportCard || prefs.morning || prefs.gmail || prefs.shareMain) return writeMail(prefs);
+    if (mailAny(prefs) || prefs.gmail || prefs.shareMain) return writeMail(prefs);
     await fsReq('DELETE', `mail/${CLOUD.uid}`); ls.del(mailLS());
   }
   // the job signs in with the saved refresh token: after a password change (which ends old sessions) it is sealed again
   async function resealMail() { const m = mailPrefs(); if (m && CLOUD && CLOUD.refresh && m.ref !== (await sha(CLOUD.refresh))) await writeMail(m); }
   function mailScreen(note) {
-    const on = mailOn(), m = on ? mailPrefs() : Object.assign({ email: CUR.email || (CLOUD && CLOUD.email) || '' }, mailPrefs() || {}, { alerts: true, weekly: true, reports: true, leaderboard: true, reportCard: true });
+    const on = mailOn(), m = on ? mailWith(mailPrefs()) : Object.assign({ email: CUR.email || (CLOUD && CLOUD.email) || '' }, mailPrefs() || {}, { alerts: true, weekly: true, reports: true, leaderboard: true, reportCard: true });
     screen(`<h1>Email updates</h1><p>Get an email when something needs your attention (a dividend coming up, a target or stop reached, a big drop), a summary every Thursday evening, your month-end report (Excel workbook + PDF factsheet) when each monthly statement is posted, early each month a report card on your trading and how you ranked among your friends (percentages only), and if you like a short brief before the market opens.</p>
       <p class="lk-tip">To write these, the site owner's email job has to open your portfolio, so while this is on your figures are not private from that job. Switch it off any time: nothing is kept after that.</p>
       <form id="lk-ml" autocomplete="off"><input id="lk-ml-email" type="email" data-testid="mail-address" value="${esc(m.email)}" placeholder="Email address" aria-label="Email address">
       <label class="lk-check"><input type="checkbox" id="lk-ml-alerts" data-testid="mail-alerts" ${m.alerts ? 'checked' : ''}> Heads-up alerts</label>
       <label class="lk-check"><input type="checkbox" id="lk-ml-weekly" data-testid="mail-weekly" ${m.weekly ? 'checked' : ''}> Weekly summary (Thursday evening)</label>
       <label class="lk-check"><input type="checkbox" id="lk-ml-reports" data-testid="mail-reports" ${m.reports ? 'checked' : ''}> Month-end report (Excel + PDF)</label>
-      <label class="lk-check"><input type="checkbox" id="lk-ml-leaderboard" data-testid="mail-leaderboard" ${m.leaderboard !== false ? 'checked' : ''}> Friends leaderboard (1st of the month)</label>
-      <label class="lk-check"><input type="checkbox" id="lk-ml-card" data-testid="mail-report-card" ${m.reportCard !== false ? 'checked' : ''}> Trading report card (early each month)</label>
+      <label class="lk-check"><input type="checkbox" id="lk-ml-leaderboard" data-testid="mail-leaderboard" ${m.leaderboard ? 'checked' : ''}> Friends leaderboard (1st of the month)</label>
+      <label class="lk-check"><input type="checkbox" id="lk-ml-card" data-testid="mail-report-card" ${m.reportCard ? 'checked' : ''}> Trading report card (early each month)</label>
       <label class="lk-check"><input type="checkbox" id="lk-ml-morning" data-testid="mail-morning" ${m.morning ? 'checked' : ''}> Morning brief (Sunday to Thursday, about 9 am, before the market opens)</label>
       <button class="lk-btn" id="lk-ml-go" data-testid="mail-on">${on ? 'Save' : 'Turn on email updates'}</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>
       ${on ? '<button class="lk-btn ghost" id="lk-ml-off" data-testid="mail-off">Turn off email updates</button>' : ''}
@@ -1424,7 +1432,7 @@
   async function writeStatus(extra) {
     const m = mailPrefs() || {};
     const o = Object.assign({ name: CUR.name, email: CLOUD.email || CUR.email || '', lastSeen: new Date().toISOString(),
-      site: JSON.stringify({ mail: !!(m.alerts || m.weekly), reports: !!m.reports, gmail: !!m.gmail, friends: (FRIENDS || []).filter((f) => f.status === 'friends').length }) }, extra || {});
+      site: JSON.stringify({ mail: mailAny(m), reports: !!m.reports, gmail: !!m.gmail, friends: (FRIENDS || []).filter((f) => f.status === 'friends').length }) }, extra || {});
     await fsReq('PATCH', `status/${CLOUD.uid}`, fsFields(o), maskOf(Object.keys(o)));
   }
   async function listFriends() {
@@ -1601,7 +1609,7 @@
       ${bars ? `<div class="ps-sec"><h4>Month by month</h4>${bars}${last.some((m) => m.live) ? '<small class="ps-note">* so far this month</small>' : ''}</div>` : ''}
       <div class="ps-sec" data-testid="profile-holdings"><h4>Holdings</h4>${hold || '<p class="ps-note">No holdings right now.</p>'}${secs ? `<div class="ps-chips">${secs}</div>` : ''}</div>
       <div class="ps-sec" data-testid="profile-trades"><h4>Latest trades</h4>${trades || '<p class="ps-note">No trades yet.</p>'}</div>
-      <div class="ps-sec"><h4>Trading</h4><div class="ps-stats"><div><b>${S.closed != null ? S.closed : '—'}</b><small>trades closed</small></div><div><b>${wH(S.winRate)}</b><small>won</small></div><div><b>${S.avgHold != null ? S.avgHold + 'd' : '—'}</b><small>average hold</small></div><div>${pcH(S.best)}<small>best trade</small></div><div>${pcH(S.worst)}<small>worst trade</small></div><div>${pcH(S.maxDD)}<small>deepest drop</small></div></div></div>
+      <div class="ps-sec"><h4>Trading</h4><div class="ps-stats"><div><b>${S.closed != null ? esc(String(S.closed)) : '—'}</b><small>trades closed</small></div><div><b>${wH(S.winRate)}</b><small>won</small></div><div><b>${S.avgHold != null ? esc(String(S.avgHold)) + 'd' : '—'}</b><small>average hold</small></div><div>${pcH(S.best)}<small>best trade</small></div><div>${pcH(S.worst)}<small>worst trade</small></div><div>${pcH(S.maxDD)}<small>deepest drop</small></div></div></div>
       <p class="ps-foot">Percentages only: ${me ? 'friends never see' : 'nobody sees'} amounts, share counts or prices.</p></div>`;
   }
   async function friendsScreen(note) {
@@ -1626,7 +1634,7 @@
           <button class="lk-btn" data-testid="my-handle-save">Save username</button></form>`
       : `<p class="lk-hint" data-testid="my-handle-none">Your @username appears here once usernames are switched on for this site. Until then friends add you with your email.</p>`;
     const main = isOwner() && !!(mailPrefs() || {}).shareMain;
-    screen(`<h1>Friends</h1><p>Friends see each other's portfolios: holdings, returns and activity. They can look, never change anything.</p>
+    screen(`<h1>Friends</h1><p>Friends compare in percentages: returns, holdings by weight and trades as %, never any amount in EGP. They can look, never change anything.</p>
       ${mine}
       ${by('received').length ? `<p class="lk-lbl">Friend requests</p>${by('received').map((f) => row(f, `<button class="lk-btn" data-acc="${esc(f.uid)}" data-testid="friend-accept">Accept</button><button class="lk-btn ghost" data-del="${esc(f.uid)}" data-testid="friend-decline">Decline</button>`)).join('')}` : ''}
       ${by('friends').length ? `<p class="lk-lbl">Your friends</p>${by('friends').map((f) => row(f, `<button class="lk-btn" data-view="${esc(f.uid)}" data-testid="friend-view">View</button><button class="lk-btn ghost" data-del="${esc(f.uid)}" data-testid="friend-remove">Remove</button>`)).join('')}` : ''}
@@ -1959,7 +1967,8 @@
     try { const run = window.PA.portfolioRun(docs, null, { market }); return run ? window.PA.friendProfile(run, info) : null; }
     catch (e) { console.warn('profile', e); return null; }
   }
-  // this portfolio's own profile, rebuilt when its documents change
+  // this portfolio's own profile, rebuilt when its documents change (a new download, or a save: settle / applyOverlay)
+  function dropMyProfile() { try { HUB.you = null; } catch (e) { /* before the friends section has loaded */ } }
   function myProfile() {
     if (!HUB.you || HUB.youData !== DATA_AT) { HUB.you = profileFrom(DOCS, { handle: MY_HANDLE || '' }); HUB.youData = DATA_AT; }
     return HUB.you;
@@ -1968,11 +1977,28 @@
     if (!HUB.market || Date.now() - HUB.marketAt > 600e3) { HUB.market = (await fetchMarket().catch(() => ({ docs: {} }))).docs || {}; HUB.marketAt = Date.now(); }
     return HUB.market;
   }
+  // what a friend's site sealed is THEIR data: keep only the expected fields, each of the expected type, so a broken or
+  // hostile copy can neither break the page nor put markup into it (every field is escaped when shown as well)
+  const pNum = (x) => (typeof x === 'number' && isFinite(x) ? x : null);
+  const pStr = (x, n) => (typeof x === 'string' ? x.slice(0, n || 80) : '');
+  const pDay = (x, len) => (typeof x === 'string' && /^\d{4}-\d{2}(-\d{2})?$/.test(x) && (!len || x.length === len) ? x : null);
+  function cleanProfile(p) {
+    p = p && typeof p === 'object' ? p : {};
+    const arr = (a) => (Array.isArray(a) ? a.slice(0, 400).filter((x) => x && typeof x === 'object') : []), st = p.stats && typeof p.stats === 'object' ? p.stats : {};
+    return { v: 2, name: pStr(p.name), handle: pStr(p.handle, 20), inception: pDay(p.inception, 7), asOf: pStr(p.asOf, 40), bench: 'EGX30 Capped',
+      months: arr(p.months).filter((m) => pDay(m.m, 7)).map((m) => ({ m: m.m, r: pNum(m.r), b: pNum(m.b), live: !!m.live })),
+      holdings: arr(p.holdings).map((h) => ({ s: pStr(h.s, 12), n: pStr(h.n), sec: pStr(h.sec, 60) || 'Unclassified', w: pNum(h.w) || 0, ret: pNum(h.ret), chg: pNum(h.chg), days: pNum(h.days) })),
+      sectors: arr(p.sectors).map((x) => ({ sec: pStr(x.sec, 60) || 'Unclassified', w: pNum(x.w) || 0 })),
+      cashW: pNum(p.cashW) || 0,
+      trades: arr(p.trades).filter((t) => pDay(t.d, 10)).map((t) => ({ d: t.d, side: t.side === 'sell' ? 'sell' : 'buy',
+        kind: ['new', 'added', 'trimmed', 'closed'].includes(t.kind) ? t.kind : t.side === 'sell' ? 'trimmed' : 'new', s: pStr(t.s, 12), n: pStr(t.n), ret: pNum(t.ret) })),
+      stats: { closed: pNum(st.closed), winRate: pNum(st.winRate), avgHold: pNum(st.avgHold), best: pNum(st.best), worst: pNum(st.worst), maxDD: pNum(st.maxDD) } };
+  }
   // a friend's profile from their share; a copy from before profiles (the documents themselves) is turned into one here
   async function friendProfile(f) {
     const j = await fsReq('GET', `shares/${f.uid}/to/${CLOUD.uid}`);
     const snap = JSON.parse(await gunzip(await unseal(JSON.parse(fStr(j, 'pkg')), SHARE_LABEL, acctKey())));
-    if (snap.v >= 2 && snap.profile) return Object.assign({}, snap.profile, { at: snap.at });
+    if (snap.v >= 2 && snap.profile) return Object.assign(cleanProfile(snap.profile), { at: pStr(snap.at, 40) });
     const docs = Object.assign({}, snap.full ? {} : await hubMarket(), snap.docs || {});
     macroMarks(docs);
     const p = profileFrom(docs, { name: snap.name });

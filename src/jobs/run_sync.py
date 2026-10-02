@@ -437,7 +437,8 @@ def main(argv=None):
                     subj, text, html = emails.report_card(out.get("name") or portfolio_label(ctx), out["card"])
                     jc.log("report card: " + mail_send.send(ctx, subj, text, html))
                 sj["reportCardSent"] = CM
-            except (jc.JobError, ValueError, KeyError) as e:
+                jc.record_job(ctx, "sync", {"reportCardSent": CM}, f"jobs: report card {CM}")   # now: a later failure must not send it twice
+            except Exception as e:      # the card never stops the sync, the reports or the publish
                 jc.log(f"report card: FAILED (not fatal): {getattr(e, 'step', type(e).__name__)}: {jc.mask(str(getattr(e, 'detail', e)))}")
                 notes.append("report card email failed")
         else:

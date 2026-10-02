@@ -519,10 +519,13 @@ def month_figures(p, M):
 
 
 def fresh_for(p, M):
-    """True when a profile was made after month M ended (its last trading days count: the weekend is Fri-Sat)."""
+    """True when a profile covers month M to its last EGX session (the last Sunday-Thursday of the month: Friday and
+    Saturday are the weekend), so its month return is the whole month's."""
     last = datetime.date(int(M[:4]), int(M[5:7]), 1) + datetime.timedelta(days=32)
     last = last.replace(day=1) - datetime.timedelta(days=1)
-    return str((p or {}).get("asOf") or "") >= (last - datetime.timedelta(days=3)).isoformat()
+    while last.weekday() in (4, 5):
+        last -= datetime.timedelta(days=1)
+    return str((p or {}).get("asOf") or "") >= last.isoformat()
 
 
 def leaderboard(mine, theirs, M):
@@ -808,6 +811,10 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                         changed = True
                     friends = [f for f in links if f.get("status") == "friends" and f.get("pub")]
                     friends_n = len(friends)
+                    own_st = ((cur_docs.get("portfolio/settings") or {}).get("data") or {})
+                    if friends and not own_st.get("inception") and not (prefs.get("shareMain") and owner_acct):
+                        notes.append("friends: nothing to share yet (no portfolio)")
+                        friends = []
                     if friends:
                         cl = token_claims(tok)
                         owner = hashlib.sha256(str(cl.get("email") or "").lower().encode()).hexdigest() == OWNER_HASH

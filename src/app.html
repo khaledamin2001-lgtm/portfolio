@@ -188,7 +188,7 @@ body.today-on{overflow:hidden}
 .td-v{font-size:40px;line-height:1.1;font-weight:700;letter-spacing:-.03em}.td-v small{font-size:15px;font-weight:600;color:var(--ink-3);margin-left:6px}
 .td-pl{font-size:19px;font-weight:600}
 .td-list{background:var(--surface);border-radius:20px;padding:4px 16px;box-shadow:var(--shadow)}
-.td-row{display:grid;grid-template-columns:1fr auto 76px 64px;gap:10px;align-items:center;padding:12px 0;border-top:.5px solid var(--hair);font-size:15px}.td-row:first-child{border-top:0}.td-row .num{text-align:right}
+.td-row{display:grid;grid-template-columns:minmax(0,1fr) auto 76px 64px;gap:10px;align-items:center;padding:12px 0;border-top:.5px solid var(--hair);font-size:15px}.td-row:first-child{border-top:0}.td-row .sym{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.td-row .num{text-align:right}
 .td-heads{background:var(--surface);border-radius:20px;padding:12px 16px;box-shadow:var(--shadow);margin:0}
 .td-act{display:grid;grid-template-columns:1fr 1fr;gap:10px}.td-act .btn{justify-content:center;padding:12px}
 .td-pin{display:flex;align-items:center;gap:8px;justify-content:center;font-size:13.5px;color:var(--ink-2)}
@@ -473,7 +473,7 @@ function recompute(){
   $('#pf-name-text').textContent = S.settings.name || 'Portfolio';
   renderTape(); renderPeriod(); renderTab(false);
 }
-function renderEmpty(){ $('#main').innerHTML = `<div class="empty"><h2>No portfolio data yet</h2><p>Nothing has been added to this portfolio yet.</p></div>`; $('#period').innerHTML=''; }
+function renderEmpty(){ $('#main').innerHTML = `<div class="empty"><h2>No portfolio data yet</h2><p>Nothing has been added to this portfolio yet.</p></div>`; $('#period').innerHTML=''; S.today=false; renderToday(); }
 
 // Live or saved copy: on the site, lock.js sets #pd-offline data-state to 'online' | 'offline' | 'saved'; 'offline' and 'saved'
 // mean the figures are the copy saved on this device, so nothing is labelled live.
@@ -518,7 +518,7 @@ function renderTab(force){
 }
 function renderToday(){ const el=$('#today'); if(!el) return; document.body.classList.toggle('today-on', !!S.today); el.hidden=!S.today; if(!S.today) return;
   if(!S.R){ el.innerHTML='<div class="td-in"><p class="muted">Opening your portfolio…</p></div>'; return; }
-  const R=S.R, cash=R.liveCash??R.settings.cash, value=Math.max(0,cash)+R.pos.mvTotal, dp=dayPL(), ix=((S.market||{}).index||{}).EGX30CAPPED||{}, fs=feedStatus();
+  const R=S.R, cash=R.liveCash??R.settings.cash, value=cash+R.pos.mvTotal, dp=dayPL(), ix=((S.market||{}).index||{}).EGX30CAPPED||{}, fs=feedStatus();
   const day=ix.date||((S.market||{}).asOf||'').slice(0,10), when=day===PE.cairoToday()?'today':day?'on '+new Date(day+'T12:00:00Z').toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short',timeZone:'UTC'}):'';
   const rows=R.pos.open.filter(r=>(r.mv||0)>0).slice().sort((a,b)=>(b.chg??-1e9)-(a.chg??-1e9));
   const heads=(()=>{ const dg=S.sync&&S.sync.digest, live=(S.heads&&S.heads.items)||[], job=dg&&Array.isArray(dg.items)?dg.items.filter(x=>x&&x.text&&(x.kind==='statement'||!S.heads)):[]; const seen=new Set(); return [...live,...job].filter(x=>x&&x.text&&!seen.has(x.key||x.text)&&seen.add(x.key||x.text)); })();
@@ -528,7 +528,7 @@ function renderToday(){ const el=$('#today'); if(!el) return; document.body.clas
     <div class="td-hero"><div class="eyebrow">Total value</div><div class="td-v num" data-testid="today-value">${egp(value)}<small>EGP</small></div>
       <div class="td-pl num ${sgn(dp.pl)}" data-testid="today-pl">${dp.pct!=null?`${dp.pl>=0?'+':'−'}${egp(Math.abs(dp.pl))} EGP · ${pct(dp.pct,2)} ${when}`:'No session move yet'}</div>
       <div class="muted">EGX30 Capped ${ix.chg!=null?`<span class="${sgn(ix.chg)}">${pct(ix.chg/100,2)}</span>`:'—'}${ix.close!=null?` · ${num(ix.close,1)}`:''}</div></div>
-    <div class="td-list" data-testid="today-holdings">${rows.map(r=>{ const pl=r.chg!=null&&r.mv?r.mv-r.mv/(1+r.chg/100):null; return `<div class="td-row"><span class="sym">${esc(r.symbol||r.name)}</span><span class="num muted">${r.price!=null?num(r.price,2):''}</span><span class="num ${sgn(r.chg)}">${r.chg!=null?pct(r.chg/100,2):'—'}</span><span class="num ${sgn(pl)}">${pl!=null?short(pl):''}</span></div>`; }).join('')}</div>
+    <div class="td-list" data-testid="today-holdings">${rows.map(r=>{ const pl=r.chg!=null&&r.mv&&r.priceSource==='auto'?r.mv-r.mv/(1+r.chg/100):null; return `<div class="td-row"><span class="sym">${esc(r.symbol||r.name)}</span><span class="num muted">${r.price!=null?num(r.price,2):''}</span><span class="num ${sgn(r.chg)}">${r.chg!=null?pct(r.chg/100,2):'—'}</span><span class="num ${sgn(pl)}">${pl!=null?short(pl):''}</span></div>`; }).join('')}</div>
     ${heads.length?`<ul class="heads td-heads" data-testid="today-heads">${heads.map(x=>{ const k=HEADS[x.kind]||['Note','man']; return `<li><span class="pill ${k[1]}">${k[0]}</span><span>${esc(x.text)}</span></li>`; }).join('')}</ul>`:''}
     <div class="td-act">${window.pdRefreshPrices?'<button class="btn" id="td-refresh" data-testid="today-refresh">Refresh prices</button>':''}<button class="btn primary" id="td-full" data-testid="today-full">Full portfolio</button></div>
     <label class="td-pin"><input type="checkbox" id="td-pin" data-testid="today-pin" ${pinned?'checked':''}> Open the app on this screen</label>
@@ -833,8 +833,8 @@ function sectorBars(){ const secs=S.R.sectors; if(!secs.length) return '<p class
 // Each portfolio sets its own: the most one stock and one sector may be of the whole portfolio (cash included). Crossing
 // one shows on the Overview heads-up and is emailed once (the inbox job, the account job) like a target or a stop.
 function limitsPanel(){ const L=(S.settings&&S.settings.limits)||{}; const on=!!L.on, ro=!!S.readOnly;
-  const lc=PA.limitCheck(S.R,{...L,on:true}); const pc=(x)=>x?+(x*100).toFixed(1):'';
-  const row=(label,top,lim,tid)=>{ const w=top?top.w:0, over=lim&&w>lim+1e-9, scale=Math.max(w,lim||0,0.0001);
+  const lc=PA.limitCheck(S.R,{...L,on:true}); const pc=(x)=>x?+(x*100).toPrecision(8):'';
+  const row=(label,top,lim,tid)=>{ const w=top?top.w:0, over=lim&&w>lim+1e-9, scale=lim?Math.min(1,Math.max(w,lim)*1.25):1;   // no limit: the bar is the whole portfolio
     return `<div class="lim-row${over?' over':''}" data-testid="${tid}"><div class="lim-top"><span>${label}${top?` · <b>${esc(top.label)}</b>`:''}</span><span class="num"><b class="${over?'neg':''}">${top?pct(w,1,false):'—'}</b>${lim?` <span class="muted">/ ${pc(lim)}% limit</span>`:' <span class="muted">· no limit</span>'}</span></div>
       <div class="bar lim-bar"><i style="width:${(w/scale*100).toFixed(1)}%"></i>${lim?`<em style="left:${(lim/scale*100).toFixed(1)}%" title="Your limit"></em>`:''}</div></div>`; };
   const st=lc.stocks[0], se=lc.sectors[0];

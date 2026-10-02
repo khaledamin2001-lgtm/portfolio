@@ -423,7 +423,7 @@
   // Held and watch-list stocks (assets with watch: true) whose latest session (market/latest quote: vol, avgVol = the
   // 30-session average, date within the last 4 days) traded VOL_X times the average or more, biggest first.
   const VOL_X = 3;
-  const volTxt = (x) => (x >= 1e6 ? `${(x / 1e6).toFixed(1)}M` : x >= 1e3 ? `${Math.round(x / 1e3)}K` : String(Math.round(x)));
+  const volTxt = (x) => (x >= 999500 ? `${(x / 1e6).toFixed(1)}M` : x >= 999.5 ? `${Math.round(x / 1e3)}K` : String(Math.round(x)));
   function volumeSpikes(tx, assets, quotes, today) {
     const syms = new Map();
     heldStocks(tx, assets).forEach((h) => syms.set(h.sym, true));
@@ -501,7 +501,7 @@
     const session = ix.date || Object.values(quotes).reduce((d, q) => (q && q.date && q.date > d ? q.date : d), '') || null;
     const movers = open.filter((p) => !CASH_LIKE.has(p.sector) && p.chg != null).map((p) => {
       const q = quotes[(p.symbol || '').toUpperCase()] || {};
-      const fresh = !session || !q.date || q.date === session;
+      const fresh = !session || !q.date || q.date >= session;
       return { s: p.symbol || p.name, n: p.name, chg: fresh ? p.chg / 100 : 0, pl: fresh ? p.mv - p.mv / (1 + p.chg / 100) : 0, w: value ? p.mv / value : 0, fresh };
     }).sort((a, b) => b.chg - a.chg);
     const pl = sum(movers.map((x) => x.pl));
@@ -778,17 +778,19 @@
     const sectors = Object.keys(sec).map((k) => ({ sec: k, w: rnd(sec[k]) })).sort((a, b) => b.w - a.w);
     const thr = typeof R.settings.openThreshold === 'number' ? R.settings.openThreshold : 0.5;
     const tripAt = {}; (R.pos.trips || []).forEach((t) => { tripAt[t.name + '|' + t.lastSell] = t; });
-    const held = {}, ev = [];
-    R.ledger.forEach((t) => {
+    const held = {}, opened = {}, ev = [];
+    PE.sortLedger(R.ledger).forEach((t) => {
       if (!t.a || (t.t !== 'Buy' && t.t !== 'Sell' && t.t !== 'Bonus')) return;
       const h = held[t.a] || 0, q = t.q || 0, fund = CASH_LIKE.has(sectorOf[t.a]);
-      if (t.t !== 'Sell') { held[t.a] = h + q; if (t.t === 'Buy' && !fund) ev.push({ d: t.d, side: 'buy', kind: h > thr ? 'added' : 'new', s: symOf[t.a] || '', n: t.a }); return; }
+      if (t.t !== 'Sell') { if (h <= thr) opened[t.a] = t.d; held[t.a] = h + q; if (t.t === 'Buy' && !fund) ev.push({ d: t.d, side: 'buy', kind: h > thr ? 'added' : 'new', s: symOf[t.a] || '', n: t.a }); return; }
       held[t.a] = h - q;
       if (fund) return;
       const closed = held[t.a] <= thr, trip = closed ? tripAt[t.a + '|' + t.d] : null;
       const ret = trip ? trip.roi : t.basis ? ((t.amt || 0) - t.basis) / t.basis : null;
       ev.push({ d: t.d, side: 'sell', kind: closed ? 'closed' : 'trimmed', s: symOf[t.a] || '', n: t.a, ret: rnd(ret) });
     });
+    // days held: from the buy that opened the current position (a stock sold out and bought back starts again)
+    holdings.forEach((h) => { if (opened[h.n] && run.today) h.days = Math.max(0, dayNum(run.today) - dayNum(opened[h.n])); });
     const trips = (R.pos.trips || []).filter((t) => !CASH_LIKE.has(t.sector));
     const wins = trips.filter((t) => t.total > 0);
     const stats = { closed: trips.length, winRate: rnd(trips.length ? wins.length / trips.length : null), avgHold: trips.length ? Math.round(mean(trips.map((t) => t.holdDays))) : null,

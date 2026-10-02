@@ -169,7 +169,7 @@ body.pd-sheet-open{overflow:hidden}
 #pd-sheet .ps-tbl th{font-size:11px;font-weight:600;color:var(--ink-3,#6E6E73);text-align:right;padding:0 0 6px;text-transform:none;letter-spacing:0;background:none;position:static;border:0}
 #pd-sheet .ps-tbl td{padding:9px 0;border-top:.5px solid var(--grid,#E8E8ED);font-variant-numeric:tabular-nums}
 #pd-sheet .ps-tbl td.n{text-align:right;font-weight:600}
-#pd-sheet .ps-bar{display:grid;grid-template-columns:54px 1fr 64px;align-items:center;gap:10px;font-size:13px;padding:4px 0}
+#pd-sheet .ps-bar{display:grid;grid-template-columns:62px 1fr 64px;align-items:center;gap:10px;font-size:13px;padding:4px 0}
 #pd-sheet .ps-bar>span:last-child{text-align:right;font-weight:600;font-variant-numeric:tabular-nums}
 #pd-sheet .ps-bar i,#pd-sheet .ps-hold i{display:block;height:8px;border-radius:4px;background:var(--fill,rgba(118,118,128,.12));overflow:hidden}
 #pd-sheet .ps-bar i b,#pd-sheet .ps-hold i b{display:block;height:100%;border-radius:4px;background:var(--accent,#0071E3)}
@@ -639,6 +639,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
     if (!PK8) return;
     OVERLAY.set(p, { data, at: Date.now() });
     if (data === undefined) delete DOCS[p]; else DOCS[p] = data;
+    dropMyProfile();
     listeners.forEach(fire);
     if (CUR && (CUR.cloud || LINK)) shareSoon();   // friends see the change too
   }
@@ -647,6 +648,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
       if (Date.now() - o.at > 30 * 60e3 || Date.parse(DATA_AT) > o.at + 120e3 || pdStore.canon(DOCS[p]) === pdStore.canon(o.data)) OVERLAY.delete(p);
       else if (o.data === undefined) delete DOCS[p]; else DOCS[p] = o.data;
     }
+    dropMyProfile();
   }
   const expDate = () => { const x = EDIT && (EDIT.expires || ghExp); const t = x ? Date.parse(String(x).replace(' UTC', 'Z').replace(' ', 'T')) : NaN; return isFinite(t) ? t : null; };
   const dayText = (t) => new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(t));
@@ -1547,34 +1549,40 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   const MAIL_LABEL = 'portfolio-mail-v1';
   const mailLS = () => 'pd.mail.' + CUR.id;
   const mailPrefs = () => ls.get(mailLS());
-  const mailOn = () => { const m = mailPrefs(); return !!(m && (m.alerts || m.weekly || m.reports)); };
+  // the email kinds; a choice missing from an older package follows the other emails (as the job reads it), and the site
+  // owner's friends leaderboard is on unless switched off
+  const MAIL_KINDS = ['alerts', 'weekly', 'reports', 'leaderboard', 'reportCard', 'morning'];
+  const mailWith = (m) => { m = m || {}; const any = !!(m.alerts || m.weekly || m.reports);
+    return Object.assign({}, m, { leaderboard: !!(m.leaderboard ?? (any || isOwner())), reportCard: !!(m.reportCard ?? any), morning: !!m.morning }); };
+  const mailAny = (m) => !!m && MAIL_KINDS.some((k) => mailWith(m)[k]);
+  const mailOn = () => mailAny(mailPrefs());
   const gmailOn = () => !!(mailPrefs() || {}).gmail;
   const sha = async (s) => b64big(await crypto.subtle.digest('SHA-256', enc.encode(s)));
   const sealTo = (pubB64, bytes, label) => seal(bytes, label, pubB64);
   async function writeMail(prefs) {
     const mk = await (await fetch('p/khaled/keys.json', { cache: 'no-store' })).json();
-    const pkg = { v: 1, uid: CLOUD.uid, email: prefs.email, refresh: CLOUD.refresh, pk8: b64big(acctKey()), prefs: { alerts: !!prefs.alerts, weekly: !!prefs.weekly, reports: !!prefs.reports, leaderboard: prefs.leaderboard !== false, reportCard: prefs.reportCard !== false, morning: !!prefs.morning, gmail: !!prefs.gmail, shareMain: !!prefs.shareMain }, at: new Date().toISOString() };
+    const pkg = { v: 1, uid: CLOUD.uid, email: prefs.email, refresh: CLOUD.refresh, pk8: b64big(acctKey()), prefs: { alerts: !!prefs.alerts, weekly: !!prefs.weekly, reports: !!prefs.reports, leaderboard: mailWith(prefs).leaderboard, reportCard: mailWith(prefs).reportCard, morning: !!prefs.morning, gmail: !!prefs.gmail, shareMain: !!prefs.shareMain }, at: new Date().toISOString() };
     const env = Object.assign({ v: 1 }, await sealTo(mk.pub, enc.encode(JSON.stringify(pkg)), MAIL_LABEL));
     await fsReq('PATCH', `mail/${CLOUD.uid}`, { fields: { pkg: { stringValue: JSON.stringify(env) }, at: { stringValue: pkg.at } } });
     ls.set(mailLS(), Object.assign({}, prefs, { ref: await sha(CLOUD.refresh) }));
   }
   // nothing left on: the package is deleted, so the job no longer opens the portfolio
   async function setMail(prefs) {
-    if (prefs.alerts || prefs.weekly || prefs.reports || prefs.leaderboard || prefs.reportCard || prefs.morning || prefs.gmail || prefs.shareMain) return writeMail(prefs);
+    if (mailAny(prefs) || prefs.gmail || prefs.shareMain) return writeMail(prefs);
     await fsReq('DELETE', `mail/${CLOUD.uid}`); ls.del(mailLS());
   }
   // the job signs in with the saved refresh token: after a password change (which ends old sessions) it is sealed again
   async function resealMail() { const m = mailPrefs(); if (m && CLOUD && CLOUD.refresh && m.ref !== (await sha(CLOUD.refresh))) await writeMail(m); }
   function mailScreen(note) {
-    const on = mailOn(), m = on ? mailPrefs() : Object.assign({ email: CUR.email || (CLOUD && CLOUD.email) || '' }, mailPrefs() || {}, { alerts: true, weekly: true, reports: true, leaderboard: true, reportCard: true });
+    const on = mailOn(), m = on ? mailWith(mailPrefs()) : Object.assign({ email: CUR.email || (CLOUD && CLOUD.email) || '' }, mailPrefs() || {}, { alerts: true, weekly: true, reports: true, leaderboard: true, reportCard: true });
     screen(`<h1>Email updates</h1><p>Get an email when something needs your attention (a dividend coming up, a target or stop reached, a big drop), a summary every Thursday evening, your month-end report (Excel workbook + PDF factsheet) when each monthly statement is posted, early each month a report card on your trading and how you ranked among your friends (percentages only), and if you like a short brief before the market opens.</p>
       <p class="lk-tip">To write these, the site owner's email job has to open your portfolio, so while this is on your figures are not private from that job. Switch it off any time: nothing is kept after that.</p>
       <form id="lk-ml" autocomplete="off"><input id="lk-ml-email" type="email" data-testid="mail-address" value="${esc(m.email)}" placeholder="Email address" aria-label="Email address">
       <label class="lk-check"><input type="checkbox" id="lk-ml-alerts" data-testid="mail-alerts" ${m.alerts ? 'checked' : ''}> Heads-up alerts</label>
       <label class="lk-check"><input type="checkbox" id="lk-ml-weekly" data-testid="mail-weekly" ${m.weekly ? 'checked' : ''}> Weekly summary (Thursday evening)</label>
       <label class="lk-check"><input type="checkbox" id="lk-ml-reports" data-testid="mail-reports" ${m.reports ? 'checked' : ''}> Month-end report (Excel + PDF)</label>
-      <label class="lk-check"><input type="checkbox" id="lk-ml-leaderboard" data-testid="mail-leaderboard" ${m.leaderboard !== false ? 'checked' : ''}> Friends leaderboard (1st of the month)</label>
-      <label class="lk-check"><input type="checkbox" id="lk-ml-card" data-testid="mail-report-card" ${m.reportCard !== false ? 'checked' : ''}> Trading report card (early each month)</label>
+      <label class="lk-check"><input type="checkbox" id="lk-ml-leaderboard" data-testid="mail-leaderboard" ${m.leaderboard ? 'checked' : ''}> Friends leaderboard (1st of the month)</label>
+      <label class="lk-check"><input type="checkbox" id="lk-ml-card" data-testid="mail-report-card" ${m.reportCard ? 'checked' : ''}> Trading report card (early each month)</label>
       <label class="lk-check"><input type="checkbox" id="lk-ml-morning" data-testid="mail-morning" ${m.morning ? 'checked' : ''}> Morning brief (Sunday to Thursday, about 9 am, before the market opens)</label>
       <button class="lk-btn" id="lk-ml-go" data-testid="mail-on">${on ? 'Save' : 'Turn on email updates'}</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>
       ${on ? '<button class="lk-btn ghost" id="lk-ml-off" data-testid="mail-off">Turn off email updates</button>' : ''}
@@ -1749,7 +1757,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   async function writeStatus(extra) {
     const m = mailPrefs() || {};
     const o = Object.assign({ name: CUR.name, email: CLOUD.email || CUR.email || '', lastSeen: new Date().toISOString(),
-      site: JSON.stringify({ mail: !!(m.alerts || m.weekly), reports: !!m.reports, gmail: !!m.gmail, friends: (FRIENDS || []).filter((f) => f.status === 'friends').length }) }, extra || {});
+      site: JSON.stringify({ mail: mailAny(m), reports: !!m.reports, gmail: !!m.gmail, friends: (FRIENDS || []).filter((f) => f.status === 'friends').length }) }, extra || {});
     await fsReq('PATCH', `status/${CLOUD.uid}`, fsFields(o), maskOf(Object.keys(o)));
   }
   async function listFriends() {
@@ -1926,7 +1934,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
       ${bars ? `<div class="ps-sec"><h4>Month by month</h4>${bars}${last.some((m) => m.live) ? '<small class="ps-note">* so far this month</small>' : ''}</div>` : ''}
       <div class="ps-sec" data-testid="profile-holdings"><h4>Holdings</h4>${hold || '<p class="ps-note">No holdings right now.</p>'}${secs ? `<div class="ps-chips">${secs}</div>` : ''}</div>
       <div class="ps-sec" data-testid="profile-trades"><h4>Latest trades</h4>${trades || '<p class="ps-note">No trades yet.</p>'}</div>
-      <div class="ps-sec"><h4>Trading</h4><div class="ps-stats"><div><b>${S.closed != null ? S.closed : '—'}</b><small>trades closed</small></div><div><b>${wH(S.winRate)}</b><small>won</small></div><div><b>${S.avgHold != null ? S.avgHold + 'd' : '—'}</b><small>average hold</small></div><div>${pcH(S.best)}<small>best trade</small></div><div>${pcH(S.worst)}<small>worst trade</small></div><div>${pcH(S.maxDD)}<small>deepest drop</small></div></div></div>
+      <div class="ps-sec"><h4>Trading</h4><div class="ps-stats"><div><b>${S.closed != null ? esc(String(S.closed)) : '—'}</b><small>trades closed</small></div><div><b>${wH(S.winRate)}</b><small>won</small></div><div><b>${S.avgHold != null ? esc(String(S.avgHold)) + 'd' : '—'}</b><small>average hold</small></div><div>${pcH(S.best)}<small>best trade</small></div><div>${pcH(S.worst)}<small>worst trade</small></div><div>${pcH(S.maxDD)}<small>deepest drop</small></div></div></div>
       <p class="ps-foot">Percentages only: ${me ? 'friends never see' : 'nobody sees'} amounts, share counts or prices.</p></div>`;
   }
   async function friendsScreen(note) {
@@ -1951,7 +1959,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
           <button class="lk-btn" data-testid="my-handle-save">Save username</button></form>`
       : `<p class="lk-hint" data-testid="my-handle-none">Your @username appears here once usernames are switched on for this site. Until then friends add you with your email.</p>`;
     const main = isOwner() && !!(mailPrefs() || {}).shareMain;
-    screen(`<h1>Friends</h1><p>Friends see each other's portfolios: holdings, returns and activity. They can look, never change anything.</p>
+    screen(`<h1>Friends</h1><p>Friends compare in percentages: returns, holdings by weight and trades as %, never any amount in EGP. They can look, never change anything.</p>
       ${mine}
       ${by('received').length ? `<p class="lk-lbl">Friend requests</p>${by('received').map((f) => row(f, `<button class="lk-btn" data-acc="${esc(f.uid)}" data-testid="friend-accept">Accept</button><button class="lk-btn ghost" data-del="${esc(f.uid)}" data-testid="friend-decline">Decline</button>`)).join('')}` : ''}
       ${by('friends').length ? `<p class="lk-lbl">Your friends</p>${by('friends').map((f) => row(f, `<button class="lk-btn" data-view="${esc(f.uid)}" data-testid="friend-view">View</button><button class="lk-btn ghost" data-del="${esc(f.uid)}" data-testid="friend-remove">Remove</button>`)).join('')}` : ''}
@@ -2284,7 +2292,8 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
     try { const run = window.PA.portfolioRun(docs, null, { market }); return run ? window.PA.friendProfile(run, info) : null; }
     catch (e) { console.warn('profile', e); return null; }
   }
-  // this portfolio's own profile, rebuilt when its documents change
+  // this portfolio's own profile, rebuilt when its documents change (a new download, or a save: settle / applyOverlay)
+  function dropMyProfile() { try { HUB.you = null; } catch (e) { /* before the friends section has loaded */ } }
   function myProfile() {
     if (!HUB.you || HUB.youData !== DATA_AT) { HUB.you = profileFrom(DOCS, { handle: MY_HANDLE || '' }); HUB.youData = DATA_AT; }
     return HUB.you;
@@ -2293,11 +2302,28 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
     if (!HUB.market || Date.now() - HUB.marketAt > 600e3) { HUB.market = (await fetchMarket().catch(() => ({ docs: {} }))).docs || {}; HUB.marketAt = Date.now(); }
     return HUB.market;
   }
+  // what a friend's site sealed is THEIR data: keep only the expected fields, each of the expected type, so a broken or
+  // hostile copy can neither break the page nor put markup into it (every field is escaped when shown as well)
+  const pNum = (x) => (typeof x === 'number' && isFinite(x) ? x : null);
+  const pStr = (x, n) => (typeof x === 'string' ? x.slice(0, n || 80) : '');
+  const pDay = (x, len) => (typeof x === 'string' && /^\d{4}-\d{2}(-\d{2})?$/.test(x) && (!len || x.length === len) ? x : null);
+  function cleanProfile(p) {
+    p = p && typeof p === 'object' ? p : {};
+    const arr = (a) => (Array.isArray(a) ? a.slice(0, 400).filter((x) => x && typeof x === 'object') : []), st = p.stats && typeof p.stats === 'object' ? p.stats : {};
+    return { v: 2, name: pStr(p.name), handle: pStr(p.handle, 20), inception: pDay(p.inception, 7), asOf: pStr(p.asOf, 40), bench: 'EGX30 Capped',
+      months: arr(p.months).filter((m) => pDay(m.m, 7)).map((m) => ({ m: m.m, r: pNum(m.r), b: pNum(m.b), live: !!m.live })),
+      holdings: arr(p.holdings).map((h) => ({ s: pStr(h.s, 12), n: pStr(h.n), sec: pStr(h.sec, 60) || 'Unclassified', w: pNum(h.w) || 0, ret: pNum(h.ret), chg: pNum(h.chg), days: pNum(h.days) })),
+      sectors: arr(p.sectors).map((x) => ({ sec: pStr(x.sec, 60) || 'Unclassified', w: pNum(x.w) || 0 })),
+      cashW: pNum(p.cashW) || 0,
+      trades: arr(p.trades).filter((t) => pDay(t.d, 10)).map((t) => ({ d: t.d, side: t.side === 'sell' ? 'sell' : 'buy',
+        kind: ['new', 'added', 'trimmed', 'closed'].includes(t.kind) ? t.kind : t.side === 'sell' ? 'trimmed' : 'new', s: pStr(t.s, 12), n: pStr(t.n), ret: pNum(t.ret) })),
+      stats: { closed: pNum(st.closed), winRate: pNum(st.winRate), avgHold: pNum(st.avgHold), best: pNum(st.best), worst: pNum(st.worst), maxDD: pNum(st.maxDD) } };
+  }
   // a friend's profile from their share; a copy from before profiles (the documents themselves) is turned into one here
   async function friendProfile(f) {
     const j = await fsReq('GET', `shares/${f.uid}/to/${CLOUD.uid}`);
     const snap = JSON.parse(await gunzip(await unseal(JSON.parse(fStr(j, 'pkg')), SHARE_LABEL, acctKey())));
-    if (snap.v >= 2 && snap.profile) return Object.assign({}, snap.profile, { at: snap.at });
+    if (snap.v >= 2 && snap.profile) return Object.assign(cleanProfile(snap.profile), { at: pStr(snap.at, 40) });
     const docs = Object.assign({}, snap.full ? {} : await hubMarket(), snap.docs || {});
     macroMarks(docs);
     const p = profileFrom(docs, { name: snap.name });
@@ -2471,7 +2497,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   })();
 })();
 </script>
-<meta name="pd-build" content="e39cf70ecc0c 2026-10-02 04:25">
+<meta name="pd-build" content="934e282750d7 2026-10-02 04:40">
 <style>
 :root{
   /* Apple-style system: SF (the system font on iPhone and Mac) for everything, quiet greys, one blue accent, green / red
@@ -2658,7 +2684,7 @@ body.today-on{overflow:hidden}
 .td-v{font-size:40px;line-height:1.1;font-weight:700;letter-spacing:-.03em}.td-v small{font-size:15px;font-weight:600;color:var(--ink-3);margin-left:6px}
 .td-pl{font-size:19px;font-weight:600}
 .td-list{background:var(--surface);border-radius:20px;padding:4px 16px;box-shadow:var(--shadow)}
-.td-row{display:grid;grid-template-columns:1fr auto 76px 64px;gap:10px;align-items:center;padding:12px 0;border-top:.5px solid var(--hair);font-size:15px}.td-row:first-child{border-top:0}.td-row .num{text-align:right}
+.td-row{display:grid;grid-template-columns:minmax(0,1fr) auto 76px 64px;gap:10px;align-items:center;padding:12px 0;border-top:.5px solid var(--hair);font-size:15px}.td-row:first-child{border-top:0}.td-row .sym{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.td-row .num{text-align:right}
 .td-heads{background:var(--surface);border-radius:20px;padding:12px 16px;box-shadow:var(--shadow);margin:0}
 .td-act{display:grid;grid-template-columns:1fr 1fr;gap:10px}.td-act .btn{justify-content:center;padding:12px}
 .td-pin{display:flex;align-items:center;gap:8px;justify-content:center;font-size:13.5px;color:var(--ink-2)}
@@ -3951,7 +3977,7 @@ button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.pl
   // Held and watch-list stocks (assets with watch: true) whose latest session (market/latest quote: vol, avgVol = the
   // 30-session average, date within the last 4 days) traded VOL_X times the average or more, biggest first.
   const VOL_X = 3;
-  const volTxt = (x) => (x >= 1e6 ? `${(x / 1e6).toFixed(1)}M` : x >= 1e3 ? `${Math.round(x / 1e3)}K` : String(Math.round(x)));
+  const volTxt = (x) => (x >= 999500 ? `${(x / 1e6).toFixed(1)}M` : x >= 999.5 ? `${Math.round(x / 1e3)}K` : String(Math.round(x)));
   function volumeSpikes(tx, assets, quotes, today) {
     const syms = new Map();
     heldStocks(tx, assets).forEach((h) => syms.set(h.sym, true));
@@ -4029,7 +4055,7 @@ button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.pl
     const session = ix.date || Object.values(quotes).reduce((d, q) => (q && q.date && q.date > d ? q.date : d), '') || null;
     const movers = open.filter((p) => !CASH_LIKE.has(p.sector) && p.chg != null).map((p) => {
       const q = quotes[(p.symbol || '').toUpperCase()] || {};
-      const fresh = !session || !q.date || q.date === session;
+      const fresh = !session || !q.date || q.date >= session;
       return { s: p.symbol || p.name, n: p.name, chg: fresh ? p.chg / 100 : 0, pl: fresh ? p.mv - p.mv / (1 + p.chg / 100) : 0, w: value ? p.mv / value : 0, fresh };
     }).sort((a, b) => b.chg - a.chg);
     const pl = sum(movers.map((x) => x.pl));
@@ -4306,17 +4332,19 @@ button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.pl
     const sectors = Object.keys(sec).map((k) => ({ sec: k, w: rnd(sec[k]) })).sort((a, b) => b.w - a.w);
     const thr = typeof R.settings.openThreshold === 'number' ? R.settings.openThreshold : 0.5;
     const tripAt = {}; (R.pos.trips || []).forEach((t) => { tripAt[t.name + '|' + t.lastSell] = t; });
-    const held = {}, ev = [];
-    R.ledger.forEach((t) => {
+    const held = {}, opened = {}, ev = [];
+    PE.sortLedger(R.ledger).forEach((t) => {
       if (!t.a || (t.t !== 'Buy' && t.t !== 'Sell' && t.t !== 'Bonus')) return;
       const h = held[t.a] || 0, q = t.q || 0, fund = CASH_LIKE.has(sectorOf[t.a]);
-      if (t.t !== 'Sell') { held[t.a] = h + q; if (t.t === 'Buy' && !fund) ev.push({ d: t.d, side: 'buy', kind: h > thr ? 'added' : 'new', s: symOf[t.a] || '', n: t.a }); return; }
+      if (t.t !== 'Sell') { if (h <= thr) opened[t.a] = t.d; held[t.a] = h + q; if (t.t === 'Buy' && !fund) ev.push({ d: t.d, side: 'buy', kind: h > thr ? 'added' : 'new', s: symOf[t.a] || '', n: t.a }); return; }
       held[t.a] = h - q;
       if (fund) return;
       const closed = held[t.a] <= thr, trip = closed ? tripAt[t.a + '|' + t.d] : null;
       const ret = trip ? trip.roi : t.basis ? ((t.amt || 0) - t.basis) / t.basis : null;
       ev.push({ d: t.d, side: 'sell', kind: closed ? 'closed' : 'trimmed', s: symOf[t.a] || '', n: t.a, ret: rnd(ret) });
     });
+    // days held: from the buy that opened the current position (a stock sold out and bought back starts again)
+    holdings.forEach((h) => { if (opened[h.n] && run.today) h.days = Math.max(0, dayNum(run.today) - dayNum(opened[h.n])); });
     const trips = (R.pos.trips || []).filter((t) => !CASH_LIKE.has(t.sector));
     const wins = trips.filter((t) => t.total > 0);
     const stats = { closed: trips.length, winRate: rnd(trips.length ? wins.length / trips.length : null), avgHold: trips.length ? Math.round(mean(trips.map((t) => t.holdDays))) : null,
@@ -4867,7 +4895,7 @@ function recompute(){
   $('#pf-name-text').textContent = S.settings.name || 'Portfolio';
   renderTape(); renderPeriod(); renderTab(false);
 }
-function renderEmpty(){ $('#main').innerHTML = `<div class="empty"><h2>No portfolio data yet</h2><p>Nothing has been added to this portfolio yet.</p></div>`; $('#period').innerHTML=''; }
+function renderEmpty(){ $('#main').innerHTML = `<div class="empty"><h2>No portfolio data yet</h2><p>Nothing has been added to this portfolio yet.</p></div>`; $('#period').innerHTML=''; S.today=false; renderToday(); }
 
 // Live or saved copy: on the site, lock.js sets #pd-offline data-state to 'online' | 'offline' | 'saved'; 'offline' and 'saved'
 // mean the figures are the copy saved on this device, so nothing is labelled live.
@@ -4912,7 +4940,7 @@ function renderTab(force){
 }
 function renderToday(){ const el=$('#today'); if(!el) return; document.body.classList.toggle('today-on', !!S.today); el.hidden=!S.today; if(!S.today) return;
   if(!S.R){ el.innerHTML='<div class="td-in"><p class="muted">Opening your portfolio…</p></div>'; return; }
-  const R=S.R, cash=R.liveCash??R.settings.cash, value=Math.max(0,cash)+R.pos.mvTotal, dp=dayPL(), ix=((S.market||{}).index||{}).EGX30CAPPED||{}, fs=feedStatus();
+  const R=S.R, cash=R.liveCash??R.settings.cash, value=cash+R.pos.mvTotal, dp=dayPL(), ix=((S.market||{}).index||{}).EGX30CAPPED||{}, fs=feedStatus();
   const day=ix.date||((S.market||{}).asOf||'').slice(0,10), when=day===PE.cairoToday()?'today':day?'on '+new Date(day+'T12:00:00Z').toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short',timeZone:'UTC'}):'';
   const rows=R.pos.open.filter(r=>(r.mv||0)>0).slice().sort((a,b)=>(b.chg??-1e9)-(a.chg??-1e9));
   const heads=(()=>{ const dg=S.sync&&S.sync.digest, live=(S.heads&&S.heads.items)||[], job=dg&&Array.isArray(dg.items)?dg.items.filter(x=>x&&x.text&&(x.kind==='statement'||!S.heads)):[]; const seen=new Set(); return [...live,...job].filter(x=>x&&x.text&&!seen.has(x.key||x.text)&&seen.add(x.key||x.text)); })();
@@ -4922,7 +4950,7 @@ function renderToday(){ const el=$('#today'); if(!el) return; document.body.clas
     <div class="td-hero"><div class="eyebrow">Total value</div><div class="td-v num" data-testid="today-value">${egp(value)}<small>EGP</small></div>
       <div class="td-pl num ${sgn(dp.pl)}" data-testid="today-pl">${dp.pct!=null?`${dp.pl>=0?'+':'−'}${egp(Math.abs(dp.pl))} EGP · ${pct(dp.pct,2)} ${when}`:'No session move yet'}</div>
       <div class="muted">EGX30 Capped ${ix.chg!=null?`<span class="${sgn(ix.chg)}">${pct(ix.chg/100,2)}</span>`:'—'}${ix.close!=null?` · ${num(ix.close,1)}`:''}</div></div>
-    <div class="td-list" data-testid="today-holdings">${rows.map(r=>{ const pl=r.chg!=null&&r.mv?r.mv-r.mv/(1+r.chg/100):null; return `<div class="td-row"><span class="sym">${esc(r.symbol||r.name)}</span><span class="num muted">${r.price!=null?num(r.price,2):''}</span><span class="num ${sgn(r.chg)}">${r.chg!=null?pct(r.chg/100,2):'—'}</span><span class="num ${sgn(pl)}">${pl!=null?short(pl):''}</span></div>`; }).join('')}</div>
+    <div class="td-list" data-testid="today-holdings">${rows.map(r=>{ const pl=r.chg!=null&&r.mv&&r.priceSource==='auto'?r.mv-r.mv/(1+r.chg/100):null; return `<div class="td-row"><span class="sym">${esc(r.symbol||r.name)}</span><span class="num muted">${r.price!=null?num(r.price,2):''}</span><span class="num ${sgn(r.chg)}">${r.chg!=null?pct(r.chg/100,2):'—'}</span><span class="num ${sgn(pl)}">${pl!=null?short(pl):''}</span></div>`; }).join('')}</div>
     ${heads.length?`<ul class="heads td-heads" data-testid="today-heads">${heads.map(x=>{ const k=HEADS[x.kind]||['Note','man']; return `<li><span class="pill ${k[1]}">${k[0]}</span><span>${esc(x.text)}</span></li>`; }).join('')}</ul>`:''}
     <div class="td-act">${window.pdRefreshPrices?'<button class="btn" id="td-refresh" data-testid="today-refresh">Refresh prices</button>':''}<button class="btn primary" id="td-full" data-testid="today-full">Full portfolio</button></div>
     <label class="td-pin"><input type="checkbox" id="td-pin" data-testid="today-pin" ${pinned?'checked':''}> Open the app on this screen</label>
@@ -5227,8 +5255,8 @@ function sectorBars(){ const secs=S.R.sectors; if(!secs.length) return '<p class
 // Each portfolio sets its own: the most one stock and one sector may be of the whole portfolio (cash included). Crossing
 // one shows on the Overview heads-up and is emailed once (the inbox job, the account job) like a target or a stop.
 function limitsPanel(){ const L=(S.settings&&S.settings.limits)||{}; const on=!!L.on, ro=!!S.readOnly;
-  const lc=PA.limitCheck(S.R,{...L,on:true}); const pc=(x)=>x?+(x*100).toFixed(1):'';
-  const row=(label,top,lim,tid)=>{ const w=top?top.w:0, over=lim&&w>lim+1e-9, scale=Math.max(w,lim||0,0.0001);
+  const lc=PA.limitCheck(S.R,{...L,on:true}); const pc=(x)=>x?+(x*100).toPrecision(8):'';
+  const row=(label,top,lim,tid)=>{ const w=top?top.w:0, over=lim&&w>lim+1e-9, scale=lim?Math.min(1,Math.max(w,lim)*1.25):1;   // no limit: the bar is the whole portfolio
     return `<div class="lim-row${over?' over':''}" data-testid="${tid}"><div class="lim-top"><span>${label}${top?` · <b>${esc(top.label)}</b>`:''}</span><span class="num"><b class="${over?'neg':''}">${top?pct(w,1,false):'—'}</b>${lim?` <span class="muted">/ ${pc(lim)}% limit</span>`:' <span class="muted">· no limit</span>'}</span></div>
       <div class="bar lim-bar"><i style="width:${(w/scale*100).toFixed(1)}%"></i>${lim?`<em style="left:${(lim/scale*100).toFixed(1)}%" title="Your limit"></em>`:''}</div></div>`; };
   const st=lc.stocks[0], se=lc.sectors[0];
@@ -6391,12 +6419,12 @@ function stressPanel(){ const K=riskNow();
   if(!K||!K.holdings.length) return `<div class="panel" data-testid="stress"><div class="phead"><div><h2>If the market falls</h2><div class="sub">Needs at least 30 sessions of daily closes and an open position</div></div></div></div>`;
   const s10=K.stress[1], H=K.holdings, few=H.filter(h=>h.beta==null);
   const cell=(c)=>{ if(c==null) return '<td class="n muted">—</td>'; const a=Math.min(1,Math.abs(c)); return `<td class="n cm" style="background:${c>=0?`rgba(0,113,227,${(a*0.75).toFixed(2)})`:`rgba(215,0,21,${(a*0.6).toFixed(2)})`};color:${a>0.65?'#fff':'var(--ink)'}">${c.toFixed(2)}</td>`; };
-  const top=K.pairs.slice(0,3), low=K.pairs.length>3?K.pairs.slice(-2).reverse():[];
+  const top=K.pairs.slice(0,3), low=K.pairs.slice(3).filter(x=>x.c<0.3).slice(-2).reverse();   // the least alike, only when they really are
   const spread=K.avgCorr==null?'':K.avgCorr<0.3?'well spread: they mostly move on their own':K.avgCorr<0.5?'moderately spread':'not very spread: they tend to move as one';
   return `<div class="panel" data-testid="stress"><div class="phead"><div><h2>If the market falls</h2><div class="sub">From the last ${K.days} sessions of daily closes (${dfmt(K.from)} to ${dfmt(K.to)}) · today's holdings, cash included in the weights</div></div></div>
     <div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr))">
       ${kpi('Portfolio beta', num(K.beta), 'daily · 1.0 moves with the index, cash counts as 0')}
-      ${K.stress.map(x=>kpi(`EGX30 Capped ${pct(x.x,0)}`, `<span class="neg">${pct(x.port,1)}</span>`, `about ${egp(Math.abs(x.egp))} EGP down`, '', '', `stress-${Math.round(-x.x*100)}`)).join('')}
+      ${K.stress.map(x=>kpi(`EGX30 Capped ${pct(x.x,0)}`, `<span class="neg">${pct(x.port,1)}</span>`, `about ${egp(Math.abs(x.egp))} EGP down`)).join('')}
     </div>
     ${K.worst?`<p class="note" style="margin-top:10px" data-testid="stress-worst">The index's worst day in the window was ${dfmt(K.worst.d)} (${pct(K.worst.idx,1)}). Today's holdings would have moved <b class="${sgn(K.worst.port)}">${pct(K.worst.port,1)}</b> that day.</p>`:''}
     <div class="tbl" style="margin-top:10px"><table data-testid="stress-table"><thead><tr><th>Stock</th><th class="n">Weight</th><th class="n">Beta</th><th class="n">If the index falls 10%</th></tr></thead><tbody>

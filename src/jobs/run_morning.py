@@ -73,6 +73,8 @@ def accounts_part(a, today, http, send):
                 continue     # the owner's sign-in account: the main portfolio's brief is the owner's
             apriv, akeys = ram.account_key(pkg["pk8"])
             docs = ram.read_account(http, tok, pkg["uid"], apriv)
+            if not ((docs.get("portfolio/settings") or {}).get("data") or {}).get("inception"):
+                continue     # no portfolio yet
             state_doc = docs.get("sync/mail")
             state = dict((state_doc or {}).get("data") or {})
             if state.get("morningSent") == today and not a.manual:

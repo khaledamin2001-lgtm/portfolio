@@ -33,6 +33,13 @@ const mo = PA.profilePeriod(p, { type: 'Month', asOf: '2026-08' }), Rm = PA.port
 check('a single month (Aug 2026) from the profile equals the engine\'s, and differs from all time', Math.abs(mo.r - Rm.stats.twr) < 1e-4 && Math.abs(mo.r - all.r) > 1e-3, `${mo.r} vs ${Rm.stats.twr}`);
 check('trades are newest first, each a buy (new / added) or a sale (trimmed / closed)', p.trades.every((t, i) => (i === 0 || t.d <= p.trades[i - 1].d) && ['buy', 'sell'].includes(t.side) && ['new', 'added', 'trimmed', 'closed'].includes(t.kind)));
 check('a period with no month in it gives nothing', PA.profilePeriod(p, { type: 'Custom', from: '2020-01', to: '2020-02' }) === null && PA.profilePeriod(null, {}) === null);
+// days held count from the buy that opened the current position: sold out and bought back starts again
+const rb = { 'portfolio/settings': { name: 'T', inception: '2026-06', cash: 0, openingValue: 0, riskFree: 0.2, fxStart: 50, volLow: 0.02, volHigh: 0.05, openThreshold: 0.5, staleDays: 7 },
+  'portfolio/assets': { items: { COMI: { name: 'COMI', symbol: 'COMI', sector: 'Banks' } } }, 'portfolio/marks': { months: {} },
+  'ledger/y2026': { rows: [{ id: '1', d: '2026-06-01', t: 'Deposit', amt: 10000 }, { id: '2', d: '2026-06-02', t: 'Buy', a: 'COMI', q: 10, p: 100, amt: -1000 },
+    { id: '3', d: '2026-07-20', t: 'Sell', a: 'COMI', q: 10, p: 110, amt: 1100 }, { id: '4', d: '2026-09-20', t: 'Buy', a: 'COMI', q: 10, p: 120, amt: -1200 }] } };
+const rbp = PA.friendProfile(PA.portfolioRun(rb, null, { today: '2026-09-27' }), {});
+check('days held: a stock sold out and bought back counts from the new buy', rbp.holdings[0].days === 7, String(rbp.holdings[0].days));
 fs.rmSync(dir, { recursive: true, force: true });
 console.log(fail ? `FAIL ${fail}` : 'ALL PASS');
 process.exit(fail ? 1 : 0);

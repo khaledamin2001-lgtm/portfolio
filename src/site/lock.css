@@ -145,7 +145,7 @@ body.pd-sheet-open{overflow:hidden}
 #pd-sheet .ps-tbl th{font-size:11px;font-weight:600;color:var(--ink-3,#6E6E73);text-align:right;padding:0 0 6px;text-transform:none;letter-spacing:0;background:none;position:static;border:0}
 #pd-sheet .ps-tbl td{padding:9px 0;border-top:.5px solid var(--grid,#E8E8ED);font-variant-numeric:tabular-nums}
 #pd-sheet .ps-tbl td.n{text-align:right;font-weight:600}
-#pd-sheet .ps-bar{display:grid;grid-template-columns:54px 1fr 64px;align-items:center;gap:10px;font-size:13px;padding:4px 0}
+#pd-sheet .ps-bar{display:grid;grid-template-columns:62px 1fr 64px;align-items:center;gap:10px;font-size:13px;padding:4px 0}
 #pd-sheet .ps-bar>span:last-child{text-align:right;font-weight:600;font-variant-numeric:tabular-nums}
 #pd-sheet .ps-bar i,#pd-sheet .ps-hold i{display:block;height:8px;border-radius:4px;background:var(--fill,rgba(118,118,128,.12));overflow:hidden}
 #pd-sheet .ps-bar i b,#pd-sheet .ps-hold i b{display:block;height:100%;border-radius:4px;background:var(--accent,#0071E3)}

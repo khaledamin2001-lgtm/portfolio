@@ -487,6 +487,17 @@ print(r.seal_json(json.load(open(${JSON.stringify(path.join(TMP, 'snap.json'))})
     await F.$t('account-menu').click(); await F.$t('account-friends').click(); await F.$t('friend-view').click(); await F.$t('profile-sheet').waitFor({ timeout: 30000 });
     check("a profile made by the email job's code opens on the page", new RegExp(topSym).test(await F.$t('profile-holdings').textContent()));
     await F.$t('profile-close').click(); await F.page.waitForTimeout(300);
+    // a broken or hostile copy: markup in any field never runs, wrong types never break the page
+    const evil = '<img src=x onerror="window.__pwned=1">';
+    await F.page.evaluate(() => { window.__pwned = 0; });
+    FB.docs[`shares/${uid}/to/${uidB}`].fields.pkg = { stringValue: seal({ v: 2, at: evil, name: evil, profile: Object.assign({}, synProf, { name: evil, handle: evil,
+      stats: { closed: evil, avgHold: evil, winRate: evil }, months: 'not a list', trades: [{ d: 5 }, null, { d: '2026-09-01', side: evil, kind: evil, s: evil, n: evil, ret: evil }],
+      holdings: [{ s: evil, n: evil, sec: evil, w: evil }], sectors: [{ sec: evil, w: 0.5 }] }) }) };
+    await F.$t('account-menu').click(); await F.$t('account-friends').click(); await F.$t('friend-view').click(); await F.$t('profile-sheet').waitFor({ timeout: 30000 });
+    await F.page.waitForTimeout(800);
+    check('a hostile copy: nothing in it runs and no markup gets in, the sheet still opens', await F.page.evaluate(() => window.__pwned) === 0
+      && (await F.page.locator('#pd-sheet img').count()) === 0 && await F.$t('profile-sheet').isVisible());
+    await F.$t('profile-close').click(); await F.page.waitForTimeout(300);
     await E.$t('account-menu').click(); await E.$t('account-friends').click(); await E.$t('friend-remove').waitFor();
     E.page.once('dialog', (d) => d.accept());
     await E.$t('friend-remove').click();

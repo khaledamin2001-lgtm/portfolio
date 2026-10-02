@@ -757,12 +757,12 @@ function stressPanel(){ const K=riskNow();
   if(!K||!K.holdings.length) return `<div class="panel" data-testid="stress"><div class="phead"><div><h2>If the market falls</h2><div class="sub">Needs at least 30 sessions of daily closes and an open position</div></div></div></div>`;
   const s10=K.stress[1], H=K.holdings, few=H.filter(h=>h.beta==null);
   const cell=(c)=>{ if(c==null) return '<td class="n muted">—</td>'; const a=Math.min(1,Math.abs(c)); return `<td class="n cm" style="background:${c>=0?`rgba(0,113,227,${(a*0.75).toFixed(2)})`:`rgba(215,0,21,${(a*0.6).toFixed(2)})`};color:${a>0.65?'#fff':'var(--ink)'}">${c.toFixed(2)}</td>`; };
-  const top=K.pairs.slice(0,3), low=K.pairs.length>3?K.pairs.slice(-2).reverse():[];
+  const top=K.pairs.slice(0,3), low=K.pairs.slice(3).filter(x=>x.c<0.3).slice(-2).reverse();   // the least alike, only when they really are
   const spread=K.avgCorr==null?'':K.avgCorr<0.3?'well spread: they mostly move on their own':K.avgCorr<0.5?'moderately spread':'not very spread: they tend to move as one';
   return `<div class="panel" data-testid="stress"><div class="phead"><div><h2>If the market falls</h2><div class="sub">From the last ${K.days} sessions of daily closes (${dfmt(K.from)} to ${dfmt(K.to)}) · today's holdings, cash included in the weights</div></div></div>
     <div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr))">
       ${kpi('Portfolio beta', num(K.beta), 'daily · 1.0 moves with the index, cash counts as 0')}
-      ${K.stress.map(x=>kpi(`EGX30 Capped ${pct(x.x,0)}`, `<span class="neg">${pct(x.port,1)}</span>`, `about ${egp(Math.abs(x.egp))} EGP down`, '', '', `stress-${Math.round(-x.x*100)}`)).join('')}
+      ${K.stress.map(x=>kpi(`EGX30 Capped ${pct(x.x,0)}`, `<span class="neg">${pct(x.port,1)}</span>`, `about ${egp(Math.abs(x.egp))} EGP down`)).join('')}
     </div>
     ${K.worst?`<p class="note" style="margin-top:10px" data-testid="stress-worst">The index's worst day in the window was ${dfmt(K.worst.d)} (${pct(K.worst.idx,1)}). Today's holdings would have moved <b class="${sgn(K.worst.port)}">${pct(K.worst.port,1)}</b> that day.</p>`:''}
     <div class="tbl" style="margin-top:10px"><table data-testid="stress-table"><thead><tr><th>Stock</th><th class="n">Weight</th><th class="n">Beta</th><th class="n">If the index falls 10%</th></tr></thead><tbody>
