@@ -2056,9 +2056,22 @@
     const card = !pend ? '' : gmailOn()
       ? '<section class="pd-friends pd-building" data-testid="history-pending"><h3>Building your portfolio…</h3><p class="pdf-empty">Your holdings, trades and returns are being built from your Thndr emails. It usually takes <b>about 10 minutes</b> after connecting Gmail. <b>We email you when it is ready</b>, and this page fills in by itself.</p></section>'
       : '<section class="pd-friends pd-building" data-testid="history-pending"><h3>One step left</h3><p class="pdf-empty">Connect the Gmail your Thndr emails go to, and your portfolio is built from them in about 10 minutes.</p><button type="button" class="pdf-add" data-hub="gmail" data-testid="pending-connect">Connect Gmail</button></section>';
-    return card
+    return card + ownerHint()
       + `<section class="pd-friends" id="pd-friends" data-testid="friends-panel">${panelInner()}</section>`;
   };
+  // The site owner signed in with the site account (friends, admin) on a fresh device: that account holds no trades, the
+  // real portfolio is the main one. Say so, with a button straight to it (the setup key the first time on a device).
+  function ownerHint() {
+    if (!CUR || !CUR.cloud || !CLOUD) return '';
+    if (OWNER.email !== String(CLOUD.email || '').toLowerCase()) { checkOwner().then((yes) => { if (yes && typeof window.renderTab === 'function') window.renderTab(true); }).catch(() => {}); return ''; }
+    const main = PORTFOLIOS.find((p) => p.id === 'khaled');
+    const empty = !Object.keys(DOCS).some((k) => k.startsWith('ledger/') && ((DOCS[k] || {}).rows || []).length);
+    if (!OWNER.yes || !main || !empty) return '';
+    return `<section class="pd-friends pd-building" data-testid="owner-main-hint"><h3>This is your sign-in account, not your portfolio</h3>
+      <p class="pdf-empty">It is only for friends and the admin screen, so it has no trades. Your real portfolio is <b>${esc(main.name)}</b>${ls.get('pd.dev.' + main.id) ? '' : ': the first time on this device it asks for your setup key, then your own password or Face ID'}.</p>
+      <button type="button" class="btn primary" style="margin-top:10px" data-open-main="${esc(main.id)}" data-testid="owner-open-main">Open ${esc(main.name)}</button></section>`;
+  }
+  document.addEventListener('click', (e) => { const b = e.target.closest && e.target.closest('[data-open-main]'); if (!b) return; const p = findPortfolio(b.dataset.openMain); if (p) select(p); });
   function hubHTML() {
     const acct = hasAcct(), rows = hubRows(), P = period();
     const row = (r, i) => `<button type="button" class="hub-row${r.me ? ' cur' : ''}" data-hub="profile" data-uid="${esc(r.uid)}" data-testid="hub-${r.me ? 'me' : 'friend'}">

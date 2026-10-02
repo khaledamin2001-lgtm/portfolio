@@ -545,6 +545,10 @@ print(r.seal_json(json.load(open(${JSON.stringify(path.join(TMP, 'snap.json'))})
     const G = await device('G');
     await signUp(G, 'Khaled', OWNER_EMAIL, 'owner pass 777');
     const tokG0 = identity('signInWithPassword', { email: OWNER_EMAIL, password: 'owner pass 777' })[1].idToken;
+    await G.$t('owner-main-hint').waitFor({ timeout: 15000 }).catch(() => {});
+    check("the owner's own sign-in account (no trades) says it is not the portfolio and offers the main one",
+      await G.$t('owner-main-hint').isVisible() && /Open .*Portfolio/.test(await G.$t('owner-open-main').textContent()));
+    await G.shot('owner-hint');
     check('before verifying the email, the owner cannot list accounts', firestore('GET', FSU + 'status', { authorization: 'Bearer ' + tokG0 })[0] === 403);
     check('an ordinary account can never list accounts', firestore('GET', FSU + 'status', { authorization: 'Bearer ' + tokB })[0] === 403);
     await G.$t('account-menu').click();
