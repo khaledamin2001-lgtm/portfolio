@@ -13,6 +13,21 @@ const J = (f) => { const x = JSON.parse(fs.readFileSync(f)); return x && x.data 
 const opt = (f, d) => (fs.existsSync(f) ? J(f) : d);
 const D = (...p) => path.join(args.data, ...p);
 const pct = (a, b) => (b ? Math.round((a / b - 1) * 1000) / 10 : null);
+// why the sync held a statement: the same applyStatement on the portfolio as it stands now, amounts masked to '#'
+const mask = (x) => String(x).split(/(\b\d{4}-\d{2}-\d{2}\b)/).map((p, i) => (i % 2 ? p : p.replace(/-?\d[\d,]*(\.\d+)?/g, '#'))).join('');
+function replayHold(st, msg) {
+  try {
+    const SY = require('./sync.js'), C = (x) => JSON.parse(JSON.stringify(x));
+    const L = (...p) => (fs.existsSync(D(...p)) ? J(D(...p)) : null);
+    const imports = fs.existsSync(D('imports')) ? Object.fromEntries(fs.readdirSync(D('imports')).map((f) => [f.replace('.json', ''), J(D('imports', f))])) : {};
+    const tx = []; fs.readdirSync(D('ledger')).sort().forEach((f) => ((J(D('ledger', f)).rows) || []).forEach((r) => tx.push(r)));
+    SY._reset(C(tx), C((L('portfolio', 'assets.json') || {}).items || {}), C(L('portfolio', 'settings.json') || {}),
+      { marks: C((L('portfolio', 'marks.json') || {}).months || {}), imports, bench: L('bench', 'egx30.json') || { members: [] }, market: L('market', 'latest.json') });
+    const entry = { changes: [], reasons: [], notes: [], unchanged: 0 };
+    const status = SY.applyStatement(st, entry, msg);
+    return { replayStatus: status, reasons: entry.reasons.map(mask), proposed: (entry.proposed || []).map(mask) };
+  } catch (e) { return { replayError: mask(e.message || e).slice(0, 160) }; }
+}
 (async () => {
   const pdfjs = require(require.resolve('pdfjs-dist/legacy/build/pdf.js', { paths: [__dirname, path.join(__dirname, 'node_modules')] }));
   const settings = opt(D('portfolio', 'settings.json'), {}), marks = (opt(D('portfolio', 'marks.json'), { months: {} }).months) || {};
@@ -39,6 +54,7 @@ const pct = (a, b) => (b ? Math.round((a / b - 1) * 1000) / 10 : null);
       else if (kind !== 'other') {
         sum.statements++;
         const st = TS.parseStatement(docs);
+        if (seen[msg.id] && /hold/.test(seen[msg.id].status)) o.holdReasons = replayHold(st, msg);
         o.month = st.month; o.from = st.from; o.to = st.to; o.fullMonth = !!st.fullMonth; o.snapshot = !!st.snapshot; o.holdings = st.snapshot ? st.snapshot.holdings.length : null;
         const mk = st.month && marks[st.month];
         if (st.fullMonth && st.cash && mk) {
