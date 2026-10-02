@@ -41,7 +41,9 @@ There are two kinds of portfolio:
    (`p/<id>/keys.json`). A device opens it once with the setup key, then with its own password or Face ID.
 2. **Accounts** (friends). Sign-up with email + password (Firebase Auth). The browser encrypts every document to the
    account's own key before it reaches Firestore. The jobs can read an account only if it opted in to email updates,
-   by sealing a package to the job's key.
+   by sealing a package to the job's key. Friends find each other by @username (`handles/{handle}`, taken
+   automatically once the email is confirmed) or by email (`directory/{email}`); see `src/site/lock.js` (friends) and
+   `src/cloud/firestore.rules`.
 
 ## What runs when (all times Cairo)
 

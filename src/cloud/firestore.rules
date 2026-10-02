@@ -62,20 +62,40 @@ service cloud.firestore {
       allow write: if verified() && request.auth.token.email == email && request.resource.data.uid == request.auth.uid;
       allow delete: if (request.auth != null && request.auth.token.email == email) || isAdmin();
     }
-    // Friends. links/{uid}/with/{other} is uid's side: {status: sent | received | friends, name, pub, email, at}.
+    // Find a friend by @username: handles/{handle} = {uid, name, pub, at}. A username is 3-20 lower-case letters, digits or
+    // "_", starting with a letter. Only a verified account can take one, only for itself and with the key of its own
+    // directory entry; one already taken can never be taken over (creating needs it free, changing needs it to be yours).
+    // Any signed-in account can fetch one by its exact name, nobody can list them; the account or the admin deletes it.
+    match /handles/{handle} {
+      allow get: if request.auth != null;
+      allow list: if false;
+      allow create: if verified() && handle.matches('^[a-z][a-z0-9_]{2,19}$')
+                    && request.resource.data.uid == request.auth.uid
+                    && request.resource.data.pub == get(/databases/$(database)/documents/directory/$(request.auth.token.email)).data.pub;
+      allow update: if verified() && resource.data.uid == request.auth.uid && request.resource.data.uid == request.auth.uid
+                    && request.resource.data.pub == get(/databases/$(database)/documents/directory/$(request.auth.token.email)).data.pub;
+      allow delete: if (request.auth != null && resource.data.uid == request.auth.uid) || isAdmin();
+    }
+    // Friends. links/{uid}/with/{other} is uid's side: {status: sent | received | friends, name, pub, email, handle, at}.
     // Asking writes both sides (mine 'sent', theirs 'received'); only the one who received it can make both 'friends';
     // either can delete both (decline, cancel, remove). Nothing else about a link can change. The asker must have a
     // verified email, and the 'received' side it writes must carry the asker's own email and the key of the asker's own
     // directory entry, so a request cannot pose as someone else (the site checks the same before sharing anything).
+    // A request sent to an @username has no email on the asker's side; whoever accepts adds their OWN verified email to
+    // it, so from then on the friendship is checked by email and a later change of username does not break it.
     match /links/{uid}/with/{other} {
       allow read: if me(uid) || isAdmin();
       allow create: if (me(uid) && verified() && request.resource.data.status == 'sent')
                     || (me(other) && verified() && request.resource.data.status == 'received'
                         && request.resource.data.email == request.auth.token.email
                         && request.resource.data.pub == get(/databases/$(database)/documents/directory/$(request.auth.token.email)).data.pub);
-      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'at'])
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'at', 'email'])
                     && request.resource.data.status == 'friends'
-                    && ((me(other) && resource.data.status == 'sent') || (me(uid) && resource.data.status == 'received'));
+                    && ((me(other) && resource.data.status == 'sent'
+                         && (request.resource.data.get('email', '') == resource.data.get('email', '')
+                             || (verified() && request.resource.data.email == request.auth.token.email)))
+                        || (me(uid) && resource.data.status == 'received'
+                            && request.resource.data.get('email', '') == resource.data.get('email', '')));
       allow delete: if me(uid) || me(other) || isAdmin();
     }
     // What a friend sees: shares/{owner}/to/{viewer} = {pkg: a copy of the owner's portfolio sealed to the viewer's key,

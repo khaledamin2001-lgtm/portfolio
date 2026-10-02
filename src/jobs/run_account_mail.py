@@ -452,11 +452,15 @@ def seal_json(obj, pub_b64, label):
 
 def confirmed_friend(http, tok, f):
     """A link's name, email and key are written by the other person: seal to that key only when directory/{email} (which
-    only the owner of that sign-in email can write) names the same account and the same key."""
+    only the owner of that sign-in email can write) names the same account and the same key. A request sent to an
+    @username has no email on the asker's side until it is accepted: then handles/{handle} (which only that account can
+    hold) is the check instead (site/lock.js confirmedFriend does the same)."""
     email = str(f.get("email") or "").lower()
-    if not email or not f.get("pub"):
+    handle = str(f.get("handle") or "").strip().lstrip("@").lower()
+    if not f.get("pub") or not (email or handle):
         return False
-    st, j = http.json("GET", f"{FS}/directory/{urllib.parse.quote(email, safe='')}", headers={"Authorization": "Bearer " + tok})
+    path = f"directory/{urllib.parse.quote(email, safe='')}" if email else f"handles/{urllib.parse.quote(handle, safe='')}"
+    st, j = http.json("GET", f"{FS}/{path}", headers={"Authorization": "Bearer " + tok})
     if st != 200:
         return False
     d = {k: (v or {}).get("stringValue") for k, v in ((j or {}).get("fields") or {}).items()}

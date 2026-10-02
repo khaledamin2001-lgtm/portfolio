@@ -21,7 +21,7 @@ file lists every file and how to build and test.
 | File | What it is |
 |---|---|
 | `site/build_site.py` | Wraps the built page into the live site: the root `index.html` (the page + `lock.js` + `lock.css`, self-hosted fonts, the Content-Security-Policy), `portfolios.json`, the web manifest, icons, `vendor/` and `sw.js`. Run it after any change under `src/` and commit the outputs. |
-| `site/lock.js` | Everything specific to the website: the lock screen, keys and encryption (setup key, device password, Face ID / fingerprint), loading and decrypting the data, editing from the site (GitHub API), accounts (Firebase Auth + Firestore), friends and shared copies, the admin screen, email-update settings, live prices from TradingView, the offline copy. Each section starts with a comment saying what it does. |
+| `site/lock.js` | Everything specific to the website: the lock screen, keys and encryption (setup key, device password, Face ID / fingerprint), loading and decrypting the data, editing from the site (GitHub API), accounts (Firebase Auth + Firestore), friends (@usernames or email) and shared copies, the admin screen, email-update settings, live prices from TradingView, the offline copy. Each section starts with a comment saying what it does. |
 | `site/lock.css` | Styles for the lock screen and the site's own bars and screens. |
 | `site/store.js` | The site editor's write rules, the JavaScript twin of `jobs/store.py` (merge, markers, all-or-nothing batch), pinned by `jobs/merge_vectors.json`. |
 | `site/make_keys.py` | Makes a portfolio's key pair: `keys.json` for the repo, and the setup key and private key into a secret folder (never committed). |

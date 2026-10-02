@@ -116,3 +116,8 @@ body.pd-locked>:not(#lock){display:none!important}
 #lock .lk-btn:has(small){flex-direction:column}
 #lock .lk-or{display:flex;align-items:center;gap:10px;color:var(--ink-3,#6E6E73);font-size:12px}
 #lock .lk-or::before,#lock .lk-or::after{content:"";flex:1;border-top:1px solid var(--rule,#D2D2D7)}
+#lock .lk-handle{display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left;padding:14px 16px;border-radius:16px;background:var(--accent-soft,#E8F1FD)}
+#lock .lk-handle b{display:block;font:700 22px/1.2 var(--f-display,system-ui,sans-serif);letter-spacing:-.02em;color:var(--accent,#0071E3);margin:2px 0}
+#lock .lk-handle small{display:block;font-size:12px;color:var(--ink-3,#6E6E73)}
+#lock .lk-handle .lk-btn{padding:9px 12px;font-size:14px;background:var(--surface,#fff)}
+.pd-friends .pdf-handle{color:var(--accent,#0071E3);font-weight:500;margin-top:-2px}

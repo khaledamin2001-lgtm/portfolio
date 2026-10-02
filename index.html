@@ -140,6 +140,11 @@ body.pd-locked>:not(#lock){display:none!important}
 #lock .lk-btn:has(small){flex-direction:column}
 #lock .lk-or{display:flex;align-items:center;gap:10px;color:var(--ink-3,#6E6E73);font-size:12px}
 #lock .lk-or::before,#lock .lk-or::after{content:"";flex:1;border-top:1px solid var(--rule,#D2D2D7)}
+#lock .lk-handle{display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left;padding:14px 16px;border-radius:16px;background:var(--accent-soft,#E8F1FD)}
+#lock .lk-handle b{display:block;font:700 22px/1.2 var(--f-display,system-ui,sans-serif);letter-spacing:-.02em;color:var(--accent,#0071E3);margin:2px 0}
+#lock .lk-handle small{display:block;font-size:12px;color:var(--ink-3,#6E6E73)}
+#lock .lk-handle .lk-btn{padding:9px 12px;font-size:14px;background:var(--surface,#fff)}
+.pd-friends .pdf-handle{color:var(--accent,#0071E3);font-weight:500;margin-top:-2px}
 
 body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[data-testid=save-marks],[data-testid=save-assets],[data-testid=save-settings],[data-testid=post-statement],[data-testid=statement-upload-label]){display:none!important}
 </style></head><body class="pd-locked">
@@ -805,7 +810,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
     const t = document.getElementById('toast'); if (t) { t.hidden = true; t.textContent = ''; }
   }
   function lock(auto) {
-    VIEW = null; FRIENDS = null; LINK = null; viewBanner();
+    VIEW = null; FRIENDS = null; MY_HANDLE = null; LINK = null; viewBanner();
     PK8 = null; DOCS = {}; DATA_AT = null; lastFetch = 0; EXPORTS = null; SAVED_AT = null; EDIT = null; CLOUD = null; MEMBERS = null; OVERLAY.clear(); RECENT.clear(); JOB_NOTE = ''; editBar();
     document.title = 'Stock Market Portfolio Tracker';
     listeners.forEach(fire); blank(); offlineBanner();
@@ -1251,7 +1256,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   // Everything one open portfolio or account leaves in memory, cleared before another account takes the page (otherwise
   // its unsaved edits, its linked account, the friend being viewed or friends' figures would carry over)
   function resetSession() {
-    OVERLAY.clear(); RECENT.clear(); EDIT = null; LINK = null; VIEW = null; FRIENDS = null;
+    OVERLAY.clear(); RECENT.clear(); EDIT = null; LINK = null; VIEW = null; FRIENDS = null; MY_HANDLE = null;
     Object.keys(CONFIRMED).forEach((k) => delete CONFIRMED[k]);
     HUB.you = null; HUB.youData = null; HUB.friends = {}; HUB.market = null; HUB.marketAt = 0;
   }
@@ -1652,8 +1657,8 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   }
   /* ---------- friends, status for the site owner, deleting or restarting an account ----------
      Friends see each other's portfolios, read-only. links/{uid}/with/{other} holds each side of a friendship ('sent',
-     'received', then 'friends' once the one who received it accepts); a friend is found by their sign-in email through
-     directory/{email} = {uid, name, pub}. Each side keeps shares/{me}/to/{friend} = a copy of its own portfolio documents
+     'received', then 'friends' once the one who received it accepts); a friend is found by their @username through
+     handles/{handle} = {uid, name, pub, at} or by their sign-in email through directory/{email} = {uid, name, pub}. Each side keeps shares/{me}/to/{friend} = a copy of its own portfolio documents
      (portfolio, ledger, imports; the Thndr account number and email settings left out) gzipped and sealed to the friend's
      public key ('portfolio-share-v1'): refreshed when the account opens or saves (and by the email job for accounts that
      have it), readable only by that friend. Viewing one swaps the page's documents for the copy plus the shared market
@@ -1665,7 +1670,8 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   // address and decide, this only shows the Admin button and the "main portfolio" choice
   const OWNER_HASH = '467022c320757248bf70115c83d305a7e4d139c35e1be5f8117fb30d7f769347', SHARE_LABEL = 'portfolio-share-v1', SHARE_COLLS = new Set(['portfolio', 'ledger', 'imports']);
   const JOB_URL = 'https://github.com/khaledamin2001-lgtm/portfolio-engine/actions/workflows/account-mail.yml';
-  let FRIENDS = null;   // the open account's links: [{uid, status, name, pub, email, at}]
+  let FRIENDS = null;   // the open account's links: [{uid, status, name, pub, email, handle, at}]
+  let MY_HANDLE = null;   // the open account's @username: '' none yet, null not looked up this session
   let OWNER = { email: null, yes: false };
   const hex = async (t) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', enc.encode(t))), (b) => b.toString(16).padStart(2, '0')).join('');
   async function checkOwner() { const e = String((CLOUD && CLOUD.email) || '').toLowerCase(); if (OWNER.email !== e) OWNER = { email: e, yes: !!e && (await hex(e)) === OWNER_HASH }; return OWNER.yes; }
@@ -1716,7 +1722,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   // (once a day, or when a setting changed) and fresh copies of the portfolio for friends
   async function housekeeping() {
     await checkOwner();
-    await ensureDirectory();
+    if (await ensureDirectory()) await ensureHandle().catch((e) => console.warn('no @username yet', e));
     await listFriends();
     const sk = 'pd.status.' + CUR.id, ssig = cairoDay(Date.now() / 1000) + JSON.stringify(mailPrefs() || {}) + FRIENDS.map((f) => f.status).join();
     if (ls.get(sk) !== ssig) { await writeStatus(); ls.set(sk, ssig); }
@@ -1751,16 +1757,65 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   }
   // A link's name, email and public key are written by the OTHER person, so before anything is sealed to that key it is
   // checked against directory/{email}, which only the owner of that sign-in email can write: same account, same key.
-  // A request that does not match (someone posing as another person) is never accepted and never gets a copy.
+  // A request sent to an @username has no email on the asker's side until it is accepted: it is checked against
+  // handles/{handle} instead, which only that account can hold. A request that does not match (someone posing as another
+  // person) is never accepted and never gets a copy.
   const CONFIRMED = {};   // uid -> the public key confirmed for it this session
   async function confirmedFriend(f) {
-    if (!f || !f.pub || !f.email) return false;
+    if (!f || !f.pub || !(f.email || f.handle)) return false;
     if (CONFIRMED[f.uid] === f.pub) return true;
     let d = null;
-    try { d = fsData(await fsReq('GET', `directory/${encodeURIComponent(String(f.email).toLowerCase())}`)); } catch (e) { if (e.code !== 'not_found') throw e; }
+    if (f.email) { try { d = fsData(await fsReq('GET', `directory/${encodeURIComponent(String(f.email).toLowerCase())}`)); } catch (e) { if (e.code !== 'not_found') throw e; } }
+    else d = await readHandle(cleanHandle(f.handle));
     const ok = !!d && d.uid === f.uid && d.pub === f.pub;
     if (ok) CONFIRMED[f.uid] = f.pub;
     return ok;
+  }
+  /* @usernames. handles/{handle} = {uid, name, pub, at}: how friends find an account without its email. Taken by itself
+     once the email is confirmed, from the portfolio name ("Omar's Portfolio" -> @omar, or @omar2 ... when that is taken),
+     and changed on the Friends screen. The account's own username is also kept in its status/{uid} (handle) so every
+     device knows it. The database rules make a username impossible to take over while someone holds it. */
+  const HANDLE_RE = /^[a-z][a-z0-9_]{2,19}$/;
+  const cleanHandle = (s) => String(s || '').trim().replace(/^@+/, '').toLowerCase();
+  async function readHandle(h) {
+    if (!HANDLE_RE.test(h)) return null;
+    try { return fsData(await fsReq('GET', `handles/${h}`)); } catch (e) { if (e.code === 'not_found') return null; throw e; }
+  }
+  async function myHandle() {
+    if (MY_HANDLE != null) return MY_HANDLE;
+    let st = {}; try { st = fsData(await fsReq('GET', `status/${CLOUD.uid}`)); } catch (e) { if (e.code !== 'not_found') throw e; }
+    const h = cleanHandle(st.handle), d = h ? await readHandle(h).catch(() => null) : null;
+    MY_HANDLE = d && d.uid === CLOUD.uid ? h : '';
+    return MY_HANDLE;
+  }
+  function handleCandidates(name) {
+    let b = String(name || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/['\u2019]s\b/g, '')
+      .replace(/\bportfolio\b/g, '').replace(/[^a-z0-9]+/g, '_').replace(/^[^a-z]+/, '').replace(/_+$/, '').slice(0, 16);
+    if (b.length < 3) b = b ? b + '_egx' : 'investor';
+    const out = [b];
+    for (let i = 2; i <= 9; i++) out.push(b + i);
+    for (let i = 0; i < 3; i++) out.push(b + (100 + Math.floor(Math.random() * 900)));
+    return out.filter((c) => HANDLE_RE.test(c));
+  }
+  // takes @h for this account and frees its old one; false when someone else holds it
+  async function takeHandle(h) {
+    const d = await readHandle(h);
+    if (d && d.uid !== CLOUD.uid) return false;
+    const body = fsFields({ uid: CLOUD.uid, name: CUR.name, pub: acctPub(), at: new Date().toISOString() });
+    try { await fsReq('PATCH', `handles/${h}`, body, d ? '' : 'currentDocument.exists=false'); }
+    catch (e) { if (e.code === 'conflict' || (e.code === 'forbidden' && (await readHandle(h).catch(() => null)))) return false; throw e; }
+    const old = await myHandle();
+    if (old && old !== h) await fsDel(`handles/${old}`).catch(() => {});
+    MY_HANDLE = h; ls.set('pd.handle.' + CUR.id, h + '|' + acctPub() + '|' + CUR.name);
+    await fsReq('PATCH', `status/${CLOUD.uid}`, fsFields({ handle: h }), maskOf(['handle']));
+    return true;
+  }
+  // once the email is confirmed: the account has a username, and its entry shows the current name and key
+  async function ensureHandle() {
+    const h = await myHandle(), k = 'pd.handle.' + CUR.id, sig = h + '|' + acctPub() + '|' + CUR.name;
+    if (h) { if (ls.get(k) !== sig) { await fsReq('PATCH', `handles/${h}`, fsFields({ uid: CLOUD.uid, name: CUR.name, pub: acctPub(), at: new Date().toISOString() })); ls.set(k, sig); } return h; }
+    for (const c of handleCandidates(CUR.name)) if (await takeHandle(c)) return c;
+    return '';
   }
   let shareTimer = null;
   function shareSoon() { clearTimeout(shareTimer); shareTimer = setTimeout(() => refreshShares().catch(() => {}), 8000); }
@@ -1794,18 +1849,33 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
 
   async function friendsScreen(note) {
     screen('<h1>Friends</h1><p>Loading…</p>');
-    let verified = false;
-    try { verified = await ensureDirectory(); await listFriends(); refreshShares().catch(() => {}); }
+    let verified = false, handle = '';
+    try {
+      verified = await ensureDirectory();
+      if (verified) handle = await ensureHandle().catch((e) => { console.warn('no @username yet', e); return ''; });
+      await listFriends(); refreshShares().catch(() => {});
+    }
     catch (e) { console.error(e); screen(`<h1>Friends</h1><p class="lk-err">${esc(e.message || e)}</p><div class="lk-links"><button type="button" class="lk-link" id="lk-fr-back">Back</button></div>`); $l('#lk-fr-back').onclick = accountScreen; return; }
     const by = (st) => FRIENDS.filter((f) => f.status === st);
-    const row = (f, btns) => `<div class="lk-friend" data-testid="friend-${esc(f.status)}"><div><b>${esc(f.name)}</b><small>${esc(f.email || '')}</small></div><div class="lk-friend-btns">${btns}</div></div>`;
+    const who = (f) => (f.handle ? '@' + cleanHandle(f.handle) : f.email || '');
+    const row = (f, btns) => `<div class="lk-friend" data-testid="friend-${esc(f.status)}"><div><b>${esc(f.name)}</b><small>${esc(who(f))}</small></div><div class="lk-friend-btns">${btns}</div></div>`;
+    // your own @username: what friends type to find you
+    const mine = !verified ? '' : handle
+      ? `<div class="lk-handle" data-testid="my-handle-card"><div><small>Your username</small><b data-testid="my-handle">@${esc(handle)}</b><small>Friends add you with it: no email needed.</small></div>
+          <div class="lk-friend-btns"><button type="button" class="lk-btn ghost" id="lk-h-copy" data-testid="my-handle-copy">Copy</button><button type="button" class="lk-btn ghost" id="lk-h-edit" data-testid="my-handle-change">Change</button></div></div>
+        <form id="lk-h-form" hidden autocomplete="off"><label class="lk-lbl" for="lk-h-new">New username</label>
+          <input id="lk-h-new" type="text" data-testid="my-handle-input" value="${esc(handle)}" autocapitalize="none" spellcheck="false" maxlength="21">
+          <p class="lk-hint">3 to 20 letters, numbers or _ , starting with a letter.</p>
+          <button class="lk-btn" data-testid="my-handle-save">Save username</button></form>`
+      : `<p class="lk-hint" data-testid="my-handle-none">Your @username appears here once usernames are switched on for this site. Until then friends add you with your email.</p>`;
     const main = isOwner() && !!(mailPrefs() || {}).shareMain;
     screen(`<h1>Friends</h1><p>Friends see each other's portfolios: holdings, returns and activity. They can look, never change anything.</p>
+      ${mine}
       ${by('received').length ? `<p class="lk-lbl">Friend requests</p>${by('received').map((f) => row(f, `<button class="lk-btn" data-acc="${esc(f.uid)}" data-testid="friend-accept">Accept</button><button class="lk-btn ghost" data-del="${esc(f.uid)}" data-testid="friend-decline">Decline</button>`)).join('')}` : ''}
       ${by('friends').length ? `<p class="lk-lbl">Your friends</p>${by('friends').map((f) => row(f, `<button class="lk-btn" data-view="${esc(f.uid)}" data-testid="friend-view">View</button><button class="lk-btn ghost" data-del="${esc(f.uid)}" data-testid="friend-remove">Remove</button>`)).join('')}` : ''}
       ${by('sent').length ? `<p class="lk-lbl">Waiting for them to accept</p>${by('sent').map((f) => row(f, `<button class="lk-btn ghost" data-del="${esc(f.uid)}" data-testid="friend-cancel">Cancel</button>`)).join('')}` : ''}
       ${verified ? `<form id="lk-fr-add" autocomplete="off"><label class="lk-lbl" for="lk-fr-email">Add a friend</label>
-      <input id="lk-fr-email" type="email" data-testid="friend-email" placeholder="The email they sign in with" autocapitalize="none" spellcheck="false">
+      <input id="lk-fr-email" type="text" inputmode="email" data-testid="friend-email" placeholder="@username or email" autocapitalize="none" autocorrect="off" spellcheck="false">
       <button class="lk-btn" id="lk-fr-go" data-testid="friend-add">Send friend request</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>`
         : `<div class="lk-tip" data-testid="friends-unverified"><p><b>One quick step first:</b> confirm your email. We sent a link to <b>${esc(CLOUD.email || '')}</b> when you signed up (check spam too). Tap the link, then come back here.</p>
           <button type="button" class="lk-btn" id="lk-fr-check" data-testid="friends-verify-done">I tapped the link</button>
@@ -1844,32 +1914,57 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
         toast(main ? "Friends now see this account's portfolio." : 'Friends will see your main portfolio after the next daily update.'); friendsScreen();
       } catch (e) { console.error(e); friendsScreen(e.message || String(e)); }
     };
+    const hc = $l('#lk-h-copy'), he = $l('#lk-h-edit'), hf = $l('#lk-h-form');
+    if (hc) hc.onclick = async () => { try { await navigator.clipboard.writeText('@' + handle); hc.textContent = 'Copied'; } catch (e) { hc.textContent = '@' + handle; } };
+    if (he) he.onclick = () => { hf.hidden = false; he.hidden = true; $l('#lk-h-new').focus(); };
+    if (hf) hf.onsubmit = async (ev) => {
+      ev.preventDefault();
+      const h = cleanHandle($l('#lk-h-new').value);
+      if (h === handle) return friendsScreen();
+      if (!HANDLE_RE.test(h)) return err('Use 3 to 20 letters, numbers or _ , starting with a letter.');
+      busy(hf.querySelector('button'), 'Saving…');
+      try { if (await takeHandle(h)) { toast(`You are @${h} now.`); friendsScreen(); } else friendsScreen(`@${h} is taken. Try another.`); }
+      catch (e) { console.error(e); friendsScreen(e.message || String(e)); }
+    };
     if ($l('#lk-fr-add')) $l('#lk-fr-add').onsubmit = async (ev) => {
       ev.preventDefault();
-      const email = $l('#lk-fr-email').value.trim().toLowerCase();
-      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return err('Enter their email address.');
-      if (email === String(CLOUD.email || '').toLowerCase()) return err('That is your own email.');
+      const raw = $l('#lk-fr-email').value.trim(), isEmail = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(raw), h = isEmail ? '' : cleanHandle(raw);
+      if (!isEmail && !HANDLE_RE.test(h)) return err('Type their @username (or the email they sign in with).');
+      if (isEmail && raw.toLowerCase() === String(CLOUD.email || '').toLowerCase()) return err('That is your own email.');
+      if (h && h === handle) return err('That is your own username.');
       busy($l('#lk-fr-go'), 'Sending…');
-      try { const name = await requestFriend(email); toast(`Friend request sent to ${name}.`); friendsScreen(); }
+      try { const name = await requestFriend(isEmail ? { email: raw.toLowerCase() } : { handle: h }); toast(`Friend request sent to ${name}.`); friendsScreen(); }
       catch (e) { if (e.code !== 'user') console.error(e); friendsScreen(e.message || String(e)); }
     };
   }
-  async function requestFriend(email) {
+  // a request to {email} or {handle}: both sides of the link, the asker's own side first
+  async function requestFriend({ email, handle }) {
+    const user = (m) => Object.assign(new Error(m), { code: 'user' });
     let d;
-    try { d = fsData(await fsReq('GET', `directory/${encodeURIComponent(email)}`)); }
-    catch (e) { if (e.code === 'not_found') throw Object.assign(new Error(`Nobody has an account with ${email} yet. Send them the site link first: ${location.origin + location.pathname}`), { code: 'user' }); throw e; }
+    if (handle) {
+      try { d = await readHandle(handle); } catch (e) { if (e.code === 'forbidden') throw user('Adding friends by @username is not switched on for this site yet. Use their email for now.'); throw e; }
+      if (!d) throw user(`Nobody has the username @${handle}. Check the spelling, or use the email they sign in with.`);
+    } else {
+      try { d = fsData(await fsReq('GET', `directory/${encodeURIComponent(email)}`)); }
+      catch (e) { if (e.code === 'not_found') throw user(`Nobody has an account with ${email} yet. Send them the site link first: ${location.origin + location.pathname}`); throw e; }
+    }
+    if (d.uid === CLOUD.uid) throw user('That is you.');
     const have = (FRIENDS || []).find((f) => f.uid === d.uid);
     if (have) throw Object.assign(new Error(have.status === 'friends' ? `You and ${have.name} are already friends.` : have.status === 'sent' ? `You already asked ${have.name}; waiting for them to accept.` : `${have.name} already sent you a request: accept it above.`), { code: 'user' });
     const at = new Date().toISOString();
-    await fsReq('PATCH', `links/${CLOUD.uid}/with/${d.uid}`, fsFields({ status: 'sent', name: d.name, pub: d.pub, email, at }), 'currentDocument.exists=false');
-    try { await fsReq('PATCH', `links/${d.uid}/with/${CLOUD.uid}`, fsFields({ status: 'received', name: CUR.name, pub: acctPub(), email: String(CLOUD.email || '').toLowerCase(), at }), 'currentDocument.exists=false'); }
+    await fsReq('PATCH', `links/${CLOUD.uid}/with/${d.uid}`, fsFields(Object.assign({ status: 'sent', name: d.name, pub: d.pub, at }, handle ? { handle } : { email })), 'currentDocument.exists=false');
+    const me = await myHandle().catch(() => '');
+    try { await fsReq('PATCH', `links/${d.uid}/with/${CLOUD.uid}`, fsFields(Object.assign({ status: 'received', name: CUR.name, pub: acctPub(), email: String(CLOUD.email || '').toLowerCase(), at }, me ? { handle: me } : {})), 'currentDocument.exists=false'); }
     catch (e) { await fsDel(`links/${CLOUD.uid}/with/${d.uid}`); throw e; }
     return d.name;
   }
   async function acceptFriend(f) {
-    if (!(await confirmedFriend(f))) throw new Error(`This request does not match the account of ${f.email || 'its sender'}, so it was not accepted. Decline it, and ask your friend to send a new one.`);
+    if (!(await confirmedFriend(f))) throw new Error(`This request does not match the account of ${f.email || (f.handle ? '@' + f.handle : '') || 'its sender'}, so it was not accepted. Decline it, and ask your friend to send a new one.`);
     const at = new Date().toISOString(), upd = fsFields({ status: 'friends', at });
-    await fsReq('PATCH', `links/${f.uid}/with/${CLOUD.uid}`, upd, maskOf(['status', 'at']));
+    // the asker's side gets this account's verified email, so the friendship no longer depends on a username (rules from
+    // before @usernames refuse the extra field: then without it)
+    try { await fsReq('PATCH', `links/${f.uid}/with/${CLOUD.uid}`, fsFields({ status: 'friends', at, email: String(CLOUD.email || '').toLowerCase() }), maskOf(['status', 'at', 'email'])); }
+    catch (e) { if (e.code !== 'forbidden') throw e; await fsReq('PATCH', `links/${f.uid}/with/${CLOUD.uid}`, upd, maskOf(['status', 'at'])); }
     await fsReq('PATCH', `links/${CLOUD.uid}/with/${f.uid}`, upd, maskOf(['status', 'at']));
     await listFriends();
     await refreshShares(true);
@@ -1888,6 +1983,8 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
     }
     await fsDel(`mail/${uid}`);
     if (email) await fsDel(`directory/${encodeURIComponent(String(email).toLowerCase())}`);
+    try { const h = cleanHandle(fsData(await fsReq('GET', `status/${uid}`)).handle), d = h ? await readHandle(h) : null; if (d && d.uid === uid) await fsDel(`handles/${h}`); }
+    catch (e) { if (e.code !== 'not_found') console.warn('username not freed', e); }
     for (const d of await listAll(`users/${uid}/docs`)) await fsDel(`users/${uid}/docs/${d.name.split('/').pop()}`);
     await fsDel(`users/${uid}`);
     await fsDel(`status/${uid}`);
@@ -1974,7 +2071,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
         if (j.report) ok.push(`Last month-end report: ${j.report}`);
         const facts = r.quiet ? [`Joined ${dayOf(r.createdAt)} · has not opened the site since the admin page started (details appear when they do)`]
           : [`Joined ${dayOf(r.createdAt)} · last opened ${dayOf(r.lastSeen)}`, `Email updates ${s.mail ? 'on' : 'off'} · month-end report ${s.reports ? 'on' : 'off'} · Thndr emails ${s.gmail ? 'on' : 'off'} · friends ${s.friends || 0}`];
-        return `<div class="lk-card${bad.length ? ' bad' : ''}" data-testid="admin-row"><div class="lk-card-head"><b>${esc(r.name || '(no name)')}</b><small>${esc(r.email || (r.quiet ? 'email shown once they open the site' : ''))}</small></div>
+        return `<div class="lk-card${bad.length ? ' bad' : ''}" data-testid="admin-row"><div class="lk-card-head"><b>${esc(r.name || '(no name)')}</b><small>${esc([r.handle ? '@' + r.handle : '', r.email || (r.quiet ? 'email shown once they open the site' : '')].filter(Boolean).join(' · '))}</small></div>
           <ul class="lk-facts">${facts.map((t) => `<li>${esc(t)}</li>`).join('')}${ok.map((t) => `<li class="ok">${esc(t)}</li>`).join('')}${bad.map((t) => `<li class="bad">${esc(t)}</li>`).join('')}</ul>
           ${r.uid === CLOUD.uid ? '' : `<div class="lk-friend-btns"><button class="lk-btn ghost" data-reset="${esc(r.uid)}" data-testid="admin-reset">Reset (start over)</button><button class="lk-btn danger" data-delete="${esc(r.uid)}" data-testid="admin-delete">Delete account</button></div>`}</div>`;
       };
@@ -2087,7 +2184,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
     checkOwner().then((y) => { const x = $l('#lk-lk-admin'); if (x) x.hidden = !y; }).catch(() => {});
     listFriends().then(() => { const x = $l('#lk-lk-friends'); if (x) x.textContent = 'Friends' + (incoming() ? ` · ${incoming()} new` : ''); }).catch(() => {});
     $l('#lk-lk-out').onclick = async () => {
-      await idbDel('link:' + CUR.id).catch(() => {}); LINK = null; CLOUD = null; FRIENDS = null; accountBadge();
+      await idbDel('link:' + CUR.id).catch(() => {}); LINK = null; CLOUD = null; FRIENDS = null; MY_HANDLE = null; accountBadge();
       if (VIEW) await viewMine().catch(() => {});
       editBar(); open(); toast('Signed out of the site account on this device. Your portfolio is unchanged.');
     };
@@ -2152,8 +2249,8 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
     if (!VIEW && HUB.youData !== DATA_AT) { HUB.you = {}; HUB.youData = DATA_AT; }    // your own documents changed
     // while a friend's portfolio is open, DOCS are theirs: your row keeps using your own documents from before
     const mine = !VIEW ? figures(HUB.you || (HUB.you = {}), DOCS, sel) : HUB.you && HUB.you.docs ? figures(HUB.you, HUB.you.docs, sel) : null;
-    const rows = [{ uid: 'me', me: true, name: (mine && mine.name) || CUR.name, s: mine }].concat(((hasAcct() && FRIENDS) || []).filter((f) => f.status === 'friends')
-      .map((f) => { const h = HUB.friends[f.uid] || {}; return { uid: f.uid, name: f.name, s: h.docs ? figures(h, h.docs, sel) : null, err: h.err }; }));
+    const rows = [{ uid: 'me', me: true, name: (mine && mine.name) || CUR.name, handle: hasAcct() ? MY_HANDLE || '' : '', s: mine }].concat(((hasAcct() && FRIENDS) || []).filter((f) => f.status === 'friends')
+      .map((f) => { const h = HUB.friends[f.uid] || {}; return { uid: f.uid, name: f.name, handle: cleanHandle(f.handle), s: h.docs ? figures(h, h.docs, sel) : null, err: h.err }; }));
     const v = (r) => (r.s && r.s.picked != null ? r.s.picked : -1e9);
     return rows.sort((a, b) => v(b) - v(a));
   }
@@ -2164,14 +2261,14 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   function panelInner() {
     const rows = hubRows(), viewing = VIEW ? VIEW.uid : 'me', inc = incoming(), P = period();
     const card = (r, i) => `<button type="button" class="pdf-card${r.uid === viewing ? ' cur' : ''}" data-hub="view" data-uid="${esc(r.uid)}" data-testid="panel-${r.me ? 'me' : 'friend'}">
-        <span class="pdf-top"><span class="pdf-rank">#${i + 1}</span><b>${esc(r.name || '')}</b></span>
+        <span class="pdf-top"><span class="pdf-rank">#${i + 1}</span><b>${esc(r.name || '')}</b></span>${r.handle ? `<small class="pdf-handle">@${esc(r.handle)}</small>` : ''}
         <span class="pdf-ytd ${toneH(r.s && r.s.picked)}" data-testid="panel-picked">${pctH(r.s && r.s.picked)}</span><small>${esc(P.label)}</small>
         <small>${r.err ? esc(r.err) : r.s ? otherPeriods(r.s, P.sel) : 'Loading…'}</small>
         <small class="pdf-tag">${r.me ? (viewing === 'me' ? 'You' : 'You · tap to go back') : r.uid === viewing ? 'Viewing now' : 'Tap to view'}</small></button>`;
     return `<div class="pdf-head"><h3>Friends · ${esc(P.label)}</h3><button type="button" class="pdf-add" data-hub="friends" data-testid="panel-add">+ Add friend</button></div>
       ${inc ? `<button type="button" class="pdf-note" data-hub="friends" data-testid="panel-requests">${inc} friend request${inc > 1 ? 's' : ''} waiting: tap to answer</button>` : ''}
       <div class="pdf-cards">${rows.map(card).join('')}</div>
-      ${rows.length === 1 ? '<p class="pdf-empty">Add friends to see their portfolios here and compare returns. They need an account on this site first: send them the link.</p>' : ''}`;
+      ${rows.length === 1 ? '<p class="pdf-empty">Add friends by their @username to see their portfolios here and compare returns. They need an account on this site first: send them the link.</p>' : ''}`;
   }
   window.pdFriendsPanel = () => {
     if (!hasAcct()) return '';
@@ -2301,7 +2398,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   })();
 })();
 </script>
-<meta name="pd-build" content="edabe9be1589 2026-10-02 02:36">
+<meta name="pd-build" content="edabe9be1589 2026-10-02 02:58">
 <style>
 :root{
   /* Apple-style system: SF (the system font on iPhone and Mac) for everything, quiet greys, one blue accent, green / red

@@ -402,6 +402,21 @@ try:
     sent.clear()
     ram.main(argv, http=FakeHttp(), send=send)
     check("a package naming another account is refused", sent == [])
+
+    # ---- a friendship made by @username: the asker's side has no email until it is accepted ----
+    class HandleHttp:
+        DOCS = {"handles/omar": {"uid": "Uomar", "pub": "PUB-omar"}, "directory/omar@example.com": {"uid": "Uomar", "pub": "PUB-omar"}}
+        def json(self, method, url, headers=None, body=None):
+            d = self.DOCS.get(urllib.parse.unquote(url.split("/documents/", 1)[1]))
+            return (200, {"fields": {k: {"stringValue": v} for k, v in d.items()}}) if d else (404, {})
+    hh = HandleHttp()
+    check("@username link: a request sent to @omar is confirmed by handles/omar (same account, same key)",
+          ram.confirmed_friend(hh, "T", {"uid": "Uomar", "pub": "PUB-omar", "handle": "omar"}) is True)
+    check("@username link: someone else's key under @omar is not confirmed, nor an unknown username",
+          ram.confirmed_friend(hh, "T", {"uid": "Uomar", "pub": "PUB-evil", "handle": "@Omar"}) is False
+          and ram.confirmed_friend(hh, "T", {"uid": "Uomar", "pub": "PUB-omar", "handle": "nobody"}) is False)
+    check("@username link: once accepted it carries the friend's email, and the email decides",
+          ram.confirmed_friend(hh, "T", {"uid": "Uomar", "pub": "PUB-omar", "handle": "renamed", "email": "omar@example.com"}) is True)
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 print("ALL PASS" if not fails else f"{fails} FAILED")

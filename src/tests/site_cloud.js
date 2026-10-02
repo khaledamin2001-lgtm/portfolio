@@ -110,6 +110,16 @@ function allowed(a, method, p, cur, next) {
     if (method === 'DELETE') return (!!a && a.email === m[1]) || admin;
     return !!a && a.verified && a.email === m[1] && sv(next, 'uid') === uid;
   }
+  // @usernames (FB.oldRules: the rules from before them, which have no handles and no email on accepting)
+  if (p === 'handles') return false;
+  if ((m = p.match(/^handles\/([^/]+)$/))) {
+    if (FB.oldRules) return false;
+    if (method === 'GET') return !!uid;
+    if (method === 'DELETE') return (!!cur && sv(cur, 'uid') === uid) || admin;
+    const dirPub = a && sv((FB.docs['directory/' + a.email] || {}).fields, 'pub');
+    if (!cur) return !!a && a.verified && /^[a-z][a-z0-9_]{2,19}$/.test(m[1]) && sv(next, 'uid') === uid && sv(next, 'pub') === dirPub;
+    return !!a && a.verified && sv(cur, 'uid') === uid && sv(next, 'uid') === uid && sv(next, 'pub') === dirPub;
+  }
   if ((m = p.match(/^links\/([^/]+)\/with$/))) return method === 'GET' && (me(m[1]) || admin);
   if ((m = p.match(/^links\/([^/]+)\/with\/([^/]+)$/))) {
     const [, u, o] = m;
@@ -118,7 +128,9 @@ function allowed(a, method, p, cur, next) {
     if (!cur) return (me(u) && a.verified && sv(next, 'status') === 'sent') || (me(o) && a.verified && sv(next, 'status') === 'received'
       && sv(next, 'email') === a.email && sv(next, 'pub') === sv((FB.docs['directory/' + a.email] || {}).fields, 'pub'));
     const changed = Object.keys(Object.assign({}, cur, next)).filter((k) => JSON.stringify(cur[k]) !== JSON.stringify(next[k]));
-    return changed.every((k) => k === 'status' || k === 'at') && sv(next, 'status') === 'friends' && ((me(o) && sv(cur, 'status') === 'sent') || (me(u) && sv(cur, 'status') === 'received'));
+    const sameEmail = (sv(next, 'email') || '') === (sv(cur, 'email') || '');
+    return changed.every((k) => k === 'status' || k === 'at' || (k === 'email' && !FB.oldRules)) && sv(next, 'status') === 'friends'
+      && ((me(o) && sv(cur, 'status') === 'sent' && (sameEmail || (a.verified && sv(next, 'email') === a.email))) || (me(u) && sv(cur, 'status') === 'received' && sameEmail));
   }
   if ((m = p.match(/^shares\/([^/]+)\/to\/([^/]+)$/))) {
     const [, o, v] = m;
@@ -412,6 +424,11 @@ print(json.dumps({"uid": p["uid"], "email": p["email"], "prefs": p["prefs"], "re
     await F.$t('friends-back').click(); await F.$t('account-back').click();
     await verifyEmail(E, EMAIL); await verifyEmail(F, EMAIL_B);
     check('each account is findable by its sign-in email once verified (directory, with its public key)', await until(() => FB.docs['directory/' + EMAIL] && FB.docs['directory/' + EMAIL_B]) && sv(FB.docs['directory/' + EMAIL_B].fields, 'uid') === uidB);
+    const hOf = (h) => sv((FB.docs['handles/' + h] || {}).fields, 'uid');
+    check('once the email is confirmed, each account gets an @username from its name (@omar, @sara), kept in its status line too',
+      await until(() => hOf('omar') === uid && hOf('sara') === uidB) && sv(FB.docs['status/' + uidB].fields, 'handle') === 'sara', JSON.stringify(Object.keys(FB.docs).filter((k) => k.startsWith('handles/'))));
+    const takeOver = firestore('PATCH', `https://firestore.googleapis.com${FSB}handles/omar`, { authorization: 'Bearer ' + identity('signInWithPassword', { email: EMAIL_B, password: PWB })[1].idToken }, JSON.stringify({ fields: { uid: { stringValue: uidB }, pub: { stringValue: sv(FB.docs['directory/' + EMAIL_B].fields, 'pub') } } }));
+    check("the rules refuse taking over someone else's @username", takeOver[0] === 403 && hOf('omar') === uid);
     check('the admin status line is written at sign-up (no figures)', !!FB.docs['status/' + uidB] && sv(FB.docs['status/' + uidB].fields, 'createdAt') && !/10,000|holding/i.test(JSON.stringify(FB.docs['status/' + uidB])));
     await F.$t('account-menu').click(); await F.$t('account-friends').click();
     await F.$t('friend-email').fill('nobody@example.com'); await F.$t('friend-add').click();
@@ -434,7 +451,9 @@ print(json.dumps({"uid": p["uid"], "email": p["email"], "prefs": p["prefs"], "re
     check('an ordinary account never sees the Admin button', !(await E.$t('account-admin').isVisible()));
     await E.$t('account-friends').click(); await E.$t('friend-accept').waitFor();
     await E.shot('friends-request');
+    FB.oldRules = true;   // accepting still works under the rules from before @usernames
     await E.$t('friend-accept').click(); await E.$t('friend-friends').waitFor({ timeout: 20000 }).catch(() => {});
+    FB.oldRules = false;
     check('accepting makes both sides friends and shares a copy at once', sv(FB.docs[`links/${uid}/with/${uidB}`].fields, 'status') === 'friends' && sv(FB.docs[`links/${uidB}/with/${uid}`].fields, 'status') === 'friends' && await until(() => FB.docs[`shares/${uid}/to/${uidB}`]));
     check('the copy is sealed (nothing in the clear)', !/Omar|holding|COMI/.test(sv(FB.docs[`shares/${uid}/to/${uidB}`].fields, 'pkg')));
     await E.$t('friends-back').click(); await E.$t('account-back').click();
@@ -462,6 +481,40 @@ print(r.seal_json(json.load(open(${JSON.stringify(path.join(TMP, 'snap.json'))})
     await E.$t('friend-remove').click();
     check('removing a friend deletes both sides and both copies', await until(() => !FB.docs[`links/${uid}/with/${uidB}`] && !FB.docs[`links/${uidB}/with/${uid}`] && !FB.docs[`shares/${uid}/to/${uidB}`] && !FB.docs[`shares/${uidB}/to/${uid}`]));
     await E.$t('friends-back').click(); await E.$t('account-back').click();
+    // ---- 8b. friends by @username: no email needed ----
+    await F.$t('account-menu').click(); await F.$t('account-friends').click(); await F.$t('my-handle').waitFor({ timeout: 15000 });
+    check('Friends shows your own @username, to copy or change', (await F.$t('my-handle').textContent()) === '@sara' && await F.$t('my-handle-copy').isVisible());
+    await F.$t('friend-email').fill('@nobody_here'); await F.$t('friend-add').click();
+    await F.page.waitForFunction(() => /Nobody has the username/.test((document.querySelector('#lock .lk-err') || {}).textContent || ''), null, { timeout: 15000 }).catch(() => {});
+    check('an unknown @username is refused, saying so', /Nobody has the username @nobody_here/.test(await F.lockErr()));
+    await F.$t('friend-email').fill('@Omar'); await F.$t('friend-add').click();
+    await F.$t('friend-sent').waitFor({ timeout: 15000 }).catch(() => {});
+    const sideF = (FB.docs[`links/${uidB}/with/${uid}`] || {}).fields, sideE = (FB.docs[`links/${uid}/with/${uidB}`] || {}).fields;
+    check("a request to @omar: the asker's side names the username and no email; the other side shows @sara",
+      sv(sideF, 'status') === 'sent' && sv(sideF, 'handle') === 'omar' && !sv(sideF, 'email') && sv(sideE, 'status') === 'received' && sv(sideE, 'handle') === 'sara');
+    check('the waiting request shows @omar, not an email', /@omar/.test(await F.$t('friend-sent').textContent()));
+    await F.shot('friends-handle');
+    await F.$t('friends-back').click(); await F.$t('account-back').click();
+    await E.$t('account-menu').click(); await E.$t('account-friends').click(); await E.$t('friend-accept').waitFor({ timeout: 15000 });
+    check('the request shows who asked by @username', /@sara/.test(await E.$t('friend-received').textContent()));
+    await E.$t('friend-accept').click(); await E.$t('friend-friends').waitFor({ timeout: 20000 }).catch(() => {});
+    check("accepting adds the accepter's own email to the asker's side, so a later username change cannot break it",
+      sv(FB.docs[`links/${uidB}/with/${uid}`].fields, 'status') === 'friends' && sv(FB.docs[`links/${uidB}/with/${uid}`].fields, 'email') === EMAIL && await until(() => FB.docs[`shares/${uid}/to/${uidB}`]));
+    // Omar changes his username: the old one is freed, the friendship keeps working
+    await E.$t('my-handle-change').click(); await E.$t('my-handle-input').fill('omar_k'); await E.$t('my-handle-save').click();
+    await E.page.waitForFunction(() => (document.querySelector('[data-testid=my-handle]') || {}).textContent === '@omar_k', null, { timeout: 15000 }).catch(() => {});
+    check('changing your username takes the new one and frees the old one', hOf('omar_k') === uid && !FB.docs['handles/omar'] && sv(FB.docs['status/' + uid].fields, 'handle') === 'omar_k');
+    await E.$t('friends-back').click(); await E.$t('account-back').click();
+    await F.$t('account-menu').click(); await F.$t('account-friends').click(); await F.$t('my-handle-change').click(); await F.$t('my-handle-input').fill('omar_k'); await F.$t('my-handle-save').click();
+    await F.page.waitForFunction(() => /is taken/.test((document.querySelector('#lock .lk-err') || {}).textContent || ''), null, { timeout: 15000 }).catch(() => {});
+    check("a username someone else holds is refused (\"@omar_k is taken\")", /@omar_k is taken/.test(await F.lockErr()) && hOf('omar_k') === uid && hOf('sara') === uidB);
+    delete FB.docs[`shares/${uidB}/to/${uid}`];
+    await F.page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('pd.share.')).forEach((k) => localStorage.removeItem(k)));   // forget "sent recently"
+    await F.$t('friends-back').click(); await F.$t('account-friends').click(); await F.$t('friend-view').waitFor({ timeout: 15000 });
+    check("after the username change Sara still shares with Omar (checked by his email now)", await until(() => FB.docs[`shares/${uidB}/to/${uid}`]));
+    await F.$t('friend-remove').waitFor(); F.page.once('dialog', (d) => d.accept()); await F.$t('friend-remove').click();
+    await until(() => !FB.docs[`links/${uid}/with/${uidB}`]);
+    await F.$t('friends-back').click(); await F.$t('account-back').click();
     // Sara asks again, so the reset below has a friend link to clean up
     await F.$t('account-menu').click(); await F.$t('account-friends').click(); await F.$t('friend-email').fill(EMAIL); await F.$t('friend-add').click();
     await until(() => FB.docs[`links/${uid}/with/${uidB}`]);
@@ -487,8 +540,8 @@ print(r.seal_json(json.load(open(${JSON.stringify(path.join(TMP, 'snap.json'))})
     await G.shot('admin');
     await G.page.locator('[data-testid=admin-row]', { hasText: 'Sara' }).locator('[data-testid=admin-reset]').click();
     await G.$t('admin-reset-confirm').fill('reset'); await G.$t('admin-reset-go').click();
-    const gone = await until(() => !FB.docs[`users/${uidB}`] && !Object.keys(FB.docs).some((k) => k.includes(uidB) || k === 'directory/' + EMAIL_B), 20000);
-    check('a reset deletes everything of the account (documents, friends, copies, directory, status) but not its sign-in', gone && !!FB.users[uidB], Object.keys(FB.docs).filter((k) => k.includes(uidB)).join(','));
+    const gone = await until(() => !FB.docs[`users/${uidB}`] && !FB.docs['handles/sara'] && !Object.keys(FB.docs).some((k) => k.includes(uidB) || k === 'directory/' + EMAIL_B), 20000);
+    check('a reset deletes everything of the account (documents, friends, copies, directory, @username, status) but not its sign-in', gone && !!FB.users[uidB], Object.keys(FB.docs).filter((k) => k.includes(uidB)).join(','));
     await F.page.reload(); await F.$t('live-password').waitFor({ timeout: 30000 });
     await F.$t('live-password').fill(PWB); await F.$t('live-password-submit').click();
     await F.page.waitForFunction(() => /reset by the site owner/.test((document.querySelector('#lock .lk-err') || {}).textContent || ''), null, { timeout: 30000 }).catch(() => {});
