@@ -181,6 +181,11 @@ def main(argv=None, http=None):
     print(f"main portfolio: {len(engine_docs)} documents; owner's account: {len(acct_docs)} documents"
           + (f", portfolio copied {has.get('migratedAt')}" if has.get("migratedFrom") else (", has a portfolio of its own" if has.get("inception") else ", no portfolio yet")))
     print("account email prefs: " + json.dumps({k: v for k, v in (pkg.get("prefs") or {}).items()}, sort_keys=True))
+    if has.get("inception") and not has.get("migratedFrom"):   # what the account holds now (names, dates and counts only)
+        nrows = sum(len(((v.get("data") or {}).get("rows")) or []) for k, v in acct_docs.items() if k.startswith("ledger/"))
+        print("account's own portfolio: " + json.dumps({"documents": sorted(acct_docs), "name": has.get("name"), "inception": has.get("inception"),
+              "trackFrom": has.get("trackFrom"), "historyImport": {k: (has.get("historyImport") or {}).get(k) for k in ("status", "from", "to", "months")},
+              "ledgerRows": nrows, "updated": max((v.get("updatedAt") or "") for v in acct_docs.values())}, sort_keys=True))
     if a.mode == "compare":
         if not has.get("migratedFrom"):
             print("nothing to compare: the account has no copy yet")
