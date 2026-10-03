@@ -331,5 +331,17 @@ subj, body, html = alarm_key.reminder(datetime.date(2026, 10, 9), datetime.date(
 check("alarm key email: subject with the date, body says tomorrow and how to renew", subj == "Portfolio: on-time alarm key expires 9 Oct 2026"
       and "expires tomorrow" in body and "cron-job.org" in body and "ENGINE_TOKEN" in body and "github_pat_" in body and "ENGINE_TOKEN" in html)
 
+import run_account_mail as _ram   # noqa: E402
+_t = tempfile.mkdtemp()
+os.makedirs(os.path.join(_t, "portfolio")); os.makedirs(os.path.join(_t, "market"))
+json.dump({"id": "marks", "data": {"months": {"2026-07": {"cash": 1, "benchClose": 9}, "2026-08": {"cash": 1}, "2999-01": {}}}}, open(os.path.join(_t, "portfolio", "marks.json"), "w"))
+json.dump({"benchClose": {"2026-07": 1, "2026-08": 2}, "cpiMoM": {"2026-08": 0.01}, "cpiSource": "s", "fxEom": {"2026-08": 50}, "cashRate": {"2026-08": 0.2}}, open(os.path.join(_t, "market", "macro.json"), "w"))
+_ram.macro_marks(_t)
+_m = json.load(open(os.path.join(_t, "portfolio", "marks.json")))["data"]["months"]
+check("account reports: closed months get the shared index close, CPI, USD/EGP and policy rate; a value already there stays",
+      _m["2026-07"]["benchClose"] == 9 and _m["2026-08"]["benchClose"] == 2 and _m["2026-08"]["cpi"] == 0.01 and _m["2026-08"]["cpiSource"] == "s"
+      and _m["2026-08"]["usdegp"] == 50 and _m["2026-08"]["cashRate"] == 0.2 and "benchClose" not in _m["2999-01"])
+shutil.rmtree(_t, ignore_errors=True)
+
 print(f"{'ALL PASS' if not fails else str(fails) + ' FAILED'}")
 sys.exit(1 if fails else 0)

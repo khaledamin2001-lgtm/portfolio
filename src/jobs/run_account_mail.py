@@ -200,6 +200,34 @@ def materialize(docs, shared, out):
         shutil.copyfile(os.path.join(shared, "bench.json"), os.path.join(out, "bench", "egx30.json"))
     for f in sorted(os.listdir(os.path.join(shared, "history"))):
         shutil.copyfile(os.path.join(shared, "history", f), os.path.join(out, "history", f))
+    macro_marks(out)
+
+
+def macro_marks(out):
+    """The month-end macro fields the setup-key portfolios store in their marks (index close, CPI, USD/EGP, policy rate),
+    filled from the shared macro data for every closed month that lacks them - what the site does when it reads an
+    account (lock.js macroMarks), so the job's reports, weekly summary and report card show the same figures. A value
+    already there is never replaced."""
+    mp, cp = os.path.join(out, "portfolio", "marks.json"), os.path.join(out, "market", "macro.json")
+    if not (os.path.exists(mp) and os.path.exists(cp)):
+        return
+    with open(mp, encoding="utf-8") as f:
+        doc = json.load(f)
+    mac = jc.load_data(cp, {}) or {}
+    months = ((doc.get("data") if isinstance(doc.get("data"), dict) else doc) or {}).get("months") or {}
+    cur = jc.cairo_today()[:7]
+    num = lambda x: isinstance(x, (int, float)) and not isinstance(x, bool)
+    for M, v in months.items():
+        if not isinstance(v, dict) or M >= cur:
+            continue
+        if not num(v.get("benchClose")) and num((mac.get("benchClose") or {}).get(M)):
+            v["benchClose"] = mac["benchClose"][M]
+        for key, series, src in (("cpi", "cpiMoM", "cpiSource"), ("usdegp", "fxEom", "fxSource"), ("cashRate", "cashRate", "cashRateSource")):
+            if not num(v.get(key)) and num((mac.get(series) or {}).get(M)):
+                v[key] = mac[series][M]
+                v[key + "Source"] = mac.get(src)
+    with open(mp, "w", encoding="utf-8") as f:
+        json.dump(doc, f)
 
 
 def alerts_email(name, items, site):
