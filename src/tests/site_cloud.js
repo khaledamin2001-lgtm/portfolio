@@ -339,6 +339,18 @@ print(json.dumps({"uid": p["uid"], "email": p["email"], "prefs": p["prefs"], "re
     if (await page.locator('#fs-xlsx').count()) {
       await page.click('#fs-xlsx'); await page.waitForTimeout(300);
       check('Reports tab: an account is told its month-end Excel and PDF come by email', /emailed to you/.test(await page.locator('#toast').textContent()));
+      // once the job has published the month's files (sealed to this account's key, run_account_mail.py publish_files)
+      const M0 = await page.locator('#fs-xlsx').getAttribute('data-month');
+      const folder = 'a/' + require('crypto').createHash('sha256').update('pd-account-files-v1:' + uid).digest('hex').slice(0, 24) + '/exports';
+      cp.execFileSync('python3', ['-c', `
+import sys, json, os; sys.path.insert(0, ${JSON.stringify(path.join(ROOT, 'src', 'jobs'))}); import store
+a = json.load(sys.stdin); k = {"pub": a["pub"]}; d = os.path.join(a["site"], a["folder"]); os.makedirs(d, exist_ok=True)
+open(os.path.join(d, "Test-Wb.xlsx.enc.json"), "wb").write(store.seal(k, b"PK-test-workbook", "Test-Wb.xlsx"))
+open(os.path.join(d, "index.enc.json"), "wb").write(store.seal(k, json.dumps([{"month": a["m"], "name": "Test-Wb.xlsx", "file": a["folder"] + "/Test-Wb.xlsx.enc.json"}]).encode(), "index.json"))`],
+        { input: JSON.stringify({ pub: keys.pub, site: SITE, folder, m: M0 }) });
+      await page.evaluate(() => { window.pdExportsReset(); return window.pdExports(); });
+      const [dl] = await Promise.all([page.waitForEvent('download', { timeout: 15000 }).catch(() => null), page.click('#fs-xlsx')]);
+      check('Reports tab: the account downloads its own month-end workbook, opened with its key', !!dl && dl.suggestedFilename() === 'Test-Wb.xlsx', dl ? dl.suggestedFilename() : 'no download: ' + (await page.locator('#toast').textContent()) + ' ' + JSON.stringify(await page.evaluate(() => window.pdExports())));
     } else check('Reports tab: the Download Excel button is there', false);
     await $t('account-menu').click(); await $t('account-email').click(); await $t('mail-off').click();
     for (let i = 0; i < 40 && FB.docs['mail/' + uid]; i++) await page.waitForTimeout(250);

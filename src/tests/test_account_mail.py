@@ -282,6 +282,14 @@ try:
             open(os.path.join(d, f"{n:02d}.html"), "w").write(html or "")
             for a in att or []:
                 open(os.path.join(d, f"{n:02d}-{a[0]}"), "wb").write(a[1])
+    # the site repository the month-end files are published to (a local bare repository standing in for GitHub)
+    site_bare, site_seed = os.path.join(tmp, "site.git"), os.path.join(tmp, "site-seed")
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", site_bare], check=True)
+    subprocess.run(["git", "clone", "-q", site_bare, site_seed], check=True, capture_output=True)
+    open(os.path.join(site_seed, "README.md"), "w").write("site\n")
+    for c in (["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "seed"], ["push", "-q", "origin", "HEAD:main"]):
+        subprocess.run(["git", "-C", site_seed] + c, check=True, capture_output=True)
+    os.environ["SITE_REMOTE"] = site_bare
     argv = ["--engine", eng, "--code", code, "--now", "2026-09-24T19:30:00Z"]     # Thursday 22:30 Cairo
     rc = ram.main(argv, http=FakeHttp(), send=send)
     check("the job succeeds", rc == 0)
@@ -350,6 +358,15 @@ try:
               and "Value at month-end" in rep["text"] and "10,005 EGP" in rep["text"] and "Return in Aug" in rep["text"] and "COMI" in rep["text"], json.dumps(names) + rep["text"][:600])   # private-scan: synthetic
     else:
         print("SKIP month-end PDF: no Playwright next to the tools (CI step 5f checks it)")
+    # the same files as downloads on the site: sealed to the account's key under a/<hash>/exports/, the list sealed too
+    chk = os.path.join(tmp, "site-check")
+    subprocess.run(["git", "clone", "-q", site_bare, chk], check=True, capture_output=True)
+    fdir = os.path.join(chk, ram.files_dir(GUID))
+    idx = json.loads(store.unseal(gacct, open(os.path.join(fdir, "index.enc.json"), "rb").read())) if os.path.exists(os.path.join(fdir, "index.enc.json")) else []
+    got = store.unseal(gacct, open(os.path.join(chk, idx[0]["file"]), "rb").read()) if idx else b""
+    check("month-end files on the site: the Aug-26 workbook sealed to the account's own key, listed in a sealed index, nothing readable in the clear",
+          idx and idx[0]["month"] == "2026-08" and idx[0]["name"] == "FriendPortfolio-Aug-26.xlsx" and got == next(a for a in rep["att"] if a[0].endswith(".xlsx"))[1]
+          and not [f for f in os.listdir(fdir) if not f.endswith(".enc.json")] and GUID not in ram.files_dir(GUID), json.dumps(idx))
     imp = gdoc("imports/2026-08") or {}
     check("month-end: the month is stamped as sent in the account", (imp.get("reports") or {}).get("emailedAt") and "reportsPending" not in imp, json.dumps(imp)[:300])
     # history import
@@ -532,6 +549,19 @@ try:
               and not any("/market__" in k or "/history__" in k for k in DB if k.startswith(f"users/{OUID}/docs/"))
               and (adoc(OUID, oacct, "sync/gmail") or {}).get("address") == "owner.gmail@example.com", json.dumps(sorted(k.rsplit('/', 1)[1] for k in DB if k.startswith(f'users/{OUID}/docs/'))))
         check("migrate: a second copy is refused", migrate_main.main(["--engine", eng, "--code", code, "--mode", "copy"], http=FakeHttp()) == 1)
+        # the main portfolio's month-end files move too: sealed again to the account's key, in its own folder on the site
+        mexp = os.path.join(code, "p", "khaled", "exports")
+        os.makedirs(mexp, exist_ok=True)
+        mkeys = os.path.join(code, "p", "khaled", "keys.json")
+        open(os.path.join(mexp, "Main-Aug-26.xlsx.enc.json"), "wb").write(store.seal(mkeys, b"PK-main-workbook", "Main-Aug-26.xlsx"))
+        json.dump([{"month": "2026-08", "name": "Main-Aug-26.xlsx", "file": "exports/Main-Aug-26.xlsx.enc.json"}], open(os.path.join(mexp, "index.json"), "w"))
+        rc_f = migrate_main.main(["--engine", eng, "--code", code, "--mode", "files"], http=FakeHttp())
+        chk2 = os.path.join(tmp, "site-check2")
+        subprocess.run(["git", "clone", "-q", os.environ["SITE_REMOTE"], chk2], check=True, capture_output=True)
+        ofd = os.path.join(chk2, ram.files_dir(OUID))
+        oidx = json.loads(store.unseal(oacct, open(os.path.join(ofd, "index.enc.json"), "rb").read())) if os.path.exists(os.path.join(ofd, "index.enc.json")) else []
+        check("migrate: the main portfolio's month-end files are in the owner account's folder, opened with the account's key",
+              rc_f == 0 and oidx and oidx[0]["month"] == "2026-08" and store.unseal(oacct, open(os.path.join(chk2, oidx[0]["file"]), "rb").read()) == b"PK-main-workbook", json.dumps(oidx))
         sent.clear(); fetches.clear()
         ram.main(["--engine", eng, "--code", code, "--now", "2026-09-29T19:30:00Z"], http=FakeHttp(), send=send)
         check("shadow: the owner's account reads the owner's Gmail and saves the import, but nothing is emailed to the owner",

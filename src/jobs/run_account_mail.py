@@ -52,7 +52,7 @@ its portfolio (the site says so when it is switched on). For each package this j
 Emails go from GMAIL_ADDRESS to the address in the package only. One account failing never stops the others; the job
 exits 1 (and emails the owner) only when nothing could be done at all. Logs carry counts, never figures or addresses.
 """
-import os, sys, json, base64, hashlib, argparse, datetime, subprocess, tempfile, shutil, urllib.request, urllib.error, urllib.parse
+import os, sys, json, base64, hashlib, argparse, datetime, subprocess, tempfile, shutil, time, urllib.request, urllib.error, urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
@@ -420,6 +420,60 @@ def report_page(code):
         from types import SimpleNamespace
         _PAGE["path"] = run_sync.desk_page(SimpleNamespace(code=code, config={"portfolioId": "account"}), work)
     return _PAGE["path"]
+
+
+FILES_SALT = "pd-account-files-v1:"     # site/lock.js acctFiles: the account's folder on the site is a/<hash>/exports/
+
+
+def files_dir(uid):
+    return "a/" + hashlib.sha256((FILES_SALT + uid).encode()).hexdigest()[:24] + "/exports"
+
+
+def publish_files(uid, pub_b64, priv, entries, work, remote=None):
+    """An account's month-end files on the site, for the Reports tab's downloads: every file sealed to the account's own
+    key ('portfolio-file-v1', as the owner's exports) under a/<hash of the uid>/exports/, and the list of them
+    (index.enc.json) sealed the same way, so nobody but the account sees what is there. entries: [(M, [(filename, bytes,
+    type)])]; a month already listed is replaced. One commit to the site repository (SITE_TOKEN), retried on a race."""
+    import publish
+    folder = files_dir(uid)
+    remote = remote or os.environ.get("SITE_REMOTE") or "https://github.com/khaledamin2001-lgtm/portfolio.git"
+    author = jc.author_args("SITE_COMMIT_AUTHOR", "Portfolio jobs <noreply@github.com>")
+    keys = {"pub": pub_b64}
+    last = ""
+    for wait in (0, 2, 4, 8):
+        if wait:
+            time.sleep(wait)
+        site = os.path.join(work, "site-files")
+        env = publish.clone(None, remote, site)
+        d = os.path.join(site, folder)
+        os.makedirs(d, exist_ok=True)
+        ip = os.path.join(d, "index.enc.json")
+        index = []
+        if os.path.exists(ip):
+            with open(ip, "rb") as f:
+                index = json.loads(store.unseal(priv, f.read()).decode("utf-8"))
+        for M, files in entries:
+            ent = {"month": M}
+            for fname, data, ctype in files:
+                with open(os.path.join(d, fname + ".enc.json"), "wb") as f:
+                    f.write(store.seal(keys, data, fname))
+                ent["pdf" if fname.endswith(".pdf") else "file"] = f"{folder}/{fname}.enc.json"
+                if not fname.endswith(".pdf"):
+                    ent["name"] = fname
+            index = [e for e in index if e.get("month") != M] + [ent]
+        index.sort(key=lambda e: e.get("month") or "", reverse=True)
+        with open(ip, "wb") as f:
+            f.write(store.seal(keys, json.dumps(index).encode(), "index.json"))
+        jc.git(site, "add", "--", folder)
+        if not jc.git(site, "diff", "--cached", "--name-only").stdout.strip():
+            return 0
+        jc.git(site, *author, "commit", "-q", "-m", "Account files: month-end report")
+        r = subprocess.run(["git", "-C", site, "push", "-q", "origin", "HEAD:main"], capture_output=True, text=True,
+                           env=dict(os.environ, GIT_TERMINAL_PROMPT="0", **env))
+        if r.returncode == 0:
+            return len(entries)
+        last = jc.redact(r.stderr.strip())[-200:]
+    raise jc.JobError("files", f"the month-end files could not be published: {last}")
 
 
 def month_end(code, data, M, name, work):
@@ -862,6 +916,11 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                         else:
                             raise jc.JobError("month-end", f"{M} was emailed but could not be marked as sent (the portfolio kept changing)")
                         notes.append(f"month-end {M} sent ({len(att)} files)")
+                        try:     # the same files as downloads on the site's Reports tab (never stops the rest)
+                            publish_files(pkg["uid"], keys["pub"], priv, [(M, att)], work)
+                            notes.append("files on the site")
+                        except Exception as e:
+                            notes.append(f"files not on the site ({getattr(e, 'step', type(e).__name__)})")
                         state["lastReport"] = f"{jc.short(M)} sent {today}"
                         changed = True
                     cur_docs = read_account(http, tok, pkg["uid"], priv)     # with the months marked as sent

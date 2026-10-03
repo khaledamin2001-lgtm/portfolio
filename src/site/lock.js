@@ -150,19 +150,33 @@
   }
   // month-end Excel workbooks, published encrypted under p/<id>/exports/ (exports/index.json lists them)
   let EXPORTS = null;
-  window.pdExports = async () => { if (EXPORTS) return EXPORTS; try { const r = await fetch(base() + 'exports/index.json?t=' + Date.now(), { cache: 'no-store' }); EXPORTS = r.ok ? await r.json() : []; } catch (e) { EXPORTS = []; } return EXPORTS; };
+  // an account's files (run_account_mail.py publish_files): a/<hash of its uid>/exports/, the index sealed too, so the site
+  // only shows that files exist to the account that can open them; entries carry paths from the site root
+  const acctFiles = async () => 'a/' + (await hex('pd-account-files-v1:' + (CUR.uid || String(CUR.id).replace(/^u_/, '')))).slice(0, 24) + '/exports/';
+  window.pdExports = async () => {
+    if (EXPORTS) return EXPORTS;
+    try {
+      if (CUR && CUR.cloud) {
+        const r = await fetch((await acctFiles()) + 'index.enc.json?t=' + Date.now(), { cache: 'no-store' });
+        EXPORTS = r.ok && PK8 ? JSON.parse(dec.decode(await unseal(await r.json(), 'portfolio-file-v1'))) : [];
+      } else { const r = await fetch(base() + 'exports/index.json?t=' + Date.now(), { cache: 'no-store' }); EXPORTS = r.ok ? await r.json() : []; }
+    } catch (e) { EXPORTS = []; }
+    return EXPORTS;
+  };
   // kind 'xlsx' (default): the Excel workbook (entry.file); 'pdf': the PDF factsheet (entry.pdf), both encrypted the same way
   const FILE_KINDS = { xlsx: { key: 'file', what: 'workbook', type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }, pdf: { key: 'pdf', what: 'PDF factsheet', type: 'application/pdf' } };
-  // accounts made on the site get their month-end files by email (run_account_mail.py), not as downloads here
-  window.pdExportsNote = (month) => (!CUR || !CUR.cloud ? null
-    : (mailPrefs() || {}).reports ? `Your month-end Excel workbook and PDF factsheet are emailed to you when a monthly statement is posted. Look for "month-end report ${month}" in your email.`
-      : 'Month-end Excel and PDF files are sent by email: open Account → Email updates and tick "Month-end report". They come each time a monthly statement is posted.');
+  window.pdExportsReset = () => { EXPORTS = null; };   // for tests: list the files again
+  // accounts made on the site get their month-end files by email (run_account_mail.py) and, from then on, here too; a month
+  // with no file here gets this note instead of a download
+  window.pdExportsNote = (month, ym) => (!CUR || !CUR.cloud || (EXPORTS || []).some((x) => x.month === (ym || month)) ? null
+    : (mailPrefs() || {}).reports ? `Your month-end Excel workbook and PDF factsheet are emailed to you when a monthly statement is posted, and can be downloaded here after that. Look for "month-end report ${month}" in your email.`
+      : 'Month-end Excel and PDF files come with the month-end report: open Account → Email updates and tick "Month-end report". They are made each time a monthly statement is posted.');
   window.pdDownloadExport = async (month, kind) => {
-    if (window.pdExportsNote(month)) throw new Error(window.pdExportsNote(month));
+    if (window.pdExportsNote(month, month)) throw new Error(window.pdExportsNote(month, month));
     if (!PK8) throw new Error('The portfolio is locked. Unlock it first.');
     const k = FILE_KINDS[kind || 'xlsx']; if (!k) throw new Error('Unknown file kind ' + kind);
     const list = await window.pdExports(); const x = list.find((e) => e.month === month); if (!x || !x[k.key]) throw new Error('No ' + k.what + ' published for ' + month);
-    const r = await fetch(base() + x[k.key] + '?t=' + Date.now(), { cache: 'no-store' }); if (!r.ok) throw new Error('Could not download the ' + k.what + ' (' + r.status + ')');
+    const r = await fetch((CUR.cloud ? '' : base()) + x[k.key] + '?t=' + Date.now(), { cache: 'no-store' }); if (!r.ok) throw new Error('Could not download the ' + k.what + ' (' + r.status + ')');
     const e = await r.json(); const bytes = await unseal(e, 'portfolio-file-v1');
     const fallback = kind === 'pdf' ? String(x.pdf).split('/').pop().replace(/\.enc\.json$/, '') : x.name;
     await downloads.save({ filename: e.name || fallback, data: new Blob([bytes], { type: k.type }) });

@@ -3,7 +3,7 @@
 (Firestore users/{uid}/docs, sealed to the account key), so every portfolio lives the same way. Engine workflow
 migrate-main.yml, by hand.
 
-    python3 migrate_main.py --engine DIR [--code DIR] --mode check|copy|compare
+    python3 migrate_main.py --engine DIR [--code DIR] --mode check|copy|compare|files
 
   check    reads both sides and prints what a copy would write (document names and counts only). Writes nothing.
   copy     writes the copy in ONE Firestore commit, refused when the account already holds a portfolio with transactions
@@ -18,6 +18,9 @@ migrate-main.yml, by hand.
                Thndr emails.
            From then on the account job runs that portfolio in SHADOW (the Gmail import, no emails) until the engine's
            config.json says movedToAccount; see run_account_mail.py.
+  files    the main portfolio's month-end files on the site (p/khaled/exports, sealed to the main key) sealed again to
+           the account's key and published in the account's own folder (run_account_mail.publish_files), so the Reports
+           tab keeps its downloads after the switch. Needs SITE_TOKEN.
   compare  the percentages profile (monthly returns, holding weights, trade count; tools/profile.js) of both copies side
            by side, and the ledger and month-end documents compared field by field. Prints differences only, never an
            amount.
@@ -165,7 +168,7 @@ def main(argv=None, http=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--engine", required=True)
     ap.add_argument("--code", default=jc.CODE_DEFAULT)
-    ap.add_argument("--mode", choices=("check", "copy", "compare"), default="check")
+    ap.add_argument("--mode", choices=("check", "copy", "compare", "files"), default="check")
     a = ap.parse_args(argv)
     engine = os.path.abspath(a.engine)
     keys_path = os.path.join(a.code, "p", "khaled", "keys.json")
@@ -186,6 +189,35 @@ def main(argv=None, http=None):
         print("account's own portfolio: " + json.dumps({"documents": sorted(acct_docs), "name": has.get("name"), "inception": has.get("inception"),
               "trackFrom": has.get("trackFrom"), "historyImport": {k: (has.get("historyImport") or {}).get(k) for k in ("status", "from", "to", "months")},
               "ledgerRows": nrows, "updated": max((v.get("updatedAt") or "") for v in acct_docs.values())}, sort_keys=True))
+    if a.mode == "files":
+        exp = os.path.join(a.code, "p", "khaled", "exports")
+        try:
+            with open(os.path.join(exp, "index.json"), encoding="utf-8") as f:
+                index = json.load(f)
+        except OSError:
+            index = []
+        entries = []
+        for e in index:
+            files = []
+            for key in ("file", "pdf"):
+                if e.get(key):
+                    with open(os.path.join(a.code, "p", "khaled", e[key]), "rb") as f:
+                        env = json.loads(f.read())
+                    data = store.unseal(priv, env)
+                    name = env.get("name") or (e.get("name") if key == "file" else os.path.basename(e[key]).replace(".enc.json", ""))
+                    files.append((name, data, "application/pdf" if key == "pdf" else ram.XLSX))
+            if files:
+                entries.append((e["month"], files))
+        if not entries:
+            print("no month-end files to carry over")
+            return 0
+        work = tempfile.mkdtemp(prefix="files-", dir=os.environ.get("RUNNER_TEMP") or None)
+        try:
+            n = ram.publish_files(pkg["uid"], akeys["pub"], apriv, entries, work)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+        print(f"month-end files: {sum(len(f) for _, f in entries)} files for {len(entries)} months now in the account's folder" + ("" if n else " (already there)"))
+        return 0
     if a.mode == "compare":
         if not has.get("migratedFrom"):
             print("nothing to compare: the account has no copy yet")
