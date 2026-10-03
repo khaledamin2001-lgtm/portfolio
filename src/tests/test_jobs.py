@@ -343,5 +343,25 @@ check("account reports: closed months get the shared index close, CPI, USD/EGP a
       and _m["2026-08"]["usdegp"] == 50 and _m["2026-08"]["cashRate"] == 0.2 and "benchClose" not in _m["2999-01"])
 shutil.rmtree(_t, ignore_errors=True)
 
+import migrate_main as _mm   # noqa: E402
+_eng = {"portfolio/settings": {"data": {"portfolioId": "khaled", "inception": "2025-08"}}, "ledger/y2026": {"data": {"rows": []}},
+        "imports/2026-08": {"data": {"fullMonth": True, "reports": {"factsheetSentAt": "2026-09-05T10:00:00Z"}, "reportsPending": True}},
+        "imports/2026-09": {"data": {"fullMonth": True, "reportsPending": True}}, "imports/2026-10": {"data": {"fullMonth": True, "reportsPending": True}},
+        "market/latest": {"data": {}}, "history/2026-09": {"data": {}}, "bench/egx30": {"data": {}}, "sync/state": {"data": {"alertsSent": {"exdiv:X": "2026-09-01"}}},
+        "sync/outbox": {"data": {}}}
+_acct = {"sync/mail": {"data": {"friendMailed": {"u1": "2026-09-01"}, "weeklySent": "2026-09-24"}, "updateTime": "t"}}
+_w, _n = _mm.plan_copy(_eng, _acct, {"sync": {"monthEndEmailed": {"2026-09": "2026-10-01"}, "weeklySent": "2026-10-01", "reportCardSent": "2026-09"}},
+                       {"address": "a@example.com", "appPassword": "x"}, "2026-10-03T00:00:00Z")
+_by = {f"{w['collection']}/{w['doc_id']}": w["data"] for w in _w}
+check("migrate: the portfolio's documents are copied, never the market data or an outbox; settings say where it came from",
+      set(_by) == {"portfolio/settings", "ledger/y2026", "imports/2026-08", "imports/2026-09", "imports/2026-10", "sync/state", "sync/mail", "sync/gmail"}
+      and _by["portfolio/settings"]["migratedFrom"] == "khaled")
+check("migrate: months the main portfolio already reported are stamped, a month still owed stays pending",
+      _by["imports/2026-08"]["reports"]["emailedAt"] == "2026-09-05T10:00:00Z" and "reportsPending" not in _by["imports/2026-08"]
+      and _by["imports/2026-09"]["reports"]["emailedAt"] == "2026-10-01" and _by["imports/2026-10"].get("reportsPending") is True)
+check("migrate: what was already sent carries over into the account's record, which keeps its own entries",
+      _by["sync/mail"]["friendMailed"] == {"u1": "2026-09-01"} and _by["sync/mail"]["alertsSent"] == {"exdiv:X": "2026-09-01"}
+      and _by["sync/mail"]["weeklySent"] == "2026-10-01" and _by["sync/mail"]["reportCardSent"] == "2026-09" and _by["sync/gmail"]["address"] == "a@example.com")
+
 print(f"{'ALL PASS' if not fails else str(fails) + ' FAILED'}")
 sys.exit(1 if fails else 0)

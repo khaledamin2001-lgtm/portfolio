@@ -162,6 +162,9 @@ def main(argv=None):
             jc.log(f"market: skipped ({why}; Cairo {plan['nowCairo'][11:16]})")
             return 0
         jc.log(f"market: {why}, {plan['today']} Cairo {plan['nowCairo'][11:16]}")
+        if ctx.config.get("movedToAccount"):
+            jc.log("market: the portfolio moved to its owner's account; the shared market data covers it")
+            return 0
         work = ctx.workdir()
         data = os.path.join(work, "data")
         step = "decrypt"

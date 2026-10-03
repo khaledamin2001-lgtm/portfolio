@@ -331,6 +331,16 @@ def versions_of(data_dir):
     return out
 
 
+def main_moved(engine_dir):
+    """True once the engine's portfolio (config.json movedToAccount) lives in its owner's site account: its own jobs
+    (inbox sync, market update, publish, morning brief) then stand down and the account path does the work."""
+    try:
+        with open(os.path.join(engine_dir, "config.json"), encoding="utf-8") as f:
+            return bool(json.load(f).get("movedToAccount"))
+    except (OSError, ValueError):
+        return False
+
+
 def load_data(path, default=None):
     if not os.path.exists(path):
         return default

@@ -67,6 +67,7 @@ PROJECT = "portfolio-desk-4d14a"
 FS = f"https://firestore.googleapis.com/v1/projects/{PROJECT}/databases/(default)/documents"
 MAIL_LABEL = b"portfolio-mail-v1"
 MAINKEY_LABEL = b"portfolio-mainkey-v1"
+MAIN_MOVED = False      # engine config.json movedToAccount: the owner's portfolio lives in the owner's account (set by main())
 MAIN_PRIV = None        # the main portfolio's key (p/khaled/keys.json, the same key that opens the mail packages): set by main()
 SHARE_LABEL = b"portfolio-share-v1"
 OWNER_HASH = "467022c320757248bf70115c83d305a7e4d139c35e1be5f8117fb30d7f769347"     # SHA-256 of the site owner's sign-in email (the address is not published here)
@@ -619,6 +620,17 @@ def ensure_main_key(http, tok, uid, acct_pub_b64, main_priv, portfolio_id="khale
     return True
 
 
+def drop_main_key(http, tok, uid):
+    """Removes users/{uid}.mainKey (the main portfolio moved into this account). Returns True when there was one."""
+    st, j = http.json("GET", f"{FS}/users/{uid}", headers={"Authorization": "Bearer " + tok})
+    if st != 200 or not (((j or {}).get("fields") or {}).get("mainKey") or {}).get("stringValue"):
+        return False
+    st, _ = http.json("PATCH", f"{FS}/users/{uid}?updateMask.fieldPaths=mainKey", {"fields": {}}, headers={"Authorization": "Bearer " + tok})
+    if st != 200:
+        raise jc.JobError("one login", f"Firestore answered {st} removing the main key")
+    return True
+
+
 def confirmed_friend(http, tok, f):
     """A link's name, email and key are written by the other person: seal to that key only when directory/{email} (which
     only the owner of that sign-in email can write) names the same account and the same key. A request sent to an
@@ -712,17 +724,26 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
     state = dict((state_doc or {}).get("data") or {})
     sent = dict(state.get("alertsSent") or {})
     prefs = pkg.get("prefs") or {}
-    # the site owner's own account is only a sign-in for the admin screen and friends: the main portfolio already reads
-    # the owner's Thndr emails and sends the owner's emails, so this account gets no import and no emails of its own
+    # The site owner's own account. Before the move it is only a sign-in for the admin screen and friends (the main
+    # portfolio reads the owner's Thndr emails and sends the owner's emails), so it gets no import and no emails.
+    # Once the main portfolio is copied into it (settings.migratedFrom, migrate_main.py) it runs in SHADOW: the same
+    # Gmail import as any account, every email suppressed, so the two copies can be compared. Once the engine says the
+    # portfolio moved (config.json movedToAccount) it is LIVE: an ordinary account with every email on by default.
     owner_acct = hashlib.sha256(str(token_claims(tok).get("email") or "").lower().encode()).hexdigest() == OWNER_HASH
+    migrated = owner_acct and bool(settings.get("migratedFrom"))
+    shadow, live_owner = migrated and not MAIN_MOVED, migrated and MAIN_MOVED
+    if live_owner:
+        prefs = {"alerts": True, "weekly": True, "reports": True, "reportCard": True, "leaderboard": True,
+                 **{k: v for k, v in prefs.items() if k != "shareMain"}, "gmail": True}
     # the monthly friends leaderboard: its own tick on the site; packages from before it follow the other emails
     lb_on = prefs.get("leaderboard", owner_acct or any(prefs.get(k, True) for k in ("alerts", "weekly", "reports")))
-    # the monthly trading report card: the same (the owner's sign-in account has no portfolio of its own: never)
-    card_on = not owner_acct and prefs.get("reportCard", any(prefs.get(k, True) for k in ("alerts", "weekly", "reports")))
-    # the yearly wrap-up (January) goes with the report card tick; the owner's, from the main portfolio, always
+    # the monthly trading report card: the same (the owner's sign-in account before the move: never)
+    card_on = (not owner_acct or live_owner) and prefs.get("reportCard", any(prefs.get(k, True) for k in ("alerts", "weekly", "reports")))
+    # the yearly wrap-up (January) goes with the report card tick; the owner's, from the main portfolio until the move
     wrap_on = owner_acct or card_on
-    if owner_acct:
-        prefs = {"alerts": False, "weekly": False, "reports": False, "gmail": False, "shareMain": prefs.get("shareMain")}
+    if owner_acct and not live_owner:
+        prefs = {"alerts": False, "weekly": False, "reports": False, "gmail": shadow, "shareMain": prefs.get("shareMain")}
+    quiet = shadow      # nothing from the import is emailed while the main portfolio still sends the owner's emails
     today = now.strftime("%Y-%m-%d")
     site = SITE
     work = tempfile.mkdtemp(prefix="acct-", dir=os.environ.get("RUNNER_TEMP") or None)
@@ -756,7 +777,7 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                         notes.append("history import done")
                     elif em.get("notify") and (prefs.get("alerts", True) or imported):
                         outgoing.append(emails.sync_email(em["subject"], em["parts"], account=True) if em.get("parts") else (em["subject"], em["text"], None))
-                        notes.append("import email sent")
+                        notes.append("import email not sent (shadow copy)" if quiet else "import email sent")
                     for k in (summary.get("digest") or {}).get("emailed") or []:
                         sent[k] = today
                     state["gmail"] = {"ok": True, "at": jc.now_iso(), "found": c.get("found", 0), "new": c.get("kept", 0),
@@ -767,7 +788,7 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                     state["gmail"] = {"ok": True, "at": jc.now_iso(), "found": 0, "new": 0, "applied": 0, "held": 0}
                     if (state.get("history") or {}).get("reason") != reason:
                         subj, body, html = history_wait_email(name, reason, site)
-                        if not dry:
+                        if not dry and not quiet:
                             send(pkg["email"], subj, body, html)
                     state["history"] = {"status": "waiting", "reason": reason, "at": jc.now_iso()}
                     notes.append("history import waiting for a monthly statement")
@@ -778,7 +799,7 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                     state["gmail"] = {"ok": False, "at": jc.now_iso(), "error": err, "errorSent": prev.get("errorSent")}
                     if prev.get("errorSent") != err:
                         subj, body, html = gmail_error_email(name, err, site)
-                        if not dry:
+                        if not dry and not quiet:
                             send(pkg["email"], subj, body, html)
                         state["gmail"]["errorSent"] = err
                     notes.append(f"gmail not done ({getattr(e, 'step', type(e).__name__)})")
@@ -786,7 +807,7 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                     data = os.path.join(work, "data")
                 changed = True
                 for subj, body, html in outgoing:
-                    if not dry:
+                    if not dry and not quiet:
                         send(pkg["email"], subj, body, html)
             if prefs.get("alerts", True) and overlay is None:
                 r = subprocess.run(["node", os.path.join(code, "src", "jobs", "account_alerts.js"), "--data", data, "--today", today], capture_output=True, text=True, timeout=300)
@@ -927,7 +948,7 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
             if wrap_on and not dry and now.month == 1 and now.day <= 10 and state.get("wrappedSent") != WY:
                 try:
                     cl = token_claims(tok)
-                    use_main = owner_acct and main_docs and cl.get("email_verified")
+                    use_main = owner_acct and not live_owner and main_docs and cl.get("email_verified")
                     wdocs = main_docs() if use_main else cur_docs
                     wname = ((wdocs.get("portfolio/settings") or {}).get("data") or {}).get("name") or name
                     if not ((wdocs.get("portfolio/settings") or {}).get("data") or {}).get("inception"):
@@ -961,8 +982,15 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                             changed = True
                 except Exception as e:      # never stops the rest; the next run tries again (until the 10th)
                     notes.append(f"wrapped not done ({getattr(e, 'step', type(e).__name__)})")
-            # one login: the owner's verified account holds the main portfolio's key (once)
-            if owner_acct and not dry and MAIN_PRIV is not None and token_claims(tok).get("email_verified"):
+            # one login: the owner's verified account holds the main portfolio's key (once) - until the portfolio moved
+            # into the account, when the key is taken away again so signing in opens the account's own copy
+            if live_owner and not dry:
+                try:
+                    if drop_main_key(http, tok, pkg["uid"]):
+                        notes.append("one login: the account now opens its own portfolio")
+                except Exception as e:
+                    notes.append(f"main key not removed ({getattr(e, 'step', type(e).__name__)})")
+            elif owner_acct and not dry and MAIN_PRIV is not None and token_claims(tok).get("email_verified"):
                 try:
                     if ensure_main_key(http, tok, pkg["uid"], keys["pub"], MAIN_PRIV):
                         notes.append("one login set up (the account opens the main portfolio)")
@@ -1035,8 +1063,9 @@ def main(argv=None, http=None, send=None):
         if not key:
             raise jc.JobError("mail key", "SETUP_KEY is not set")
         priv = store.unlock(keys, key)
-        global MAIN_PRIV
+        global MAIN_PRIV, MAIN_MOVED
         MAIN_PRIV = priv
+        MAIN_MOVED = jc.main_moved(os.path.abspath(a.engine))
         http = http or Http()
         step = "list"
         pkgs = list_packages(http)

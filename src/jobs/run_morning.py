@@ -35,6 +35,8 @@ def brief(code, data, today):
 
 def owner_part(a, today, send_owner):
     ctx = jc.Ctx(a.engine, a.code, a.now)
+    if ctx.config.get("movedToAccount"):
+        return "owner: the portfolio moved to the owner's account (its brief goes with the accounts)"
     if not ctx.config.get("morningBrief", ctx.config.get("portfolioId") == "khaled"):
         return "owner: not switched on"
     if (jc.jobs_state(ctx).get("morning") or {}).get("sent") == today and not a.manual:
@@ -59,20 +61,27 @@ def accounts_part(a, today, http, send):
         raise jc.JobError("mail key", "SETUP_KEY is not set")
     priv = store.unlock(keys, key)
     pkgs = ram.list_packages(http)
+    moved = jc.main_moved(os.path.abspath(a.engine))   # the owner's portfolio lives in the owner's account: its brief is here
     n = sent = bad = 0
     for i, p in enumerate(pkgs, 1):
         try:
             pkg = ram.open_mail_pkg(priv, p["pkg"])
-            if pkg.get("uid") != p["uid"] or not (pkg.get("prefs") or {}).get("morning"):
+            prefs = pkg.get("prefs") or {}
+            if pkg.get("uid") != p["uid"] or not (prefs.get("morning") or (moved and "morning" not in prefs)):
                 continue
-            n += 1
             tok, uid = ram.id_token(http, pkg["refresh"])
             if uid and uid != pkg["uid"]:
                 raise jc.JobError("sign-in", "the package belongs to another account")
-            if hashlib.sha256(str(ram.token_claims(tok).get("email") or "").lower().encode()).hexdigest() == ram.OWNER_HASH:
-                continue     # the owner's sign-in account: the main portfolio's brief is the owner's
+            owner = hashlib.sha256(str(ram.token_claims(tok).get("email") or "").lower().encode()).hexdigest() == ram.OWNER_HASH
+            if owner and not moved:
+                continue     # the owner's sign-in account before the move: the main portfolio's brief is the owner's
+            if not owner and not prefs.get("morning"):
+                continue     # the owner's moved portfolio gets the brief unless switched off; anyone else when ticked
             apriv, akeys = ram.account_key(pkg["pk8"])
             docs = ram.read_account(http, tok, pkg["uid"], apriv)
+            if owner and not ((docs.get("portfolio/settings") or {}).get("data") or {}).get("migratedFrom"):
+                continue
+            n += 1
             if not ((docs.get("portfolio/settings") or {}).get("data") or {}).get("inception"):
                 continue     # no portfolio yet
             state_doc = docs.get("sync/mail")

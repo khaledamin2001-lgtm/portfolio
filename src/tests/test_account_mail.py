@@ -229,6 +229,9 @@ try:
                 if uid_of(tok) != u: return 403, {"error": {"status": "PERMISSION_DENIED"}}
                 if method == "GET":
                     return (200, {"fields": PROFILES[u]}) if u in PROFILES else (404, {"error": {"status": "NOT_FOUND"}})
+                for fp in urllib.parse.parse_qs(url.split("?", 1)[1] if "?" in url else "").get("updateMask.fieldPaths", []):
+                    if fp not in body["fields"]:
+                        PROFILES.setdefault(u, {}).pop(fp, None)      # a masked field missing from the body is deleted
                 PROFILES.setdefault(u, {}).update(body["fields"]); profile_writes.append(u)
                 return 200, {}
             if path.startswith("users/"):
@@ -514,6 +517,43 @@ try:
     finally:
         jc.record_job = real_record
         DB[f"mail/{UID}"]["pkg"], DB[f"mail/{OUID}"]["pkg"] = upkg, opkg
+
+    # ---- moving the main portfolio into the owner's account: copy, shadow (no emails), then live ----
+    import migrate_main
+    os.environ["GMAIL_ADDRESS"], os.environ["GMAIL_APP_PASSWORD"] = "owner.gmail@example.com", "abcdefghijklmnop"
+    cfg_path = os.path.join(eng, "config.json")
+    cfg0 = open(cfg_path).read() if os.path.exists(cfg_path) else None
+    try:
+        before = set(k for k in DB if k.startswith(f"users/{OUID}/docs/"))
+        rc_m = migrate_main.main(["--engine", eng, "--code", code, "--mode", "copy"], http=FakeHttp())
+        oset = adoc(OUID, oacct, "portfolio/settings") or {}
+        check("migrate: the main portfolio is copied into the owner's account in one go (market data stays shared)",
+              rc_m == 0 and oset.get("migratedFrom") and oset.get("inception") and adoc(OUID, oacct, "ledger/y2026") is not None
+              and not any("/market__" in k or "/history__" in k for k in DB if k.startswith(f"users/{OUID}/docs/"))
+              and (adoc(OUID, oacct, "sync/gmail") or {}).get("address") == "owner.gmail@example.com", json.dumps(sorted(k.rsplit('/', 1)[1] for k in DB if k.startswith(f'users/{OUID}/docs/'))))
+        check("migrate: a second copy is refused", migrate_main.main(["--engine", eng, "--code", code, "--mode", "copy"], http=FakeHttp()) == 1)
+        sent.clear(); fetches.clear()
+        ram.main(["--engine", eng, "--code", code, "--now", "2026-09-29T19:30:00Z"], http=FakeHttp(), send=send)
+        check("shadow: the owner's account reads the owner's Gmail and saves the import, but nothing is emailed to the owner",
+              any(f["addr"] == "owner.gmail@example.com" for f in fetches) and not [m for m in sent if m["to"] == "owner@example.com"]
+              and ((adoc(OUID, oacct, "sync/state") or {}).get("seen") or {}).get("18a0b0c0d0e0f001"), json.dumps([[m["to"], m["subject"]] for m in sent]))
+        check("shadow: the one login stays (signing in still opens the main portfolio)", "mainKey" in PROFILES.get(OUID, {}))
+        cfg = json.load(open(cfg_path)) if cfg0 else {"portfolioId": "khaled", "name": "Main", "siteRepo": "x/y", "siteFolder": "p/khaled"}
+        json.dump({**cfg, "movedToAccount": True}, open(cfg_path, "w"))
+        sent.clear()
+        ram.main(["--engine", eng, "--code", code, "--now", "2026-09-24T19:30:00Z", "--weekly"], http=FakeHttp(), send=send)
+        mine = [m["subject"] for m in sent if m["to"] == "owner@example.com"]
+        check("live: the owner's account is an ordinary account now: its own weekly summary, and the one login is removed",
+              any("week" in x.lower() for x in mine) and "mainKey" not in PROFILES.get(OUID, {}), json.dumps(mine))
+        owner_sent.clear(); sent.clear()
+        run_morning.main(["--engine", eng, "--code", code, "--now", "2026-10-04T06:00:00Z"], http=FakeHttp(), send=send, send_owner=lambda ctx, s, t, h: owner_sent.append((s, t)) or "sent")
+        check("live: the morning brief comes from the account, not from the engine",
+              owner_sent == [] and [m["to"] for m in sent if "morning brief" in m["subject"]].count("owner@example.com") == 1, json.dumps([[m["to"], m["subject"]] for m in sent]))
+    finally:
+        if cfg0 is None:
+            os.path.exists(cfg_path) and os.remove(cfg_path)
+        else:
+            open(cfg_path, "w").write(cfg0)
 
     # ---- a friendship made by @username: the asker's side has no email until it is accepted ----
     class HandleHttp:

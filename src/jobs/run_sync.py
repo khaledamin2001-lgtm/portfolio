@@ -347,6 +347,24 @@ def main(argv=None):
             jc.log(f"sync: skipped ({why}; Cairo {plan0['nowCairo'][11:16]})")
             return 0
         jc.log(f"sync: {why}, {plan0['today']} Cairo {plan0['nowCairo'][11:16]}")
+        if ctx.config.get("movedToAccount"):
+            # the portfolio lives in its owner's site account now: the account job reads the Thndr emails; this run only
+            # keeps the site token check and records the slot (the email run's later steps follow it)
+            step = "token check"
+            t = token_check(ctx, plan0, jobs)
+            if t:
+                jc.log(t)
+            sj = jobs.setdefault("sync", {})
+            if slot != "manual":
+                sj.setdefault("slots", {})[slot] = plan0["today"]
+            sj.update({"at": jc.now_iso(), "status": "moved", "lastSlot": slot})
+            jc.save_jobs_state(ctx, jobs)
+            try:
+                jc.engine_commit(ctx, ["jobs.json"], f"jobs: sync {plan0['today']} {slot} (moved)")
+            except jc.PushRejected:
+                pass        # the next run records it
+            jc.log("sync: the portfolio moved to its owner's account; the account job reads its Thndr emails")
+            return 0
         work = ctx.workdir()
         data, inbox, run = (os.path.join(work, x) for x in ("data", "inbox", "run"))
         # [1,2] documents and PLAN
