@@ -6,8 +6,8 @@ migrate-main.yml, by hand.
     python3 migrate_main.py --engine DIR [--code DIR] --mode check|copy|compare
 
   check    reads both sides and prints what a copy would write (document names and counts only). Writes nothing.
-  copy     writes the copy in ONE Firestore commit, refused when the account already has a portfolio (starter documents
-           the site wrote at sign-up, with no portfolio in them, are replaced):
+  copy     writes the copy in ONE Firestore commit, refused when the account already holds a portfolio with transactions
+           (an empty starter portfolio from the site - no ledger rows, no statement imported - is replaced):
              - every engine document except the market data (market/, history/, bench/: accounts read the shared copy)
                and an unsent-email outbox; settings gain migratedFrom / migratedAt;
              - imports/<M>: a month the main portfolio already reported (reports.factsheetSentAt, or jobs.json
@@ -205,8 +205,9 @@ def main(argv=None, http=None):
         print("  " + n)
     if a.mode == "check":
         return 0
-    if has.get("inception") or has.get("migratedFrom"):
-        print("refused: the account already has a portfolio (nothing written)")
+    nrows = sum(len(((v.get("data") or {}).get("rows")) or []) for k, v in acct_docs.items() if k.startswith("ledger/"))
+    if has.get("migratedFrom") or nrows or any(k.startswith("imports/") for k in acct_docs):
+        print("refused: the account already has a portfolio with transactions in it (nothing written)")
         return 1
     # an account without a portfolio may hold empty starter documents from the site: they are replaced, each write
     # pinned to the version read (or to not existing), all in one commit
