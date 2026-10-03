@@ -3,7 +3,7 @@ import re, json, sys, os, shutil, hashlib
 REPO = sys.argv[1] if len(sys.argv) > 1 else 'repo'
 # "engine": the portfolio's private data repository; the site can edit a portfolio that has one (lock.js "editing from the site")
 # "engineDir": the folder of that repository holding this portfolio's data; "workflows": its own jobs (a kind left out has no button)
-PORTFOLIOS = [{"id": "khaled", "name": "Khaled's Portfolio", "engine": "khaledamin2001-lgtm/portfolio-engine"},
+PORTFOLIOS = [{"id": "khaled", "name": "Khaled's Portfolio", "engine": "khaledamin2001-lgtm/portfolio-engine", "moved": True},   # lives in the owner's account now
               {"id": "yassin", "name": "Yassin's Portfolio", "engine": "khaledamin2001-lgtm/portfolio-engine", "engineDir": "yassin",
                "workflows": {"market": "yassin-market.yml"}}]
 page = open('../portfolio-desk.html').read()

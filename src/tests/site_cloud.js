@@ -45,6 +45,8 @@ fs.cpSync(path.join(ROOT, 'src'), BLD, { recursive: true });
 sh('python3', ['build.py'], { cwd: BLD });
 fs.mkdirSync(SITE, { recursive: true });
 sh('python3', ['build_site.py', SITE], { cwd: path.join(BLD, 'site') });
+// the synthetic portfolio stands in for a setup-key portfolio: a real one that moved into its owner's account is not one
+{ const pf = JSON.parse(fs.readFileSync(path.join(SITE, 'portfolios.json'), 'utf8')); pf.forEach((p) => { delete p.moved; }); fs.writeFileSync(path.join(SITE, 'portfolios.json'), JSON.stringify(pf)); }
 sh('python3', [path.join(ROOT, 'src/site/make_keys.py'), path.join(SITE, 'p/khaled/keys.json'), path.join(TMP, 'mailsec')]);   // a throwaway mail key
 { const ix = path.join(SITE, 'index.html'), h = fs.readFileSync(ix, 'utf8'), m = h.match(/const OWNER_HASH = '([0-9a-f]{64})'/);
   if (!m) throw new Error('site_cloud: OWNER_HASH not found in the built page');

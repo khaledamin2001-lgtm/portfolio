@@ -34,7 +34,7 @@ const up = (url) => new Promise((res) => { http.get(url, (r) => { r.resume(); re
   const stop = () => { try { server.kill(); } catch (e) { /* gone */ } };
   process.on('exit', stop);
   for (let i = 0; i < 50 && !(await up(base + 'portfolios.json')); i++) await new Promise((r) => setTimeout(r, 100));
-  const portfolios = JSON.parse(fs.readFileSync(path.join(ROOT, 'portfolios.json')));
+  const all = JSON.parse(fs.readFileSync(path.join(ROOT, 'portfolios.json'))), portfolios = all.filter((p) => !p.moved), moved = all.filter((p) => p.moved);   // moved: lives in its owner's account
   const browser = await playwright.chromium.launch();
   try {
     for (const vp of [{ name: 'desktop', width: 1280, height: 900 }, { name: 'phone', width: 390, height: 844, isMobile: true, hasTouch: true }]) {
@@ -60,6 +60,7 @@ const up = (url) => new Promise((res) => { http.get(url, (r) => { r.resume(); re
       await firstPick.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
       const picks = await Promise.all(portfolios.map((p) => page.locator(`[data-testid="live-pick-${p.id}"]`).isVisible()));
       check(`${V} lock screen shows the portfolio picker (${portfolios.map((p) => p.id).join(', ')})`, picks.every(Boolean), `visible: ${picks.join(',')} after ${Date.now() - t0} ms`);
+      check(`${V} a portfolio that moved into its owner's account is not offered with a setup key (${moved.map((p) => p.id).join(', ') || 'none'})`, (await Promise.all(moved.map((p) => page.locator(`[data-testid="live-pick-${p.id}"]`).count()))).every((n) => n === 0));
       const locked = await page.evaluate(() => document.body.classList.contains('pd-locked') && !document.getElementById('lock').hidden);
       check(`${V} the app stays behind the lock (body.pd-locked, #lock shown)`, locked);
       const title = await page.title();

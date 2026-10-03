@@ -45,6 +45,8 @@ fs.cpSync(path.join(ROOT, 'src'), BLD, { recursive: true });
 sh('python3', ['build.py'], { cwd: BLD });
 fs.mkdirSync(SITE, { recursive: true });
 sh('python3', ['build_site.py', SITE], { cwd: path.join(BLD, 'site') });
+// the synthetic portfolio stands in for a setup-key portfolio: a real one that moved into its owner's account is not one
+{ const pf = JSON.parse(fs.readFileSync(path.join(SITE, 'portfolios.json'), 'utf8')); pf.forEach((p) => { delete p.moved; }); fs.writeFileSync(path.join(SITE, 'portfolios.json'), JSON.stringify(pf)); }
 fs.mkdirSync(path.join(SITE, 'p/khaled'), { recursive: true });
 fs.copyFileSync(KEYS, path.join(SITE, 'p/khaled/keys.json'));
 sh('python3', [path.join(ROOT, 'tools/export.py'), SYN, KEYS, path.join(SITE, 'p/khaled/data.enc.json')]);
