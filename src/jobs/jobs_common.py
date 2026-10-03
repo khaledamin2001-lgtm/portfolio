@@ -52,7 +52,7 @@ def short(m):
 
 
 # ---------------------------------------------------------------- masking (logs only)
-_SECRET_ENVS = ("SETUP_KEY", "GMAIL_APP_PASSWORD", "SITE_TOKEN", "GITHUB_TOKEN")
+_SECRET_ENVS = ("SETUP_KEY", "GMAIL_APP_PASSWORD", "SENDER_APP_PASSWORD", "SITE_TOKEN", "GITHUB_TOKEN")
 
 
 def redact(s):
@@ -61,7 +61,7 @@ def redact(s):
         v = os.environ.get(k, "").strip()
         if len(v) >= 6:
             s = s.replace(v, "***")
-            if k == "GMAIL_APP_PASSWORD":
+            if k in ("GMAIL_APP_PASSWORD", "SENDER_APP_PASSWORD"):
                 s = s.replace(v.replace(" ", ""), "***")
             if k == "SITE_TOKEN":
                 s = s.replace(base64.b64encode(f"x-access-token:{v}".encode()).decode(), "***")

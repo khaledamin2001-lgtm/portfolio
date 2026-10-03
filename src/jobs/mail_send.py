@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Send one email through Gmail SMTP (smtp.gmail.com:465, SSL) from GMAIL_ADDRESS with GMAIL_APP_PASSWORD.
+"""Send one email through Gmail SMTP (smtp.gmail.com:465, SSL) from the SENDING mailbox: SENDER_ADDRESS with
+SENDER_APP_PASSWORD (a Gmail made only for sending, so the owner's own address is not on every email) when both are set,
+else GMAIL_ADDRESS with GMAIL_APP_PASSWORD (the owner's Gmail, which the jobs also read Thndr emails from). The From
+line shows SENDER_NAME (default "Portfolio Desk").
 
 The only allowed recipient is the portfolio's own portfolio/settings.factsheetEmail (decrypted from the engine repo);
 any other address is refused. Plain text body plus an optional HTML alternative; attachments only for the portfolio's
@@ -14,7 +17,7 @@ own month-end files (workbook and PDF factsheet). run_account_mail.py uses build
 Env for tests: SMTP_HOST, SMTP_PORT, SMTP_SSL=0 (plain SMTP). Prints one status line, never the message or a secret."""
 import os, re, sys, ssl, time, smtplib, argparse
 from email.message import EmailMessage
-from email.utils import formatdate, make_msgid
+from email.utils import formatdate, make_msgid, formataddr
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
@@ -25,17 +28,18 @@ ADDR = re.compile(r"^[^@\s,;<>\"']+@[^@\s,;<>\"']+\.[A-Za-z]{2,}$")
 
 
 def _sender():
-    a = os.environ.get("GMAIL_ADDRESS", "").strip()
-    pw = os.environ.get("GMAIL_APP_PASSWORD", "").replace(" ", "").strip()
-    if not ADDR.match(a) or not pw:
-        raise jc.JobError("email", "GMAIL_ADDRESS / GMAIL_APP_PASSWORD are not set")
-    return a, pw
+    for ka, kp in (("SENDER_ADDRESS", "SENDER_APP_PASSWORD"), ("GMAIL_ADDRESS", "GMAIL_APP_PASSWORD")):
+        a = os.environ.get(ka, "").strip()
+        pw = os.environ.get(kp, "").replace(" ", "").strip()
+        if ADDR.match(a) and pw:
+            return a, pw
+    raise jc.JobError("email", "GMAIL_ADDRESS / GMAIL_APP_PASSWORD are not set")
 
 
 def build(sender, to, subject, text, html=None, attachments=None):
     """attachments: [(filename, bytes, 'maintype/subtype')]"""
     m = EmailMessage()
-    m["From"], m["To"], m["Subject"] = sender, to, subject
+    m["From"], m["To"], m["Subject"] = formataddr((os.environ.get("SENDER_NAME", "").strip() or "Portfolio Desk", sender)), to, subject
     m["Date"] = formatdate(localtime=False)
     m["Message-ID"] = make_msgid(domain=sender.split("@")[1])
     m.set_content(text or "")
@@ -105,7 +109,7 @@ def send_failure(ctx, engine, code, subject, body, html=None):
             to = ctx.failure_recipient()
         except Exception:
             to = None
-    to = to or sender          # the owner's own mailbox: the one address that is always safe
+    to = to or os.environ.get("GMAIL_ADDRESS", "").strip() or sender      # the owner's own mailbox: the one address that is always safe
     smtp_send(build(sender, to, subject, body, html), sender, pw, to)
     return "sent"
 

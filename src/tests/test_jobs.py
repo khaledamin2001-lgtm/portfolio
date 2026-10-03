@@ -363,5 +363,26 @@ check("migrate: what was already sent carries over into the account's record, wh
       _by["sync/mail"]["friendMailed"] == {"u1": "2026-09-01"} and _by["sync/mail"]["alertsSent"] == {"exdiv:X": "2026-09-01"}
       and _by["sync/mail"]["weeklySent"] == "2026-10-01" and _by["sync/mail"]["reportCardSent"] == "2026-09" and _by["sync/gmail"]["address"] == "a@example.com")
 
+import mail_send as _ms   # noqa: E402
+_env0 = {k: os.environ.get(k) for k in ("GMAIL_ADDRESS", "GMAIL_APP_PASSWORD", "SENDER_ADDRESS", "SENDER_APP_PASSWORD", "SENDER_NAME")}
+try:
+    os.environ.update({"GMAIL_ADDRESS": "owner@example.com", "GMAIL_APP_PASSWORD": "aaaa bbbb cccc dddd"})
+    for k in ("SENDER_ADDRESS", "SENDER_APP_PASSWORD", "SENDER_NAME"):
+        os.environ.pop(k, None)
+    first = _ms._sender()
+    os.environ.update({"SENDER_ADDRESS": "updates@example.com", "SENDER_APP_PASSWORD": "eeee ffff gggg hhhh"})
+    second = _ms._sender()
+    msg = _ms.build(second[0], "friend@example.com", "Hi", "text")
+    check("sending: the owner's Gmail until a sending-only Gmail is set, then that one, shown as Portfolio Desk",
+          first == ("owner@example.com", "aaaabbbbccccdddd") and second == ("updates@example.com", "eeeeffffgggghhhh")
+          and msg["From"] == "Portfolio Desk <updates@example.com>")
+    check("sending: the sending mailbox's password never shows in a log", "eeee ffff gggg hhhh" not in jc.redact("x eeee ffff gggg hhhh y") and "eeeeffffgggghhhh" not in jc.redact("eeeeffffgggghhhh"))
+finally:
+    for k, v in _env0.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
 print(f"{'ALL PASS' if not fails else str(fails) + ' FAILED'}")
 sys.exit(1 if fails else 0)
