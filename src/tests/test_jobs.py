@@ -369,13 +369,15 @@ try:
     os.environ.update({"GMAIL_ADDRESS": "owner@example.com", "GMAIL_APP_PASSWORD": "aaaa bbbb cccc dddd"})
     for k in ("SENDER_ADDRESS", "SENDER_APP_PASSWORD", "SENDER_NAME"):
         os.environ.pop(k, None)
-    first = _ms._sender()
+    try:
+        first = _ms._sender()
+    except jc.JobError as e:
+        first = e.step
     os.environ.update({"SENDER_ADDRESS": "updates@example.com", "SENDER_APP_PASSWORD": "eeee ffff gggg hhhh"})
     second = _ms._sender()
     msg = _ms.build(second[0], "friend@example.com", "Hi", "text")
-    check("sending: the owner's Gmail until a sending-only Gmail is set, then that one, shown as Portfolio Desk",
-          first == ("owner@example.com", "aaaabbbbccccdddd") and second == ("updates@example.com", "eeeeffffgggghhhh")
-          and msg["From"] == "Portfolio Desk <updates@example.com>")
+    check("sending: only ever from the Portfolio Desk mailbox, never the owner's Gmail (nothing is sent without it)",
+          first == "email" and second == ("updates@example.com", "eeeeffffgggghhhh") and msg["From"] == "Portfolio Desk <updates@example.com>")
     check("sending: the sending mailbox's password never shows in a log", "eeee ffff gggg hhhh" not in jc.redact("x eeee ffff gggg hhhh y") and "eeeeffffgggghhhh" not in jc.redact("eeeeffffgggghhhh"))
 finally:
     for k, v in _env0.items():

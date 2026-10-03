@@ -49,7 +49,7 @@ its portfolio (the site says so when it is switched on). For each package this j
   8. saves {alertsSent, weeklySent, gmail, friendMailed, shares, leaderboardSent, reportCardSent, wrappedSent, lastReport} back to the account as users/{uid}/docs/sync__mail, encrypted to the account key.
   9. one login: the site owner's verified account gets users/{uid}.mainKey once (the MAIN portfolio's key, sealed to the
      account's own key, ensure_main_key), so signing in with its email and password opens the main portfolio directly.
-Emails go from GMAIL_ADDRESS to the address in the package only. One account failing never stops the others; the job
+Emails go from the Portfolio Desk mailbox (SENDER_ADDRESS) to the address in the package only. One account failing never stops the others; the job
 exits 1 (and emails the owner) only when nothing could be done at all. Logs carry counts, never figures or addresses.
 """
 import os, sys, json, base64, hashlib, argparse, datetime, subprocess, tempfile, shutil, time, urllib.request, urllib.error, urllib.parse

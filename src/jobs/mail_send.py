@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Send one email through Gmail SMTP (smtp.gmail.com:465, SSL) from the SENDING mailbox: SENDER_ADDRESS with
-SENDER_APP_PASSWORD (a Gmail made only for sending, so the owner's own address is not on every email) when both are set,
-else GMAIL_ADDRESS with GMAIL_APP_PASSWORD (the owner's Gmail, which the jobs also read Thndr emails from). The From
-line shows SENDER_NAME (default "Portfolio Desk").
+"""Send one email through Gmail SMTP (smtp.gmail.com:465, SSL) from the Portfolio Desk mailbox: SENDER_ADDRESS with
+SENDER_APP_PASSWORD (a Gmail made only for sending). The owner's own Gmail (GMAIL_ADDRESS / GMAIL_APP_PASSWORD) is only
+read for Thndr emails and never sends. The From line shows SENDER_NAME (default "Portfolio Desk").
 
 The only allowed recipient is the portfolio's own portfolio/settings.factsheetEmail (decrypted from the engine repo);
 any other address is refused. Plain text body plus an optional HTML alternative; attachments only for the portfolio's
@@ -12,7 +11,7 @@ own month-end files (workbook and PDF factsheet). run_account_mail.py uses build
     python3 mail_send.py --failure JOB --engine DIR [--code DIR] [--step S] [--error E]
         the workflow's last-resort failure step: "Portfolio: <JOB> FAILED <Cairo date>". Skipped when the job already
         emailed its own failure (marker file, see jobs_common.failure_mark). When the settings cannot be decrypted
-        (e.g. the setup key itself is the problem) it falls back to GMAIL_ADDRESS - the sender's own mailbox.
+        (e.g. the setup key itself is the problem) it goes to GMAIL_ADDRESS - the owner's own mailbox.
 
 Env for tests: SMTP_HOST, SMTP_PORT, SMTP_SSL=0 (plain SMTP). Prints one status line, never the message or a secret."""
 import os, re, sys, ssl, time, smtplib, argparse
@@ -28,12 +27,13 @@ ADDR = re.compile(r"^[^@\s,;<>\"']+@[^@\s,;<>\"']+\.[A-Za-z]{2,}$")
 
 
 def _sender():
-    for ka, kp in (("SENDER_ADDRESS", "SENDER_APP_PASSWORD"), ("GMAIL_ADDRESS", "GMAIL_APP_PASSWORD")):
-        a = os.environ.get(ka, "").strip()
-        pw = os.environ.get(kp, "").replace(" ", "").strip()
-        if ADDR.match(a) and pw:
-            return a, pw
-    raise jc.JobError("email", "GMAIL_ADDRESS / GMAIL_APP_PASSWORD are not set")
+    """The Portfolio Desk mailbox, the only one any email is sent from. The owner's own Gmail (GMAIL_*) is never used to
+    send: without the sending mailbox nothing goes out (the job reports it)."""
+    a = os.environ.get("SENDER_ADDRESS", "").strip()
+    pw = os.environ.get("SENDER_APP_PASSWORD", "").replace(" ", "").strip()
+    if not ADDR.match(a) or not pw:
+        raise jc.JobError("email", "SENDER_ADDRESS / SENDER_APP_PASSWORD (the Portfolio Desk mailbox) are not set")
+    return a, pw
 
 
 def build(sender, to, subject, text, html=None, attachments=None):
