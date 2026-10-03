@@ -20,10 +20,12 @@ Prints one JSON line of counts; never a subject, address or secret."""
 import os, re, sys, ssl, json, base64, imaplib, argparse, datetime, email
 from email import policy
 
-QUERY = 'from:no-reply@system.thndr.app (subject:Invoice OR subject:E-statement) -subject:"US Market" after:{after}'
+QUERY = ('from:(no-reply@system.thndr.app OR no-reply@mail.thndr.app) (subject:Invoice OR subject:E-statement OR subject:"top-up request" '
+         'OR subject:"withdrawal has been processed" OR subject:"Cash Dividends Added" OR subject:"custody fees") -subject:"US Market" after:{after}')
 # only the monthly statements (the history import looks for its starting point first, without downloading every invoice)
 QUERY_MONTHLY = 'from:no-reply@system.thndr.app {{subject:"monthly E-statement" subject:"requested E-statement"}} -subject:"US Market" after:{after}'
-KEEP = ("Your Thndr Invoice", "Your requested E-statement", "Your monthly E-statement")
+KEEP = ("Your Thndr Invoice", "Your requested E-statement", "Your monthly E-statement", "Your top-up request has been accepted",
+        "Your withdrawal has been processed", "Cash Dividends Added", "Your annual custody fees")
 ALL_MAIL = '"[Gmail]/All Mail"'
 
 
@@ -141,6 +143,29 @@ def fetch(after, seen, out_dir, addr=None, pw=None, query=None):
     with open(os.path.join(out_dir, "manifest.json"), "w") as f:
         json.dump(manifest, f)
     return counts
+
+
+def mail_floor(settings, marks, imports, fallback):
+    """The Gmail search start 'YYYY/MM/DD': everything since the portfolio's months stopped being final - the day after its
+    last month closed by a monthly statement (imports/<M>.fullMonth, or a non-provisional 'statement' / 'reconstructed'
+    mark), or the day tracking started - less 3 days, and never later than `fallback` (the last run's window). Older
+    emails belong to months the statements already settled; already-seen ids are skipped, so a wide window costs only
+    the header fetch."""
+    def closed(m):
+        im, mk = (imports or {}).get(m) or {}, (marks or {}).get(m) or {}
+        return bool(im.get("fullMonth")) or (not mk.get("provisional") and mk.get("source") in ("statement", "reconstructed"))
+    cands = []
+    last = max((m for m in set(marks or {}) | set(imports or {}) if re.match(r"^\d{4}-\d{2}$", m) and closed(m)), default=None)
+    if last:
+        y, mo = int(last[:4]), int(last[5:])
+        cands.append(datetime.date(y + (mo == 12), 1 if mo == 12 else mo + 1, 1))
+    tf = (settings or {}).get("trackFrom")
+    if tf and re.match(r"^\d{4}-\d{2}-\d{2}$", tf):
+        cands.append(datetime.date.fromisoformat(tf))
+    fb = datetime.date(*map(int, fallback.split("/")))
+    if not cands:
+        return fallback
+    return min(fb, max(cands) - datetime.timedelta(days=3)).strftime("%Y/%m/%d")
 
 
 def skip_ids(seen, assets):

@@ -176,6 +176,7 @@ function parseInvoices(lines) {
 function applyInvoice(v, entry) {
   if (!v.d || !v.type || !v.qty || v.total == null) { entry.reasons.push(`could not read an invoice block (${v.name || 'unknown security'})`); return; }
   if (settings.trackFrom && v.d <= settings.trackFrom) { entry.unchanged++; entry.notes.push(`${v.d} ${v.type} ${v.name || v.code}: before tracking started (${settings.trackFrom}), already in the starting holdings`); return; }
+  if (monthClosed(v.d.slice(0, 7))) { entry.unchanged++; entry.notes.push(`${v.d} ${v.type} ${v.name || v.code}: ${lbl(v.d.slice(0, 7))} is already final from its monthly statement`); return; }
   // a stock: the asset already listed under the invoice ISIN's ticker, else the one with its name
   const fund = v.fund, tk = fund ? null : isinTicker(v.code), byTk = tk && Object.values(assets).find((x) => (x.symbol || '').toUpperCase() === tk.s);
   const name = fund ? v.code.toLowerCase() : byTk ? byTk.name : resolveName(v.name).name;
@@ -225,6 +226,32 @@ function applyInvoiceEmail(blocks, entry) {
     entry.reasons.push('nothing from this invoice email was applied (all its trades are written together or not at all)');
     return 'hold';
   }
+  return entry.changes.length ? 'applied' : 'unchanged';
+}
+
+// ---------- money emails (top-ups, withdrawals, dividends, custody fees) ----------
+// They carry no account number, so they are trusted as the Gmail owner's own (sender verified). Each row is added
+// unless the ledger already has it (same type and amount within 3 days, a dividend on the same stock); nothing in a
+// month a statement already closed, or on or before tracking started. The monthly statement still corrects them.
+const MONEY = new Set(['topup', 'withdrawal', 'dividend', 'custody']);
+const cairoDate = (ms) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(new Date(+ms));
+function monthClosed(m) {
+  return !!((imports[m] && imports[m].fullMonth) || (marks[m] && !marks[m].provisional && (marks[m].source === 'statement' || marks[m].source === 'reconstructed')));
+}
+function applyMoneyEmail(kind, parsed, d, entry) {
+  if (!parsed || parsed.error) { entry.reasons.push(`could not read this email: ${(parsed && parsed.error) || 'unknown format'}`); return 'hold'; }
+  if (parsed.ignore) { entry.notes.push(`${parsed.ignore}; nothing to do`); return 'skip'; }
+  if (settings.trackFrom && d <= settings.trackFrom) { entry.notes.push(`${d}: before tracking started (${settings.trackFrom}), already in the starting holdings`); return 'skip'; }
+  if (monthClosed(d.slice(0, 7))) { entry.notes.push(`${lbl(d.slice(0, 7))} is already final from its monthly statement; nothing to do`); return 'skip'; }
+  parsed.rows.forEach((r) => {
+    const a = r.ticker ? ((Object.values(assets).find((x) => (x.symbol || '').toUpperCase() === r.ticker) || {}).name || r.ticker) : r.name;
+    const row = { d, t: r.t, amt: r2(r.amt), acc: 'Main', ...(a ? { a } : {}) };
+    const hit = tx.find((t) => !consumed.has(t.id) && t.t === row.t && Math.abs((t.amt || 0) - row.amt) < 0.01 && days(t.d, d) <= 3 &&
+      (row.t !== 'Dividend' || (t.a || '').toLowerCase() === (a || '').toLowerCase()));
+    if (hit) { consumed.add(hit.id); entry.unchanged++; return; }
+    const add = { id: newId(), ...row, src: `email-${d}` };
+    tx.push(add); consumed.add(add.id); touch(d); entry.changes.push(`added ${desc(add)}`);
+  });
   return entry.changes.length ? 'applied' : 'unchanged';
 }
 
@@ -399,7 +426,7 @@ async function run() {
     // may have arrived since. Still held, it is not reported again.
     const prev = state.seen[msg.id], retry = !!(prev && prev.status === 'hold' && prev.kind && prev.kind !== 'invoice');
     if (prev && !retry) { if (prev.kind === 'invoice' && needsTicker()) await healFromInvoice(pdfjs, msg); continue; }
-    const kind = /invoice/i.test(msg.subject) ? 'invoice' : /monthly e-statement/i.test(msg.subject) ? 'monthly' : /requested e-statement/i.test(msg.subject) ? 'requested' : null;
+    const kind = /invoice/i.test(msg.subject) ? 'invoice' : /monthly e-statement/i.test(msg.subject) ? 'monthly' : /requested e-statement/i.test(msg.subject) ? 'requested' : TS.moneyKind(msg.subject);
     const entry = { id: msg.id, subject: msg.subject, date: msg.date, kind, status: 'ignored', changes: [], reasons: [], notes: [], unchanged: 0, ...(retry ? { retry: true } : {}) };
     log.push(entry);
     if (kind) {
@@ -409,6 +436,11 @@ async function run() {
         const auth = TS.authCheck(raw);
         entry.sender = { from: auth.from, dkim: auth.dkim, spf: auth.spf, ok: auth.ok };
         if (!auth.ok) throw Object.assign(new Error(`sender not verified: From ${auth.from || '(none)'}, DKIM ${auth.dkim} — nothing from it was used`), { held: true });
+        if (MONEY.has(kind)) {   // a top-up, withdrawal, dividend or custody fee: the body says it, no PDF
+          entry.status = applyMoneyEmail(kind, TS.parseMoneyEmail(kind, TS.bodyText(raw)), cairoDate(msg.date), entry);
+          state.seen[msg.id] = { subject: msg.subject, date: msg.date, kind, status: entry.status, at: new Date().toISOString() };
+          continue;
+        }
         const att = TS.attachments(raw);
         const docs = [];
         for (const a of att) docs.push({ filename: a.filename, lines: await TS.pdfLines(pdfjs, a.bytes) });
@@ -492,7 +524,7 @@ async function run() {
     email: applied.length || holds.length || alert || heads.length ? {
       subject: holds.length ? `${who}: ${holds.length} Thndr email${holds.length > 1 ? 's' : ''} need${holds.length > 1 ? '' : 's'} your review` : applied.some((e) => e.monthly) ? `${who}: ${applied.filter((e) => e.monthly).map((e) => lbl(e.monthly)).join(', ')} statement posted` : alert && !applied.length ? `${who}: ${alert.map(lbl).join(', ')} Thndr statement${alert.length > 1 ? 's have' : ' has'} not arrived` : applied.length ? `${who}: updated from Thndr` : `${who}: heads-up — ${heads.length > 1 ? `${heads.length} things to look at` : heads[0].text.split(' (')[0].split(';')[0]}`,
       text: lines.join('\n').replace(/\n+$/, '') + '\n\n' + SITE_URL,
-      notify: holds.length > 0 || !!alert || heads.length > 0 || applied.some((e) => e.monthly || e.kind !== 'invoice'),
+      notify: holds.length > 0 || !!alert || heads.length > 0 || applied.some((e) => e.monthly || (e.kind !== 'invoice' && !MONEY.has(e.kind))),
       // the same content in pieces, for the HTML email (src/jobs/emails.py sync_email)
       parts: {
         name: who, url: SITE_URL, heads: heads.map((it) => it.text),
@@ -559,4 +591,4 @@ function toolSha() {
   return { sync: sha('sync.js'), statement: sha('statement.js'), engine: sha('engine.js'), engine2: sha('engine2.js'), at: new Date().toISOString() };
 }
 if (require.main === module) run().catch((e) => { console.error(e); process.exit(1); });
-module.exports = { parseInvoices, applyInvoice, applyInvoiceEmail, applyStatement, monthlyPending, missingStatements, digest, drawdownCheck, lbl, toolSha, run, _state: () => ({ tx, assets, changed, settings, marks, log }), _reset };
+module.exports = { parseInvoices, applyInvoice, applyInvoiceEmail, applyMoneyEmail, applyStatement, monthlyPending, missingStatements, digest, drawdownCheck, lbl, toolSha, run, _state: () => ({ tx, assets, changed, settings, marks, log }), _reset };

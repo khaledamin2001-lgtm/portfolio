@@ -36,7 +36,7 @@ import os, re, sys, json, subprocess
 ROOT = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
 
 # public addresses the code legitimately mentions: the broker's sender address (sender verification) and a placeholder
-ALLOW_EMAILS = {'no-reply@system.thndr.app', 'you@gmail.com', 'noreply@anthropic.com', 'noreply@github.com'}
+ALLOW_EMAILS = {'no-reply@system.thndr.app', 'no-reply@mail.thndr.app', 'you@gmail.com', 'noreply@anthropic.com', 'noreply@github.com'}
 ALLOW_EMAIL_DOMAINS = ('example.com', 'example.org', 'example.net', 'users.noreply.github.com')
 ALLOW_EMAIL_TLDS = ('.example', '.test', '.invalid', '.localhost')
 # numbers verified as not private: ms per day; the made-up CSV-import example in app.html (a TMG Holding line that is

@@ -58,5 +58,39 @@ for (const [label, order] of [['cash first', [cash, mf]], ['fund statement first
   a = S._state().assets['Ibn sina pharma'];
   check('a stock stored without a ticker is healed by its next invoice', a.symbol === 'ISPH' && S._state().changed.newAssets['Ibn sina pharma'].symbol === 'ISPH' && /ticker ISPH recorded/.test(e.notes.join()), JSON.stringify([a, e.notes]));
 }
+
+// 4. money emails: top-ups, withdrawals, dividends, custody fees (synthetic amounts)
+{
+  const raw = (subject, body, enc) => Buffer.from(`From: Thndr <no-reply@mail.thndr.app>\r\nSubject: ${subject}\r\nMIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary="b1"\r\n\r\n--b1\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: ${enc}\r\n\r\n${body}\r\n--b1--\r\n`).toString('base64url');
+  const qp = 'Hey Test,\r\n\r\nYour top up request of EGP\r\n12,345.0 has been added to your Th=\r\nndr wallet =E2=9A=A1.';
+  check('email body: quoted-printable text/plain is read', /top up request of EGP 12,345\.0 has been added to your Thndr wallet ⚡/.test(TS.bodyText(raw('Your top-up request has been accepted', qp, 'quoted-printable'))), TS.bodyText(raw('x', qp, 'quoted-printable')));
+  check('money kinds by subject', TS.moneyKind('Your top-up request has been accepted ') === 'topup' && TS.moneyKind('Your withdrawal has been processed ') === 'withdrawal'
+    && TS.moneyKind('Cash Dividends Added') === 'dividend' && TS.moneyKind('Your annual custody fees ') === 'custody' && TS.moneyKind('Withdrawal request submitted ') === null && TS.moneyKind('You are eligible for TMGH cash dividends') === null);
+  const E = () => ({ changes: [], reasons: [], notes: [], unchanged: 0 });
+  const assets = { 'TMG Holding': { name: 'TMG Holding', symbol: 'TMGH' } };
+  const marks = { '2026-08': { source: 'statement', provisional: false } }, imports = { '2026-08': { fullMonth: true } };
+  S._reset([{ id: 'd1', d: '2026-09-29', t: 'Deposit', amt: 5000, acc: 'Main' }], assets, {}, { marks, imports });   // private-scan: synthetic
+  let e = E(), st = S.applyMoneyEmail('topup', TS.parseMoneyEmail('topup', 'top up request of EGP 5,000.0 has been added'), '2026-09-29', e);
+  check('a top-up the ledger already has (same day, same amount) is not added again', st === 'unchanged' && S._state().tx.length === 1, JSON.stringify([st, e]));
+  e = E(); st = S.applyMoneyEmail('topup', TS.parseMoneyEmail('topup', 'top up request of EGP 5,000.0 has been added'), '2026-09-30', e);
+  check('a second top-up of the same amount is a new deposit', st === 'applied' && S._state().tx.filter((t) => t.t === 'Deposit').length === 2, JSON.stringify(e));
+  e = E(); st = S.applyMoneyEmail('withdrawal', TS.parseMoneyEmail('withdrawal', 'Requested Amount: EGP 1,002.50 Withdrawal Fees: EGP 2.5 Transferred Amount: EGP 1,000.00'), '2026-09-15', e);   // private-scan: synthetic
+  const w = S._state().tx.filter((t) => t.src === 'email-2026-09-15');
+  check('a withdrawal is the transferred amount plus its bank fee, as the statement books it', st === 'applied' && w.some((t) => t.t === 'Withdrawal' && t.amt === -1000) && w.some((t) => t.t === 'Fee' && t.a === 'Bank Fees' && t.amt === -2.5), JSON.stringify(w));
+  e = E(); st = S.applyMoneyEmail('dividend', TS.parseMoneyEmail('dividend', 'You received EGP 317.64 from TMGH in your wallet.'), '2026-09-20', e);
+  check('a dividend is booked on the stock held under that ticker', st === 'applied' && S._state().tx.some((t) => t.t === 'Dividend' && t.a === 'TMG Holding' && t.amt === 317.64), JSON.stringify(e));
+  e = E(); st = S.applyMoneyEmail('custody', TS.parseMoneyEmail('custody', 'custody fee of EGP 165.23 has been deducted'), '2026-08-22', e);
+  check('nothing is added to a month its monthly statement closed', st === 'skip' && !S._state().tx.some((t) => t.d === '2026-08-22'), JSON.stringify(e));
+  e = E(); st = S.applyMoneyEmail('topup', TS.parseMoneyEmail('topup', 'top up request of USD 100.0 has been added'), '2026-09-21', e);
+  check('a USD top-up is left alone', st === 'skip' && /USD/.test(e.notes.join()), JSON.stringify(e));
+  S._reset([], {}, { trackFrom: '2026-09-10' }, {});
+  e = E(); st = S.applyMoneyEmail('topup', TS.parseMoneyEmail('topup', 'top up request of EGP 100.0 has'), '2026-09-10', e);
+  check('nothing on or before tracking started', st === 'skip' && !S._state().tx.length, JSON.stringify(e));
+  e = E(); st = S.applyMoneyEmail('topup', TS.parseMoneyEmail('topup', 'a changed wording'), '2026-09-11', e);
+  check('an email whose wording changed is held, not guessed', st === 'hold' && e.reasons.length === 1, JSON.stringify(e));
+  S._reset([], {}, {}, { marks, imports });
+  e = { changes: [], reasons: [], notes: [], unchanged: 0 }; S.applyInvoice({ d: '2026-08-10', type: 'Buy', name: 'X', code: 'EGS00000X000', qty: 1, gross: 10, total: 10.1, fund: false }, e);
+  check('an invoice in a closed month changes nothing', !S._state().tx.length && /already final/.test(e.notes.join()), JSON.stringify(e));
+}
 console.log(fail ? `${fail} FAILED` : 'ALL PASS');
 process.exit(fail ? 1 : 0);

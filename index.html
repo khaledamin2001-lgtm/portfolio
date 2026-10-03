@@ -2584,7 +2584,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   })();
 })();
 </script>
-<meta name="pd-build" content="5e2d4aba97a6 2026-10-02 11:57">
+<meta name="pd-build" content="aff34eb0bc79 2026-10-03 01:37">
 <style>
 :root{
   /* Apple-style system: SF (the system font on iPhone and Mac) for everything, quiet greys, one blue accent, green / red
@@ -4600,6 +4600,64 @@ button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.pl
     return out;
   }
 
+  // The readable text of an email: its text/plain parts (else text/html with the tags removed), decoded from
+  // base64 or quoted-printable as UTF-8, whitespace collapsed to single spaces.
+  function bodyText(rawB64url) {
+    const text = bytesToLatin1(b64ToBytes(rawB64url));
+    const plain = [], html = [];
+    const utf8 = (latin1) => { try { return decodeURIComponent(escape(latin1)); } catch (e) { return latin1; } };
+    (function walk(part) {
+      const { headers, body } = parseMime(part);
+      const ct = headers['content-type'] || 'text/plain';
+      const bm = ct.match(/boundary="?([^";]+)"?/i);
+      if (/^multipart\//i.test(ct) && bm) {
+        body.split('--' + bm[1]).slice(1).forEach((p) => { if (!/^--/.test(p)) walk(p.replace(/^\r?\n/, '')); });
+        return;
+      }
+      if (!/^text\/(plain|html)/i.test(ct) || /attachment/i.test(headers['content-disposition'] || '')) return;
+      const enc = (headers['content-transfer-encoding'] || '').toLowerCase();
+      let t = enc === 'base64' ? bytesToLatin1(b64ToBytes(body))
+        : enc === 'quoted-printable' ? body.replace(/=\r?\n/g, '').replace(/=([0-9A-F]{2})/gi, (m, h) => String.fromCharCode(parseInt(h, 16))) : body;
+      t = utf8(t);
+      (/^text\/html/i.test(ct) ? html : plain).push(t);
+    })(text);
+    const out = plain.length ? plain.join('\n') : html.join('\n').replace(/<(style|script)[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+    return out.replace(/\s+/g, ' ').trim();
+  }
+  // Thndr's money emails that carry no PDF (subject -> what the body says), as ledger rows {t, amt, ticker?, name?}.
+  // null = not one of them; {ignore} = one of them that does not touch the EGX account (a USD top-up).
+  const MONEY_SUBJECTS = [['topup', /top-up request has been accepted/i], ['withdrawal', /withdrawal has been processed/i],
+    ['dividend', /^Cash Dividends? Added/i], ['custody', /annual custody fees?/i]];
+  function moneyKind(subject) { const m = MONEY_SUBJECTS.find(([, re]) => re.test(subject || '')); return m ? m[0] : null; }
+  function parseMoneyEmail(kind, text) {
+    const n = (s) => parseFloat(String(s).replace(/,/g, '')), t = String(text || '');
+    let m;
+    if (kind === 'topup') {
+      if (!(m = t.match(/top ?up request of (EGP|USD)\s*([\d,]+(?:\.\d+)?)/i))) return { error: 'the top-up amount could not be read' };
+      if (m[1].toUpperCase() !== 'EGP') return { ignore: `a ${m[1].toUpperCase()} top-up (not the EGX account)` };
+      return { rows: [{ t: 'Deposit', amt: n(m[2]) }] };
+    }
+    if (kind === 'withdrawal') {
+      const sent = t.match(/Transferred Amount:?\s*(EGP|USD)\s*([\d,]+(?:\.\d+)?)/i), fee = t.match(/Withdrawal Fees?:?\s*(?:EGP|USD)\s*([\d,]+(?:\.\d+)?)/i);
+      if (!sent) return { error: 'the transferred amount could not be read' };
+      if (sent[1].toUpperCase() !== 'EGP') return { ignore: `a ${sent[1].toUpperCase()} withdrawal (not the EGX account)` };
+      const rows = [{ t: 'Withdrawal', amt: -n(sent[2]) }];
+      if (fee && n(fee[1]) > 0) rows.push({ t: 'Fee', name: 'Bank Fees', amt: -n(fee[1]) });
+      return { rows };
+    }
+    if (kind === 'dividend') {
+      if (!(m = t.match(/received (EGP|USD)\s*([\d,]+(?:\.\d+)?)\s*from\s+([A-Z][A-Z0-9.]{1,11})\b/i))) return { error: 'the dividend could not be read' };
+      if (m[1].toUpperCase() !== 'EGP') return { ignore: `a ${m[1].toUpperCase()} dividend (not the EGX account)` };
+      return { rows: [{ t: 'Dividend', ticker: m[3].toUpperCase(), amt: n(m[2]) }] };
+    }
+    if (kind === 'custody') {
+      if (!(m = t.match(/custody fee of (EGP)\s*([\d,]+(?:\.\d+)?)/i))) return { error: 'the custody fee could not be read' };
+      return { rows: [{ t: 'Fee', name: 'MCDR annual fees', amt: -n(m[2]) }] };
+    }
+    return null;
+  }
+
   // ---------- PDF → lines (pdf.js text items grouped by baseline) ----------
   async function pdfLines(pdfjsLib, bytes) {
     const doc = await pdfjsLib.getDocument({ data: bytes, isEvalSupported: false, disableFontFace: true }).promise;
@@ -4958,7 +5016,7 @@ button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.pl
     return Object.assign({}, st, { from: d, cash: Object.assign({}, st.cash, { start: null, rows: st.cash.rows.filter(keep) }), mf: st.mf ? Object.assign({}, st.mf, { rows: st.mf.rows.filter(keep) }) : st.mf });
   }
 
-  const api = { attachments, pdfLines, parseDoc, parseStatement, reconcile, classify, accountRows, accountOf, ownerCheck, authCheck, eom, fromTrackStart };
+  const api = { attachments, bodyText, moneyKind, parseMoneyEmail, pdfLines, parseDoc, parseStatement, reconcile, classify, accountRows, accountOf, ownerCheck, authCheck, eom, fromTrackStart };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.TS = api;
 })(this);
 

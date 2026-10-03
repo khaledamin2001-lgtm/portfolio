@@ -362,10 +362,14 @@ def main(argv=None):
         import imap_fetch
         try:
             items = (jc.load_data(os.path.join(data, "portfolio", "assets.json"), {}) or {}).get("items") or {}
-            c = imap_fetch.fetch(plan["gmailAfter"], imap_fetch.skip_ids(st.get("seen"), items), inbox)
+            after = imap_fetch.mail_floor(jc.load_data(os.path.join(data, "portfolio", "settings.json"), {}),
+                                          (jc.load_data(os.path.join(data, "portfolio", "marks.json"), {}) or {}).get("months"),
+                                          {f[:-5]: jc.load_data(os.path.join(data, "imports", f), {}) for f in (os.listdir(os.path.join(data, "imports")) if os.path.isdir(os.path.join(data, "imports")) else []) if f.endswith(".json")},
+                                          plan["gmailAfter"])
+            c = imap_fetch.fetch(after, imap_fetch.skip_ids(st.get("seen"), items), inbox)
         except imap_fetch.FetchError as e:
             raise jc.JobError("Gmail fetch", str(e)) from None
-        jc.log(f"gmail: after {plan['gmailAfter']}: {c['found']} found, {c['kept']} new, {c['seen']} already seen, {c['otherSubject']} other subjects")
+        jc.log(f"gmail: after {after}: {c['found']} found, {c['kept']} new, {c['seen']} already seen, {c['otherSubject']} other subjects")
         # [6,7,8] sync.js and the pinned write, redone once on a conflict
         for attempt in range(2):
             if attempt:

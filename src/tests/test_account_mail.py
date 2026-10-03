@@ -319,7 +319,7 @@ try:
     check("admin status: the job writes each account's line (Gmail result, month-end report, friends), no figures (account 1 lists 2 friend links: its friend and the impostor link)",
           jg.get("gmail", {}).get("ok") and jg.get("friends") == 2 and jg.get("report") == "Aug-26 sent 2026-09-24" and j1.get("friends") == 2 and not j1.get("gmail"), json.dumps([jg, j1]))
     # the Gmail account
-    check("gmail: its own Gmail login is used, searching from the day tracking started", fetches and fetches[0] == {"after": "2026/08/15", "addr": "friend.gmail@example.com", "pw": "abcdefghijklmnop", "query": "all"}, json.dumps(fetches))
+    check("gmail: its own Gmail login is used, searching from 3 days before tracking started", fetches and fetches[0] == {"after": "2026/08/12", "addr": "friend.gmail@example.com", "pw": "abcdefghijklmnop", "query": "all"}, json.dumps(fetches))
     rows = (gdoc("ledger/y2026") or {}).get("rows") or []
     check("gmail: the opening rows are kept and the statement rows before the tracking start are not added again",
           sorted(r["id"] for r in rows) == ["o1", "o2"], json.dumps(rows)[:400])

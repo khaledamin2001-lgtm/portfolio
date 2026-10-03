@@ -311,7 +311,9 @@ def gmail_import(http, tok, pkg, keys, docs, shared, code, work, now, dry, read_
                 raise HistoryWait(seed.get("error") or "the starting point could not be made")
             after = (seed.get("lastTo") or seed["to"]).replace("-", "/")
         else:
-            after = gmail_after(code, st, settings, now)
+            imports = {k.split("/", 1)[1]: (v or {}).get("data") or {} for k, v in docs.items() if k.startswith("imports/")}
+            after = imap_fetch.mail_floor(settings, ((docs.get("portfolio/marks") or {}).get("data") or {}).get("months"), imports,
+                                          gmail_after(code, st, settings, now))
         inbox = os.path.join(work, "inbox")
         items = ((docs.get("portfolio/assets") or {}).get("data") or {}).get("items") or {}
         c = imap_fetch.fetch(after, imap_fetch.skip_ids(st.get("seen"), items), inbox, login["address"], login["appPassword"])

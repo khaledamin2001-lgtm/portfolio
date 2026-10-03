@@ -108,7 +108,18 @@ check("gate: market before 15:10 no, 15:10 yes; manual always", jc.gate(P("15:09
 
 # ---- IMAP helpers
 check("imap: the Gmail query", imap_fetch.QUERY.format(after="2026/09/22") ==
-      'from:no-reply@system.thndr.app (subject:Invoice OR subject:E-statement) -subject:"US Market" after:2026/09/22')
+      'from:(no-reply@system.thndr.app OR no-reply@mail.thndr.app) (subject:Invoice OR subject:E-statement OR subject:"top-up request" '
+      'OR subject:"withdrawal has been processed" OR subject:"Cash Dividends Added" OR subject:"custody fees") -subject:"US Market" after:2026/09/22')
+_mk = {"2026-07": {"source": "statement"}, "2026-08": {"source": "reconstructed", "provisional": False}, "2026-09": {"provisional": True}}
+check("imap: the search starts 3 days before the first month not yet closed by a statement",
+      imap_fetch.mail_floor({}, _mk, {}, "2026/09/27") == "2026/08/29"
+      and imap_fetch.mail_floor({}, {"2026-07": {"source": "statement"}}, {"2026-08": {"fullMonth": True}}, "2026/09/27") == "2026/08/29")
+check("imap: never later than the last run's window, and tracking start counts",
+      imap_fetch.mail_floor({}, {"2026-11": {"source": "statement"}}, {}, "2026/09/27") == "2026/09/27"
+      and imap_fetch.mail_floor({"trackFrom": "2026-09-20"}, _mk, {}, "2026/10/01") == "2026/09/17"
+      and imap_fetch.mail_floor({}, {}, {}, "2026/09/27") == "2026/09/27")
+check("imap: Thndr's money emails are kept", all(s.startswith(imap_fetch.KEEP) for s in ("Your top-up request has been accepted ", "Your withdrawal has been processed ", "Cash Dividends Added", "Your annual custody fees "))
+      and not "Withdrawal request submitted ".startswith(imap_fetch.KEEP))
 check("imap: quoted for IMAP", imap_fetch.imap_quote('a "b" c') == '"a \\"b\\" c"')
 check("imap: INTERNALDATE -> ms", imap_fetch.internal_ms("31-Dec-2025 08:32:02 +0000") == "1767169922000"   # private-scan: synthetic
       and imap_fetch.internal_ms(" 1-Jan-2026 02:00:00 +0200") == "1767225600000")   # private-scan: synthetic
