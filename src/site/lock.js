@@ -608,7 +608,7 @@
   // The first screen: portfolios this device can open, then sign in / create an account; portfolios opened with a setup key
   // (the site's own, from portfolios.json) sit behind a link unless this device is already set up for them.
   function chooseScreen() {
-    const mine = allPortfolios().filter((p) => p.cloud || !!ls.get('pd.dev.' + p.id)), others = PORTFOLIOS.filter((p) => !ls.get('pd.dev.' + p.id));
+    const mine = allPortfolios().filter((p) => p.cloud || (!p.moved && !!ls.get('pd.dev.' + p.id))), others = PORTFOLIOS.filter((p) => !p.moved && !ls.get('pd.dev.' + p.id));
     screen(`<h1>Stock Market Portfolio Tracker</h1><p>${mine.length ? 'Choose a portfolio to open.' : 'Track your EGX portfolio: returns, dividends, risk and the index, private to you.'}</p>
       ${mine.length ? `<div class="lk-list">${mine.map((p) => `<button class="lk-btn" data-pick="${esc(p.id)}" data-testid="live-pick-${esc(p.id)}">${esc(p.name)}<small>${p.cloud ? 'your account' : 'ready on this device'}</small></button>`).join('')}</div>` : ''}
       <div class="lk-list"><button class="lk-btn ${mine.length ? 'ghost' : ''}" id="lk-new-acct" data-testid="live-signup">Create your portfolio</button><button class="lk-btn ghost" id="lk-signin" data-testid="live-signin">Sign in</button></div>
@@ -617,7 +617,17 @@
     $l('#lk-new-acct').onclick = () => signUpScreen();
     $l('#lk-signin').onclick = () => signInScreen();
   }
+  // A setup-key portfolio that moved into its owner's site account (portfolios.json "moved"): this device's old setup for
+  // it is cleared, and signing in with the account's email and password opens it from now on.
+  function movedScreen(p) {
+    ls.del('pd.dev.' + p.id); ls.del(CUR_LS);
+    for (const k of ['dev:', 'bio:', 'cache:']) idbDel(k + p.id).catch(() => {});
+    screen(`<h1>${esc(p.name)} has moved</h1><p>It now lives in your account: sign in with your email and password to open it, on this device and any other. The setup key is no longer needed.</p>
+      <div class="lk-list"><button class="lk-btn" id="lk-signin" data-testid="live-moved-signin">Sign in</button></div>`);
+    $l('#lk-signin').onclick = () => signInScreen();
+  }
   async function select(p) {
+    if (p.moved && !p.cloud) return movedScreen(p);
     if (OPENED && OPENED !== p.id) { ls.set(CUR_LS, p.id); location.reload(); return; }   // the page already shows another portfolio: start clean
     CUR = p; ls.set(CUR_LS, p.id); KEYS = null; PK8 = null; EXPORTS = null; EDIT = null; CLOUD = null;
     if (p.cloud) {   // an account: its public keys are kept on this device; without the device store, sign in
@@ -1910,12 +1920,12 @@
     try {
       const o = JSON.parse(dec.decode(await unseal(JSON.parse(prof.mainKey), MAINKEY_LABEL, acctPk8)));
       const portfolio = PORTFOLIOS.find((x) => x.id === o.id);
-      return portfolio ? { portfolio, pk8: ub64(o.pk8) } : null;
+      return portfolio && !portfolio.moved ? { portfolio, pk8: ub64(o.pk8) } : null;   // a portfolio moved into the account opens as the account
     } catch (e) { console.warn('main key not opened', e); return null; }
   }
   // a portfolio already linked on this device (before one login existed): store its key in the account once
   async function ensureMainKey() {
-    if (ensureMainKey.done === CUR.id) return; ensureMainKey.done = CUR.id;
+    if (ensureMainKey.done === CUR.id || CUR.moved) return; ensureMainKey.done = CUR.id;
     const prof = await readProfile(LINK.uid);
     if (!prof.mainKey) await saveMainKey(LINK.uid, LINK.pub, CUR.id, PK8);
   }
@@ -2134,7 +2144,7 @@
   function ownerHint() {
     if (!CUR || !CUR.cloud || !CLOUD) return '';
     if (OWNER.email !== String(CLOUD.email || '').toLowerCase()) { checkOwner().then((yes) => { if (yes && typeof window.renderTab === 'function') window.renderTab(true); }).catch(() => {}); return ''; }
-    const main = PORTFOLIOS.find((p) => p.id === 'khaled');
+    const main = PORTFOLIOS.find((p) => p.id === 'khaled' && !p.moved);   // moved: the account IS the portfolio now
     const empty = !Object.keys(DOCS).some((k) => k.startsWith('ledger/') && ((DOCS[k] || {}).rows || []).length);
     if (!OWNER.yes || !main || !empty) return '';
     return `<section class="pd-friends pd-building" data-testid="owner-main-hint"><h3>This is your sign-in account, not your portfolio</h3>
