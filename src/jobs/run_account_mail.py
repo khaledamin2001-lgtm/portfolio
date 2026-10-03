@@ -455,15 +455,22 @@ def publish_files(uid, pub_b64, priv, entries, work, remote=None):
         for M, files in entries:
             ent = {"month": M}
             for fname, data, ctype in files:
-                with open(os.path.join(d, fname + ".enc.json"), "wb") as f:
+                kind = "pdf" if fname.endswith(".pdf") else "xlsx"
+                # the path says only the month and the kind: the file's real name (it carries the portfolio's name) is
+                # inside the sealed envelope and the sealed index
+                with open(os.path.join(d, f"{M}-{kind}.enc.json"), "wb") as f:
                     f.write(store.seal(keys, data, fname))
-                ent["pdf" if fname.endswith(".pdf") else "file"] = f"{folder}/{fname}.enc.json"
-                if not fname.endswith(".pdf"):
+                ent["pdf" if kind == "pdf" else "file"] = f"{folder}/{M}-{kind}.enc.json"
+                if kind == "xlsx":
                     ent["name"] = fname
             index = [e for e in index if e.get("month") != M] + [ent]
         index.sort(key=lambda e: e.get("month") or "", reverse=True)
         with open(ip, "wb") as f:
             f.write(store.seal(keys, json.dumps(index).encode(), "index.json"))
+        keep = {os.path.basename(e.get(k) or "") for e in index for k in ("file", "pdf")} | {"index.enc.json"}
+        for fn in os.listdir(d):     # files no entry points to any more (an earlier naming) go
+            if fn not in keep:
+                os.remove(os.path.join(d, fn))
         jc.git(site, "add", "--", folder)
         if not jc.git(site, "diff", "--cached", "--name-only").stdout.strip():
             return 0

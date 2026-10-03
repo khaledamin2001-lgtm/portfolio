@@ -366,7 +366,8 @@ try:
     got = store.unseal(gacct, open(os.path.join(chk, idx[0]["file"]), "rb").read()) if idx else b""
     check("month-end files on the site: the Aug-26 workbook sealed to the account's own key, listed in a sealed index, nothing readable in the clear",
           idx and idx[0]["month"] == "2026-08" and idx[0]["name"] == "FriendPortfolio-Aug-26.xlsx" and got == next(a for a in rep["att"] if a[0].endswith(".xlsx"))[1]
-          and not [f for f in os.listdir(fdir) if not f.endswith(".enc.json")] and GUID not in ram.files_dir(GUID), json.dumps(idx))
+          and not [f for f in os.listdir(fdir) if not f.endswith(".enc.json")] and GUID not in ram.files_dir(GUID)
+          and sorted(os.listdir(fdir)) == sorted(["index.enc.json"] + [f"2026-08-{k}.enc.json" for k in (("xlsx", "pdf") if idx and idx[0].get("pdf") else ("xlsx",))]), json.dumps([idx, os.listdir(fdir)]))
     imp = gdoc("imports/2026-08") or {}
     check("month-end: the month is stamped as sent in the account", (imp.get("reports") or {}).get("emailedAt") and "reportsPending" not in imp, json.dumps(imp)[:300])
     # history import
