@@ -1311,8 +1311,9 @@
      so the job opens it. Turning it off deletes that document. Every screen says plainly what to do and what it means. */
   const GOOGLE_2SV = 'https://myaccount.google.com/signinoptions/twosv', GOOGLE_APPPW = 'https://myaccount.google.com/apppasswords';
   // done: where "Not now" / "Done" leads (the portfolio after sign-up, the Account menu otherwise)
-  function gmailScreen(done, first) {
-    if (gmailOn()) return gmailStatusScreen(done);
+  async function gmailScreen(done, first) {
+    // connected on another device (the email settings are kept per device): the account's own sync/gmail says so
+    if (gmailOn() || (!first && CLOUD && ((((await readCloudDoc('sync', 'gmail').catch(() => ({}))).doc || {}).data || {}).address))) return gmailStatusScreen(done);
     screen(`<h1>Add your trades automatically?</h1>
       <p>Thndr emails you after every trade. If those emails go to your Gmail, the site can read them and add your trades for you, so you never have to type them in.</p>
       <button class="lk-btn" id="lk-gm-go" data-testid="gmail-start">Yes, set it up (about 3 minutes)</button>
@@ -1392,6 +1393,27 @@
       <button class="lk-btn" id="lk-gm-done" data-testid="gmail-done">Done</button>`);
     $l('#lk-gm-done').onclick = () => done();
   }
+  /* "Check now": touching the account's mail package (only its kick field; the sealed package stays as it is) makes the
+     public repo's watcher (new-accounts.yml, every 5 minutes) start the account job, which reads the Gmail like the
+     scheduled checks do. The page then waits for that check's result in sync/mail and loads the new figures. */
+  const KICK_GAP = 15 * 60e3, kickLS = () => 'pd.kick.' + CUR.id;
+  async function checkNow() {
+    const at = new Date().toISOString(), uid = CLOUD.uid;
+    await fsReq('PATCH', `mail/${uid}`, { fields: { kick: { stringValue: at } } }, 'updateMask.fieldPaths=kick&currentDocument.exists=true');
+    ls.set(kickLS(), at);
+    toast('Checking your Thndr emails now. New trades appear within about 15 minutes; the page updates by itself.');
+    (async () => {
+      for (let i = 0; i < 40; i++) {
+        await sleep(30e3);
+        if (!CLOUD || CLOUD.uid !== uid) return;
+        const g = ((((await readCloudDoc('sync', 'mail').catch(() => ({}))).doc || {}).data || {}).gmail) || {};
+        if (!(Date.parse(g.at || '') > Date.parse(at))) continue;
+        ls.del(kickLS()); await refresh();
+        toast(!g.ok ? 'The Thndr emails check failed: see Account → Thndr emails.' : g.new ? `Done: ${g.new} new Thndr email${g.new > 1 ? 's' : ''} added.` : 'Done: no new Thndr emails.', g.ok ? undefined : 'error');
+        return;
+      }
+    })();
+  }
   async function gmailStatusScreen(done) {
     const [login, rec] = await Promise.all([readCloudDoc('sync', 'gmail').catch(() => ({})), readCloudDoc('sync', 'mail').catch(() => ({}))]);
     const addr = ((login.doc && login.doc.data) || {}).address || '', g = (((rec.doc && rec.doc.data) || {}).gmail) || null;
@@ -1402,14 +1424,21 @@
       : `<b>The last check failed</b> (${esc(when)}): ${esc(g.error || 'unknown error')}. Usually the app password was deleted or changed: tap <b>Change app password</b>.`;
     const hline = !hs ? '' : hs.status === 'waiting' ? `<p class="lk-tip" data-testid="gmail-history">Building your portfolio from your Thndr emails: waiting, because ${esc(hs.reason || 'no monthly statement was found yet')}. It is built by itself as soon as one arrives.</p>`
       : hs.status === 'done' ? `<p class="lk-hint" data-testid="gmail-history">Built from your Thndr emails, starting from your ${esc(hs.from || '')} monthly statement.</p>` : '';
-    screen(`<h1>Thndr emails</h1><p>Connected to <b>${esc(addr)}</b>. New Thndr invoices and statements are added to your portfolio three times a day (4:15 pm, 6:15 pm and 11 pm Cairo time).</p>${hline}
+    const asked = Date.parse(ls.get(kickLS()) || '') || 0, wait = asked && Date.now() - asked < KICK_GAP;
+    screen(`<h1>Thndr emails</h1><p>Connected to <b>${esc(addr)}</b>. New Thndr invoices and statements are added to your portfolio three times a day (4:15 pm, 6:15 pm and 11 pm Cairo time), or now when you tap <b>Check now</b>.</p>${hline}
       <p class="lk-tip" data-testid="gmail-status">${status}</p>
+      <button class="lk-btn" id="lk-gm-now" data-testid="gmail-check-now"${wait ? ' disabled' : ''}>${wait ? 'Checking: new trades appear within about 15 minutes' : 'Check now'}</button>
       <button class="lk-btn ghost" id="lk-gm-change" data-testid="gmail-change">Change app password</button>
-      <button class="lk-btn ghost" id="lk-gm-off" data-testid="gmail-off">Turn off</button>
+      ${mailPrefs() ? '<button class="lk-btn ghost" id="lk-gm-off" data-testid="gmail-off">Turn off</button>' : ''}
       <div class="lk-err" role="alert"></div>
       <div class="lk-links"><button type="button" class="lk-link" id="lk-gm-back" data-testid="gmail-back">Back</button></div>`);
     $l('#lk-gm-back').onclick = () => done();
     $l('#lk-gm-change').onclick = () => gmailSetupScreen(done, false, true);
+    $l('#lk-gm-now').onclick = async () => {
+      const b = $l('#lk-gm-now'); b.disabled = true; err('Asking for a check…');
+      try { await checkNow(); gmailStatusScreen(done); } catch (e) { console.error(e); b.disabled = false; err(e.code === 'not_found' ? 'Thndr emails are not switched on for this account yet: turn them off and on again.' : e.message || String(e)); }
+    };
+    if (!$l('#lk-gm-off')) return;
     $l('#lk-gm-off').onclick = async () => {
       const b = $l('#lk-gm-off'); b.disabled = true; err('Turning off…');
       try {

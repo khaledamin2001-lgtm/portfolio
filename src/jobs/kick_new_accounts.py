@@ -6,7 +6,8 @@ every 5 minutes): a brand-new account, or one that just connected its Gmail or c
 
 A site account that turns on email updates or connects its Gmail writes mail/{uid} (its sealed package; the rules let
 anyone list these, nobody open them). The site rewrites it only when the account changes its email settings or
-connects its Gmail (and on a new sign-in), never on an ordinary visit. When one was WRITTEN in the last --window-min
+connects its Gmail (and on a new sign-in), never on an ordinary visit; "Check now" (Account → Thndr emails) touches only
+its kick field, which counts as written too. When one was WRITTEN in the last --window-min
 minutes and the private repo's "Account emails" workflow has not started since, that workflow is started now: a new
 friend's portfolio is built within about 10 minutes instead of at the next of the three daily checks. Nothing about an account is printed:
 only how many are new and what was done.

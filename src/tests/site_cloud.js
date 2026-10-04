@@ -155,6 +155,7 @@ function firestore(method, url, headers, body) {
   const cur = FB.docs[p];
   if (method === 'GET') return cur ? [200, out(p)] : err(404, 'NOT_FOUND');
   if (q.get('currentDocument.exists') === 'false' && cur) { FB.conflicts++; return err(409, 'ALREADY_EXISTS'); }
+  if (q.get('currentDocument.exists') === 'true' && !cur) return err(404, 'NOT_FOUND');
   if (q.has('currentDocument.updateTime') && (!cur || cur.updateTime !== q.get('currentDocument.updateTime'))) { FB.conflicts++; return cur ? err(400, 'FAILED_PRECONDITION') : err(404, 'NOT_FOUND'); }
   if (method === 'DELETE') { delete FB.docs[p]; return [200, {}]; }
   if (method === 'PATCH') {
@@ -332,6 +333,13 @@ print(json.dumps({"uid": p["uid"], "email": p["email"], "prefs": p["prefs"], "re
     await $t('gmail-status').waitFor();
     check('Thndr emails: the status says it is connected and not checked yet', /friend\.test@example\.com/.test(await page.locator('#lock').textContent()) && /Not checked yet/.test(await $t('gmail-status').textContent()));
     await A.shot('gmail-status');
+    const mail0 = FB.docs['mail/' + uid];
+    await $t('gmail-check-now').click();
+    for (let i = 0; i < 40 && !FB.docs['mail/' + uid].fields.kick; i++) await page.waitForTimeout(250);
+    const mail1 = FB.docs['mail/' + uid];
+    check('Thndr emails: "Check now" touches only the mail package\'s kick field (the watcher then starts the account job), the sealed package stays', !!mail1.fields.kick && mail1.fields.pkg.stringValue === mail0.fields.pkg.stringValue && mail1.updateTime !== mail0.updateTime);
+    await page.waitForTimeout(300);
+    check('Thndr emails: after "Check now" the button waits instead of asking again', await $t('gmail-check-now').isDisabled());
     await $t('gmail-off').click();
     for (let i = 0; i < 40 && FB.docs[`users/${uid}/docs/sync__gmail`]; i++) await page.waitForTimeout(250);
     check('turning Thndr emails off deletes the Gmail login and keeps email updates', !FB.docs[`users/${uid}/docs/sync__gmail`] && !!FB.docs['mail/' + uid]);
