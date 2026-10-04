@@ -80,6 +80,10 @@ step_tools() {
   if [ -n "${PDFJS_NODE_MODULES:-}" ]; then cp -r "$PDFJS_NODE_MODULES" "$T/node_modules"
   else (cd "$T" && npm install --no-save --no-package-lock --no-audit --no-fund --loglevel=error pdfjs-dist@3.11.174 >/dev/null) || die "npm install pdfjs-dist"; fi
 
+  say "tools: the read-only account export for an owner's assistant (fake Firebase, synthetic data)"
+  node src/tests/test_read_account.js "$S" > "$O/readacct.out" 2>&1 || { tail -20 "$O/readacct.out"; die "test_read_account.js"; }
+  echo "  test_read_account.js: $(tail -1 "$O/readacct.out")"
+
   say "tools: the account email job (fake Firebase and mailer, synthetic data)"
   python3 src/tests/test_account_mail.py "$S" "$T" > "$O/acctmail.out" 2>&1 || { tail -20 "$O/acctmail.out"; die "test_account_mail.py"; }
   echo "  test_account_mail.py: $(tail -1 "$O/acctmail.out")"

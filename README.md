@@ -83,7 +83,9 @@ late, so cron-job.org starts them on time and GitHub's timers stay as a late bac
 5. `src/site/lock.js`: everything specific to the website: unlocking, encryption, accounts, friends, editing.
 6. `src/jobs/`: the scheduled jobs. Start with `jobs_common.py` (shared plumbing) and `run_market.py`.
 7. `src/tools/`: the Node scripts the jobs run (`sync.js` applies Thndr emails, `history_seed.js` builds a portfolio
-   from past statements, `weekly.js`, `excel.js`, `factsheet.js` make the emails and reports).
+   from past statements, `weekly.js`, `excel.js`, `factsheet.js` make the emails and reports). `read_account.js` is
+   for an account owner, not the jobs: with their own email and password it prints their portfolio as JSON (holdings,
+   value, returns, trades), read only, for their own assistant.
 
 ## Security model in one paragraph
 
