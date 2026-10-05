@@ -11,6 +11,10 @@ by the public repo's new-accounts watcher, src/jobs/kick_new_accounts.py morning
 2. Every site account whose mail package says prefs.morning: its own portfolio with the shared market data, to its own
    address only, once a day (sync/mail morningSent, encrypted to the account key). The owner's own sign-in account is
    skipped (it has no portfolio of its own). An account failing never stops the others.
+--evening: the after-close recap instead (engine workflow evening.yml, started Sunday to Thursday at 16:30 by the same
+watcher, kick_new_accounts.py evening_check): the same brief for the session that just closed, for the accounts whose
+prefs.evening is on (the owner's moved portfolio unless switched off), once a day (sync/mail eveningSent); sent only when
+the shared market data already has today's close (none on an EGX holiday). The old owner setup has no recap.
 Not on Friday or Saturday (no session) unless --manual. Output: counts only. The owner's part failing emails a FAILED
 notice to the owner; exit 1 when nothing at all could be done."""
 import os, sys, json, argparse, datetime, hashlib, shutil, subprocess, tempfile
@@ -34,6 +38,8 @@ def brief(code, data, today):
 
 
 def owner_part(a, today, send_owner):
+    if a.evening:
+        return "owner: the after-close recap goes to accounts only"
     ctx = jc.Ctx(a.engine, a.code, a.now)
     if ctx.config.get("movedToAccount"):
         return "owner: the portfolio moved to the owner's account (its brief goes with the accounts)"
@@ -62,12 +68,13 @@ def accounts_part(a, today, http, send):
     priv = store.unlock(keys, key)
     pkgs = ram.list_packages(http)
     moved = jc.main_moved(os.path.abspath(a.engine))   # the owner's portfolio lives in the owner's account: its brief is here
+    kind, mark, what = ("evening", "eveningSent", "after-close recap") if a.evening else ("morning", "morningSent", "morning brief")
     n = sent = bad = 0
     for i, p in enumerate(pkgs, 1):
         try:
             pkg = ram.open_mail_pkg(priv, p["pkg"])
             prefs = pkg.get("prefs") or {}
-            if pkg.get("uid") != p["uid"] or not (prefs.get("morning") or (moved and "morning" not in prefs)):
+            if pkg.get("uid") != p["uid"] or not (prefs.get(kind) or (moved and kind not in prefs)):
                 continue
             tok, uid = ram.id_token(http, pkg["refresh"])
             if uid and uid != pkg["uid"]:
@@ -75,7 +82,7 @@ def accounts_part(a, today, http, send):
             owner = hashlib.sha256(str(ram.token_claims(tok).get("email") or "").lower().encode()).hexdigest() == ram.OWNER_HASH
             if owner and not moved:
                 continue     # the owner's sign-in account before the move: the main portfolio's brief is the owner's
-            if not owner and not prefs.get("morning"):
+            if not owner and not prefs.get(kind):
                 continue     # the owner's moved portfolio gets the brief unless switched off; anyone else when ticked
             apriv, akeys = ram.account_key(pkg["pk8"])
             docs = ram.read_account(http, tok, pkg["uid"], apriv)
@@ -86,7 +93,7 @@ def accounts_part(a, today, http, send):
                 continue     # no portfolio yet
             state_doc = docs.get("sync/mail")
             state = dict((state_doc or {}).get("data") or {})
-            if state.get("morningSent") == today and not a.manual:
+            if state.get(mark) == today and not a.manual:
                 continue
             work = tempfile.mkdtemp(prefix="brief-", dir=os.environ.get("RUNNER_TEMP") or None)
             try:
@@ -98,13 +105,16 @@ def accounts_part(a, today, http, send):
             b = out["brief"]
             if not b.get("value") and not b.get("movers"):
                 continue     # nothing in the portfolio yet
+            if a.evening and b.get("session") != today:
+                jc.log(f"account {i}: no close for {today} in the market data (a holiday, or not published yet)")
+                continue
             name = ((docs.get("portfolio/settings") or {}).get("data") or {}).get("name") or "Your portfolio"
-            subj, text, html = emails.morning(name, b, emails.ACCOUNT_FOOT)
+            subj, text, html = emails.morning(name, b, emails.ACCOUNT_FOOT, evening=a.evening)
             if a.dry_run:
                 continue
             send(pkg["email"], subj, text, html)
             sent += 1
-            state["morningSent"] = today
+            state[mark] = today
             try:
                 ram.write_state(http, tok, pkg["uid"], akeys, state_doc, state, jc.now_iso())
             except Exception as e:      # sent; the watcher starts this once a day, so a missed record repeats nothing
@@ -112,7 +122,7 @@ def accounts_part(a, today, http, send):
         except Exception as e:
             bad += 1
             jc.log(f"account {i}: not done ({getattr(e, 'step', type(e).__name__)}: {jc.mask(str(getattr(e, 'detail', e)))[:160]})")
-    return f"accounts: {len(pkgs)} with email updates, {n} with the morning brief, {sent} sent, {bad} not done"
+    return f"accounts: {len(pkgs)} with email updates, {n} with the {what}, {sent} sent, {bad} not done"
 
 
 def main(argv=None, http=None, send=None, send_owner=None):
@@ -122,13 +132,14 @@ def main(argv=None, http=None, send=None, send_owner=None):
     ap.add_argument("--now")
     ap.add_argument("--manual", action="store_true", help="also on Friday / Saturday, and again the same day")
     ap.add_argument("--dry-run", action="store_true", help="make the briefs, send and save nothing")
+    ap.add_argument("--evening", action="store_true", help="the after-close recap instead of the morning brief")
     a = ap.parse_args(argv)
     import zoneinfo
     t = datetime.datetime.fromisoformat(a.now.replace("Z", "+00:00")) if a.now else datetime.datetime.now(datetime.timezone.utc)
     cairo = t.astimezone(zoneinfo.ZoneInfo("Africa/Cairo"))
     today = cairo.strftime("%Y-%m-%d")
     if cairo.strftime("%a") in ("Fri", "Sat") and not a.manual:
-        jc.log(f"morning brief: no session on {cairo.strftime('%A')}")
+        jc.log(f"{'after-close recap' if a.evening else 'morning brief'}: no session on {cairo.strftime('%A')}")
         return 0
     ok = 0
     try:
@@ -136,9 +147,9 @@ def main(argv=None, http=None, send=None, send_owner=None):
         jc.log(owner_part(a, today, send_owner or mail_send.send))
         ok += 1
     except jc.JobError as e:
-        jc.report_failure(None, JOB, e.step, e.detail, engine=a.engine, code=a.code)
+        jc.report_failure(None, "after-close recap" if a.evening else JOB, e.step, e.detail, engine=a.engine, code=a.code)
     except Exception as e:
-        jc.report_failure(None, JOB, "owner", f"{type(e).__name__}: {e}", engine=a.engine, code=a.code)
+        jc.report_failure(None, "after-close recap" if a.evening else JOB, "owner", f"{type(e).__name__}: {e}", engine=a.engine, code=a.code)
     try:
         import run_account_mail as ram
         jc.log(accounts_part(a, today, http or ram.Http(), send or (None if a.dry_run else ram.smtp_sender())))

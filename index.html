@@ -1581,9 +1581,9 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   const mailPrefs = () => ls.get(mailLS());
   // the email kinds; a choice missing from an older package follows the other emails (as the job reads it), and the site
   // owner's friends leaderboard is on unless switched off
-  const MAIL_KINDS = ['alerts', 'weekly', 'reports', 'leaderboard', 'reportCard', 'morning'];
+  const MAIL_KINDS = ['alerts', 'weekly', 'reports', 'leaderboard', 'reportCard', 'morning', 'evening'];
   const mailWith = (m) => { m = m || {}; const any = !!(m.alerts || m.weekly || m.reports);
-    return Object.assign({}, m, { leaderboard: !!(m.leaderboard ?? (any || isOwner())), reportCard: !!(m.reportCard ?? any), morning: !!m.morning }); };
+    return Object.assign({}, m, { leaderboard: !!(m.leaderboard ?? (any || isOwner())), reportCard: !!(m.reportCard ?? any), morning: !!m.morning, evening: !!(m.evening ?? isOwner()) }); };
   const mailAny = (m) => !!m && MAIL_KINDS.some((k) => mailWith(m)[k]);
   const mailOn = () => mailAny(mailPrefs());
   const gmailOn = () => !!(mailPrefs() || {}).gmail;
@@ -1591,7 +1591,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   const sealTo = (pubB64, bytes, label) => seal(bytes, label, pubB64);
   async function writeMail(prefs) {
     const mk = await (await fetch('p/khaled/keys.json', { cache: 'no-store' })).json();
-    const pkg = { v: 1, uid: CLOUD.uid, email: prefs.email, refresh: CLOUD.refresh, pk8: b64big(acctKey()), prefs: { alerts: !!prefs.alerts, weekly: !!prefs.weekly, reports: !!prefs.reports, leaderboard: mailWith(prefs).leaderboard, reportCard: mailWith(prefs).reportCard, morning: !!prefs.morning, gmail: !!prefs.gmail, shareMain: !!prefs.shareMain }, at: new Date().toISOString() };
+    const pkg = { v: 1, uid: CLOUD.uid, email: prefs.email, refresh: CLOUD.refresh, pk8: b64big(acctKey()), prefs: { alerts: !!prefs.alerts, weekly: !!prefs.weekly, reports: !!prefs.reports, leaderboard: mailWith(prefs).leaderboard, reportCard: mailWith(prefs).reportCard, morning: !!prefs.morning, evening: mailWith(prefs).evening, gmail: !!prefs.gmail, shareMain: !!prefs.shareMain }, at: new Date().toISOString() };
     const env = Object.assign({ v: 1 }, await sealTo(mk.pub, enc.encode(JSON.stringify(pkg)), MAIL_LABEL));
     await fsReq('PATCH', `mail/${CLOUD.uid}`, { fields: { pkg: { stringValue: JSON.stringify(env) }, at: { stringValue: pkg.at } } });
     ls.set(mailLS(), Object.assign({}, prefs, { ref: await sha(CLOUD.refresh) }));
@@ -1614,22 +1614,23 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
       <label class="lk-check"><input type="checkbox" id="lk-ml-leaderboard" data-testid="mail-leaderboard" ${m.leaderboard ? 'checked' : ''}> Friends leaderboard (1st of the month)</label>
       <label class="lk-check"><input type="checkbox" id="lk-ml-card" data-testid="mail-report-card" ${m.reportCard ? 'checked' : ''}> Trading report card (early each month) and your year, wrapped (January)</label>
       <label class="lk-check"><input type="checkbox" id="lk-ml-morning" data-testid="mail-morning" ${m.morning ? 'checked' : ''}> Morning brief (Sunday to Thursday, about 9 am, before the market opens)</label>
+      <label class="lk-check"><input type="checkbox" id="lk-ml-evening" data-testid="mail-evening" ${m.evening ? 'checked' : ''}> After-close recap (Sunday to Thursday, 4:30 pm: your day against the index)</label>
       <button class="lk-btn" id="lk-ml-go" data-testid="mail-on">${on ? 'Save' : 'Turn on email updates'}</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>
       ${on ? '<button class="lk-btn ghost" id="lk-ml-off" data-testid="mail-off">Turn off email updates</button>' : ''}
       <div class="lk-links"><button type="button" class="lk-link" id="lk-ml-back" data-testid="mail-back">Back</button></div>`);
     $l('#lk-ml-back').onclick = accountScreen;
     $l('#lk-ml').onsubmit = async (ev) => {
-      ev.preventDefault(); const email = $l('#lk-ml-email').value.trim(), alerts = $l('#lk-ml-alerts').checked, weekly = $l('#lk-ml-weekly').checked, reports = $l('#lk-ml-reports').checked, leaderboard = $l('#lk-ml-leaderboard').checked, reportCard = $l('#lk-ml-card').checked, morning = $l('#lk-ml-morning').checked;
+      ev.preventDefault(); const email = $l('#lk-ml-email').value.trim(), alerts = $l('#lk-ml-alerts').checked, weekly = $l('#lk-ml-weekly').checked, reports = $l('#lk-ml-reports').checked, leaderboard = $l('#lk-ml-leaderboard').checked, reportCard = $l('#lk-ml-card').checked, morning = $l('#lk-ml-morning').checked, evening = $l('#lk-ml-evening').checked;
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return err('Enter an email address.');
-      if (!alerts && !weekly && !reports && !leaderboard && !reportCard && !morning) return err('Pick at least one kind of email, or turn email updates off.');
+      if (!alerts && !weekly && !reports && !leaderboard && !reportCard && !morning && !evening) return err('Pick at least one kind of email, or turn email updates off.');
       const b = $l('#lk-ml-go'); b.disabled = true; err('Saving…');
-      try { await writeMail(Object.assign({}, mailPrefs() || {}, { email, alerts, weekly, reports, leaderboard, reportCard, morning, gmail: gmailOn() })); open(); toast('Email updates are on. The first ones come after the next market close.'); }
+      try { await writeMail(Object.assign({}, mailPrefs() || {}, { email, alerts, weekly, reports, leaderboard, reportCard, morning, evening, gmail: gmailOn() })); open(); toast('Email updates are on. The first ones come after the next market close.'); }
       catch (e) { console.error(e); b.disabled = false; err(e.message || String(e)); }
     };
     const off = $l('#lk-ml-off');
     if (off) off.onclick = async () => {
       off.disabled = true;
-      try { await setMail(Object.assign({}, mailPrefs(), { alerts: false, weekly: false, reports: false, leaderboard: false, reportCard: false, morning: false })); open(); toast('Email updates are off.'); }
+      try { await setMail(Object.assign({}, mailPrefs(), { alerts: false, weekly: false, reports: false, leaderboard: false, reportCard: false, morning: false, evening: false })); open(); toast('Email updates are off.'); }
       catch (e) { console.error(e); off.disabled = false; err(e.message || String(e)); }
     };
   }
@@ -2637,7 +2638,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   })();
 })();
 </script>
-<meta name="pd-build" content="57aab6302dba 2026-10-05 20:11">
+<meta name="pd-build" content="57aab6302dba 2026-10-05 20:17">
 <style>
 :root{
   /* Apple-style system: SF (the system font on iPhone and Mac) for everything, quiet greys, one blue accent, green / red

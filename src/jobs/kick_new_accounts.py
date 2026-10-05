@@ -17,6 +17,7 @@ workflow, which emails Khaled how to renew it (once that key has expired it can 
 "Actions: Read and write" (a repository secret); without it the script says so and exits 0.
 Sunday to Thursday from 9:00 Cairo it also starts the private repo's "Morning brief" workflow once a day (the brief before
 the 10:00 EGX open; its own runs show whether today's started).
+Sunday to Thursday from 16:30 Cairo it starts the private repo's "After-close recap" workflow once a day the same way.
 Exit 0 whatever it found, 1 when Firestore or GitHub could not be reached."""
 import os, sys, json, argparse, datetime, urllib.request, urllib.error
 
@@ -26,6 +27,7 @@ GH = ENGINE + "/actions/workflows/account-mail.yml"
 EMAIL_RUN = ENGINE + "/actions/workflows/email-run.yml"
 KEY_WF = ENGINE + "/actions/workflows/alarm-key.yml"
 MORNING_WF = ENGINE + "/actions/workflows/morning.yml"
+EVENING_WF = ENGINE + "/actions/workflows/evening.yml"
 WARN_DAYS = (14, 7, 3, 2, 1)
 
 
@@ -81,29 +83,39 @@ def key_check(now, token, dry=False):
     return f"alarm key: expires {d}; reminder started"
 
 
-def morning_check(now, token, dry=False):
-    """The morning brief: Sunday to Thursday from 9:00 to 9:59 Cairo, starts the private repo's "Morning brief" workflow
-    once a day (its own runs show whether today's started). Returns a log line, or None outside the window."""
+def daily_start(now, token, wf, label, start, end, dry=False):
+    """Starts the private repo's workflow wf once a day, Sunday to Thursday, between start and end (Cairo (hour, minute),
+    end excluded); its own runs show whether today's started. Returns a log line, or None outside the window."""
     from zoneinfo import ZoneInfo
     cairo = now.astimezone(ZoneInfo("Africa/Cairo"))
-    if not token or cairo.hour != 9 or cairo.strftime("%a") in ("Fri", "Sat"):
+    if not token or not (start <= (cairo.hour, cairo.minute) < end) or cairo.strftime("%a") in ("Fri", "Sat"):
         return None
     hdr = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
     try:
-        runs = get(f"{MORNING_WF}/runs?per_page=5", hdr).get("workflow_runs") or []
+        runs = get(f"{wf}/runs?per_page=5", hdr).get("workflow_runs") or []
     except (urllib.error.URLError, ValueError) as e:
-        return f"morning brief: could not read its runs ({type(e).__name__}: {getattr(e, 'code', '')})"
+        return f"{label}: could not read its runs ({type(e).__name__}: {getattr(e, 'code', '')})"
     if any(when(r["created_at"]).astimezone(ZoneInfo("Africa/Cairo")).date() == cairo.date() for r in runs):
-        return "morning brief: already started today"
+        return f"{label}: already started today"
     if dry:
-        return "morning brief: would start it now (dry run)"
-    req = urllib.request.Request(f"{MORNING_WF}/dispatches", data=json.dumps({"ref": "main"}).encode(), headers={**hdr, "Content-Type": "application/json"}, method="POST")
+        return f"{label}: would start it now (dry run)"
+    req = urllib.request.Request(f"{wf}/dispatches", data=json.dumps({"ref": "main"}).encode(), headers={**hdr, "Content-Type": "application/json"}, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             r.read()
     except urllib.error.URLError as e:
-        return f"morning brief: could not start it ({type(e).__name__}: {getattr(e, 'code', '')})"
-    return "morning brief: started"
+        return f"{label}: could not start it ({type(e).__name__}: {getattr(e, 'code', '')})"
+    return f"{label}: started"
+
+
+def morning_check(now, token, dry=False):
+    """The morning brief: Sunday to Thursday from 9:00 to 9:59 Cairo (before the 10:00 open)."""
+    return daily_start(now, token, MORNING_WF, "morning brief", (9, 0), (10, 0), dry)
+
+
+def evening_check(now, token, dry=False):
+    """The after-close recap: Sunday to Thursday from 16:30 to 17:59 Cairo (the shared market data has the close by then)."""
+    return daily_start(now, token, EVENING_WF, "after-close recap", (16, 30), (18, 0), dry)
 
 
 def main(argv=None):
@@ -119,6 +131,9 @@ def main(argv=None):
     mc = morning_check(now, os.environ.get("ENGINE_TOKEN", "").strip(), a.dry_run)
     if mc:
         print(mc)
+    ec = evening_check(now, os.environ.get("ENGINE_TOKEN", "").strip(), a.dry_run)
+    if ec:
+        print(ec)
     try:
         docs, page = [], ""
         while True:

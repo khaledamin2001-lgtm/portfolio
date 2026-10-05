@@ -311,6 +311,18 @@ try:
           kna.morning_check(at9 - datetime.timedelta(minutes=1), "k") is None and kna.morning_check(at9 + datetime.timedelta(minutes=60), "k") is None
           and kna.morning_check(at9 + datetime.timedelta(days=1), "k") is None and kna.morning_check(at9 + datetime.timedelta(days=2), "k") is None
           and kna.morning_check(at9, "") is None and not calls)
+    # the after-close recap: Sunday to Thursday, 16:30-17:59 Cairo, once a day
+    at1630 = datetime.datetime(2026, 10, 8, 13, 30, tzinfo=datetime.timezone.utc)   # Thursday 16:30 Cairo (summer time)
+    _fake(None); calls.clear()
+    out = kna.evening_check(at1630, "k"); post = [c for c in calls if c[0] == "POST"]
+    check("after-close recap: at 16:30 on a weekday the workflow is started", out == "after-close recap: started" and len(post) == 1 and post[0][1].endswith("/actions/workflows/evening.yml/dispatches"))
+    _fake(None, ["2026-10-08T13:30:20Z"]); calls.clear()
+    check("after-close recap: only once a day", kna.evening_check(at1630 + datetime.timedelta(minutes=5), "k") == "after-close recap: already started today" and not [c for c in calls if c[0] == "POST"])
+    _fake(None); calls.clear()
+    check("after-close recap: not before 16:30, not from 18:00, not on Friday or Saturday, and the morning window is not the evening's",
+          kna.evening_check(at1630 - datetime.timedelta(minutes=1), "k") is None and kna.evening_check(at1630 + datetime.timedelta(minutes=90), "k") is None
+          and kna.evening_check(at1630 + datetime.timedelta(days=1), "k") is None and kna.evening_check(at1630 + datetime.timedelta(days=2), "k") is None
+          and kna.evening_check(at9, "k") is None and kna.morning_check(at1630, "k") is None and not calls)
     # a new account while the scheduled email run is going: wait (both would email the same account), start it after
     import io, contextlib
     os.environ["ENGINE_TOKEN"] = "k"

@@ -532,6 +532,19 @@ try:
         check("morning brief: once a day", morning("2026-09-24T06:20:00Z") == [] and owner_sent == [])
         check("morning brief: nothing on a Friday", morning("2026-09-25T06:00:00Z") == [] and owner_sent == [])
         check("morning brief: the next session day, again", len(morning("2026-09-27T06:00:00Z")) == 1 and len(owner_sent) == 1)
+        # the after-close recap (run_morning.py --evening, 16:30 Cairo): accounts that ticked it, only when today's close is in
+        def evening(now, prefs_evening=True):
+            sent.clear(); owner_sent.clear()
+            DB[f"mail/{UID}"]["pkg"] = seal_mail({"uid": UID, "email": "friend@example.com", "refresh": "RT1", "pk8": pk8, "prefs": {"alerts": True, "morning": True, "evening": prefs_evening}})
+            run_morning.main(["--engine", eng, "--code", code, "--now", now, "--evening"], http=FakeHttp(), send=send, send_owner=lambda ctx, s, t, h: owner_sent.append((s, t)) or "sent")
+            return [m for m in sent if "after the close" in m["subject"]]
+        es = evening("2026-09-24T13:30:00Z")      # Thursday 16:30 Cairo; the synthetic market data closes on 24 Sep
+        check("after-close recap: the account that ticked it gets today's close, to its own address (nothing from the old owner setup)",
+              [m["to"] for m in es] == ["friend@example.com"] and "today vs index" in es[0]["subject"] and "AFTER THE CLOSE" in es[0]["text"].upper()
+              and "YOUR HOLDINGS" in es[0]["text"] and "If the EGX30 Capped fell 5%" not in es[0]["text"] and owner_sent == [], json.dumps([[m["to"], m["subject"]] for m in sent]))
+        check("after-close recap: once a day, and separate from the morning brief", evening("2026-09-24T13:50:00Z") == [])
+        check("after-close recap: not when the market data has no close for today (a holiday, or not published yet)", evening("2026-09-27T13:30:00Z") == [])
+        check("after-close recap: not for an account that did not tick it", evening("2026-09-29T13:30:00Z", prefs_evening=False) == [])
     finally:
         jc.record_job = real_record
         DB[f"mail/{UID}"]["pkg"], DB[f"mail/{OUID}"]["pkg"] = upkg, opkg
@@ -580,6 +593,10 @@ try:
         run_morning.main(["--engine", eng, "--code", code, "--now", "2026-10-04T06:00:00Z"], http=FakeHttp(), send=send, send_owner=lambda ctx, s, t, h: owner_sent.append((s, t)) or "sent")
         check("live: the morning brief comes from the account, not from the engine",
               owner_sent == [] and [m["to"] for m in sent if "morning brief" in m["subject"]].count("owner@example.com") == 1, json.dumps([[m["to"], m["subject"]] for m in sent]))
+        sent.clear()
+        run_morning.main(["--engine", eng, "--code", code, "--now", "2026-09-24T13:30:00Z", "--evening"], http=FakeHttp(), send=send)
+        check("live: the owner's account gets the after-close recap without ticking it (on by default for the owner)",
+              [m["to"] for m in sent if "after the close" in m["subject"]].count("owner@example.com") == 1, json.dumps([[m["to"], m["subject"]] for m in sent]))
     finally:
         if cfg0 is None:
             os.path.exists(cfg_path) and os.remove(cfg_path)
