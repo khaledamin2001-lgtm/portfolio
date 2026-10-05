@@ -55,31 +55,35 @@ const up = (url) => new Promise((res) => { http.get(url, (r) => { r.resume(); re
       // a fresh device sees "Create your portfolio" / "Sign in" first; the site's own portfolios sit behind "Open a portfolio with a setup key"
       await page.locator('[data-testid="live-signup"]').waitFor({ state: 'visible', timeout: 20000 }).catch(() => {});
       check(`${V} a fresh device is offered to create a portfolio or sign in`, (await page.locator('[data-testid="live-signup"]').isVisible()) && (await page.locator('[data-testid="live-signin"]').isVisible()));
-      await page.locator('[data-testid="live-setup-key-list"]').click().catch(() => {});
-      const firstPick = page.locator(`[data-testid="live-pick-${portfolios[0].id}"]`);
-      await firstPick.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
-      const picks = await Promise.all(portfolios.map((p) => page.locator(`[data-testid="live-pick-${p.id}"]`).isVisible()));
-      check(`${V} lock screen shows the portfolio picker (${portfolios.map((p) => p.id).join(', ')})`, picks.every(Boolean), `visible: ${picks.join(',')} after ${Date.now() - t0} ms`);
-      check(`${V} a portfolio that moved into its owner's account is not offered with a setup key (${moved.map((p) => p.id).join(', ') || 'none'})`, (await Promise.all(moved.map((p) => page.locator(`[data-testid="live-pick-${p.id}"]`).count()))).every((n) => n === 0));
       const locked = await page.evaluate(() => document.body.classList.contains('pd-locked') && !document.getElementById('lock').hidden);
       check(`${V} the app stays behind the lock (body.pd-locked, #lock shown)`, locked);
       const title = await page.title();
       check(`${V} page title`, title === 'Stock Market Portfolio Tracker', title);
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
       check(`${V} lock screen has no horizontal scroll`, overflow <= 1, `${overflow}px`);
-      // 2. setup-key screen
-      phase = 'pick';
-      if (picks[0]) await firstPick.click();
-      const keyInput = page.locator('[data-testid="live-setup-key"]');
-      const keyShown = await keyInput.waitFor({ state: 'visible', timeout: 10000 }).then(() => true, () => false);
-      check(`${V} picking ${portfolios[0].id} loads keys.json and asks for the setup key`, keyShown);
-      // 3. a wrong setup key is refused
-      if (keyShown) {
-        phase = 'wrong-key';
-        await keyInput.fill('CIXX-TEST-WRNG-KEYX-ABCD');
-        await page.locator('[data-testid="live-setup-submit"]').click();
-        const msg = await page.locator('#lock .lk-err').filter({ hasText: /not right/ }).first().textContent({ timeout: 20000 }).catch(() => '');
-        check(`${V} a wrong setup key is refused`, /not right/.test(msg || ''), (msg || '(no message)').trim());
+      if (!portfolios.length) {   // every portfolio lives in its owner's account: no setup-key list at all
+        check(`${V} no setup-key portfolios are offered (all moved into accounts: ${moved.map((p) => p.id).join(', ')})`, !(await page.locator('[data-testid="live-setup-key-list"]').count()));
+      } else {
+        await page.locator('[data-testid="live-setup-key-list"]').click().catch(() => {});
+        const firstPick = page.locator(`[data-testid="live-pick-${portfolios[0].id}"]`);
+        await firstPick.waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
+        const picks = await Promise.all(portfolios.map((p) => page.locator(`[data-testid="live-pick-${p.id}"]`).isVisible()));
+        check(`${V} lock screen shows the portfolio picker (${portfolios.map((p) => p.id).join(', ')})`, picks.every(Boolean), `visible: ${picks.join(',')} after ${Date.now() - t0} ms`);
+        check(`${V} a portfolio that moved into its owner's account is not offered with a setup key (${moved.map((p) => p.id).join(', ') || 'none'})`, (await Promise.all(moved.map((p) => page.locator(`[data-testid="live-pick-${p.id}"]`).count()))).every((n) => n === 0));
+        // 2. setup-key screen
+        phase = 'pick';
+        if (picks[0]) await firstPick.click();
+        const keyInput = page.locator('[data-testid="live-setup-key"]');
+        const keyShown = await keyInput.waitFor({ state: 'visible', timeout: 10000 }).then(() => true, () => false);
+        check(`${V} picking ${portfolios[0].id} loads keys.json and asks for the setup key`, keyShown);
+        // 3. a wrong setup key is refused
+        if (keyShown) {
+          phase = 'wrong-key';
+          await keyInput.fill('CIXX-TEST-WRNG-KEYX-ABCD');
+          await page.locator('[data-testid="live-setup-submit"]').click();
+          const msg = await page.locator('#lock .lk-err').filter({ hasText: /not right/ }).first().textContent({ timeout: 20000 }).catch(() => '');
+          check(`${V} a wrong setup key is refused`, /not right/.test(msg || ''), (msg || '(no message)').trim());
+        }
       }
       // 4. errors, CSP, requests
       const csp = await page.evaluate(() => window.__csp);
