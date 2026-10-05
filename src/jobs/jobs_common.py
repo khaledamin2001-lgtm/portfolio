@@ -1,22 +1,20 @@
 #!/usr/bin/env python3
-"""Shared plumbing for the engine-repo jobs (run_market.py, run_sync.py, publish.py, mail_send.py, imap_fetch.py).
+"""Shared plumbing for the jobs (run_account_mail.py, run_shared_market.py, run_morning.py, email_gate.py, mail_send.py, ...).
 
-The jobs run inside a PRIVATE engine repository's GitHub Actions workflow with two checkouts:
-    engine/   the private repo: config.json, jobs.json, db/<collection>/<doc>.enc.json (see store.py)
-    code/     the public site repo at main: src/tools/* (plan.js, sync.js, ...), src/jobs/* (this code), tools/*, p/<id>/keys.json
-Nothing here holds private data, and nothing any job prints carries a portfolio figure or a secret: logs are counts and
-statuses only. Plaintext documents exist only in a temporary work directory that is removed when the job ends.
+The jobs run inside the PRIVATE engine repository's GitHub Actions workflows with two checkouts:
+    engine/   the private repo: config.json, jobs.json, shared/ (the public market data every account reads)
+    code/     the public site repo at main: src/tools/* (plan.js, sync.js, ...), src/jobs/* (this code), keys/mail.json
+Every portfolio lives in its owner's site account (Firestore), encrypted to that account's key; a job opens one only
+through the account's own mail package (run_account_mail.py). Nothing any job prints carries a portfolio figure or a
+secret: logs are counts and statuses only. Plaintext documents exist only in a temporary work directory that is removed
+when the job ends.
 
-config.json (plain, in the engine repo):
-    {"portfolioId", "name", "siteRepo", "siteFolder", "timezone", "recipient"?, "failureRecipient"?, "marketEmail"?,
-     "reportEmail"?, "weeklyEmail"?}
-    recipient         the one address the portfolio's emails go to (default: portfolio/settings.factsheetEmail)
-    failureRecipient  where its job FAILED notices go (default: recipient) - the platform owner, for a portfolio run
-                      for someone else
-    marketEmail       false = no "market updated" email (default true)
-    reportEmail       false = no month-end report email (default true); the reports are still published
-    weeklyEmail       true/false = the Thursday summary (default: on for portfolioId "khaled" only)
+config.json (plain, in the engine repo): {"siteRepo", "timezone", "ownerEmail"}
+    siteRepo    the public site repository ("owner/name")
+    ownerEmail  where the site owner's notices go (job FAILED, key and token reminders); default: the GMAIL_ADDRESS secret
 jobs.json (plain, in the engine repo): when each scheduled job last ran (dates and statuses only, never figures).
+keys/mail.json (in the site repo): the MAIL key's public half and its private half wrapped by SETUP_KEY (the
+KHALED_SETUP_KEY secret); accounts seal their mail packages to it.
 
 Times: every Cairo date/hour comes from src/tools/plan.js (env JOBS_NOW / --now overrides the clock, tests only).
 """
@@ -43,7 +41,7 @@ class JobError(Exception):
 
 
 class PushRejected(Exception):
-    """Someone else pushed to the engine repo meanwhile (e.g. an edit from the site): redo from fresh data."""
+    """Someone else pushed to the engine repo meanwhile: redo from fresh data."""
 
 
 def short(m):
@@ -77,41 +75,22 @@ def mask(s, limit=300):
 
 
 # ---------------------------------------------------------------- context
+EMAIL_RE = re.compile(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[A-Za-z]{2,}$")
+
+
 class Ctx:
-    """Everything a job needs about its engine repo, code checkout and keys."""
+    """The engine checkout, the code checkout and the clock."""
     def __init__(self, engine, code=None, now=None):
         self.engine = os.path.abspath(engine)
         self.code = os.path.abspath(code or CODE_DEFAULT)
         self.now = now or os.environ.get("JOBS_NOW") or None
         p = os.path.join(self.engine, "config.json")
-        if not os.path.exists(p):
-            raise JobError("config", "config.json is missing in the engine repository")
-        with open(p, encoding="utf-8") as f:
-            self.config = json.load(f)
-        for k in ("portfolioId", "siteRepo", "siteFolder"):
-            if not self.config.get(k):
-                raise JobError("config", f"config.json has no {k}")
-        if not re.match(r"^p/[a-z0-9_-]+$", self.config["siteFolder"]):
-            raise JobError("config", "config.json siteFolder must look like p/<id>")
-        self.keys_path = os.path.join(self.code, *self.config["siteFolder"].split("/"), "keys.json")
-        if not os.path.exists(self.keys_path):
-            raise JobError("config", f"{self.config['siteFolder']}/keys.json not found in the code checkout")
-        self.keys = store.load_keys(self.keys_path)
-        self._priv = None
+        self.config = {}
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as f:
+                self.config = json.load(f)
         self.tmp = None
         self.plan_cache = None
-
-    @property
-    def priv(self):
-        if self._priv is None:
-            key = os.environ.get("SETUP_KEY", "").strip()
-            if not key:
-                raise JobError("unlock", "SETUP_KEY is not set")
-            try:
-                self._priv = store.unlock(self.keys, key)
-            except store.StoreError as e:
-                raise JobError("unlock", str(e)) from None
-        return self._priv
 
     def tool(self, *p):
         return os.path.join(self.code, "src", "tools", *p)
@@ -128,39 +107,15 @@ class Ctx:
             shutil.rmtree(self.tmp, ignore_errors=True)
         self.tmp = None
 
-    # ---- documents
-    def materialize(self, out):
-        if os.path.isdir(out):
-            shutil.rmtree(out)
-        try:
-            return store.materialize(self.engine, self.keys, self.priv, out)
-        except store.StoreError as e:
-            raise JobError("decrypt", str(e)) from None
-
-    def read(self, coll, doc):
-        try:
-            d = store.read_doc(self.engine, self.keys, self.priv, coll, doc)
-        except store.StoreError as e:
-            raise JobError("decrypt", str(e)) from None
-        return d
-
-    def settings(self):
-        d = self.read("portfolio", "settings")
-        return (d or {}).get("data") or {}
-
     def recipient(self):
-        """The one address a portfolio's emails may go to: config.json "recipient" when set (e.g. Yassin's own address),
-        else portfolio/settings.factsheetEmail."""
-        to = str(self.config.get("recipient") or self.settings().get("factsheetEmail") or "").strip()
-        if not re.match(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[A-Za-z]{2,}$", to):
-            raise JobError("email", "portfolio/settings has no valid factsheetEmail")
+        """The site owner's address: config.json "ownerEmail", else the GMAIL_ADDRESS secret."""
+        to = str(self.config.get("ownerEmail") or os.environ.get("GMAIL_ADDRESS") or "").strip()
+        if not EMAIL_RE.match(to):
+            raise JobError("email", "no owner address (config.json ownerEmail or GMAIL_ADDRESS)")
         return to
 
     def failure_recipient(self):
-        """Where a job's FAILED notice goes: config.json "failureRecipient" when set (the platform owner, for a portfolio
-        whose own emails go to someone else, e.g. Yassin's), else recipient()."""
-        to = str(self.config.get("failureRecipient") or "").strip()
-        return to if re.match(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[A-Za-z]{2,}$", to) else self.recipient()
+        return self.recipient()
 
     # ---- plan.js
     def plan(self, last_run=None):
@@ -187,6 +142,21 @@ class Ctx:
             return self.plan()["today"]
         except Exception:
             return cairo_today()
+
+
+def mail_keys_path(code):
+    return os.path.join(code, "keys", "mail.json")
+
+
+def mail_key(code):
+    """The MAIL key's private half (keys/mail.json unwrapped with SETUP_KEY): opens the accounts' mail packages."""
+    key = os.environ.get("SETUP_KEY", "").strip()
+    if not key:
+        raise JobError("mail key", "SETUP_KEY is not set")
+    try:
+        return store.unlock(store.load_keys(mail_keys_path(code)), key)
+    except store.StoreError as e:
+        raise JobError("mail key", str(e)) from None
 
 
 def cairo_today():
@@ -272,13 +242,13 @@ def engine_refresh(ctx):
 
 
 def engine_commit(ctx, paths, message):
-    """Commit the given engine-repo paths (db files, jobs.json) and push. Returns the short head or None when
+    """Commit the given engine-repo paths (jobs.json) and push. Returns the short head or None when
     there was nothing to commit. Raises PushRejected when origin moved meanwhile (the caller redoes its work)."""
     paths = sorted(set(paths))
     if not paths:
         return None
     for p in paths:
-        if not (p.startswith("db/") or p == "jobs.json"):
+        if p != "jobs.json":
             raise JobError("git", f"refusing to commit {p} to the engine repository")
     git(ctx.engine, "add", "-A", "--", *paths)
     if not git(ctx.engine, "diff", "--cached", "--name-only").stdout.strip():
@@ -298,47 +268,6 @@ def engine_commit(ctx, paths, message):
         if "rejected" in last or "non-fast-forward" in last or "fetch first" in last:
             raise PushRejected()
     raise JobError("git", "push to the engine repository failed: " + redact(last)[-300:])
-
-
-def apply_and_commit(ctx, writes, message):
-    """store.apply_writes + commit/push. Returns (result, head). VersionConflict/PushRejected propagate."""
-    if not writes:
-        return {"changed": [], "results": []}, None
-    hook = os.environ.pop("JOBS_TEST_HOOK", None)      # tests only: simulate a concurrent edit, once per process
-    if hook:
-        subprocess.run(["bash", "-c", hook], check=True, capture_output=True)
-    try:
-        res = store.apply_writes(ctx.engine, ctx.keys, writes, ctx.priv)
-    except store.VersionConflict:
-        raise
-    except store.StoreError as e:
-        raise JobError("write", str(e)) from None
-    head = engine_commit(ctx, res["changed"], message)
-    return res, head
-
-
-def versions_of(data_dir):
-    """{'coll/doc': version} of a materialized directory."""
-    out = {}
-    for c in sorted(os.listdir(data_dir)):
-        cd = os.path.join(data_dir, c)
-        if not os.path.isdir(cd):
-            continue
-        for f in os.listdir(cd):
-            if f.endswith(".json"):
-                with open(os.path.join(cd, f), encoding="utf-8") as fh:
-                    out[f"{c}/{f[:-5]}"] = json.load(fh).get("version", 1)
-    return out
-
-
-def main_moved(engine_dir):
-    """True once the engine's portfolio (config.json movedToAccount) lives in its owner's site account: its own jobs
-    (inbox sync, market update, publish, morning brief) then stand down and the account path does the work."""
-    try:
-        with open(os.path.join(engine_dir, "config.json"), encoding="utf-8") as f:
-            return bool(json.load(f).get("movedToAccount"))
-    except (OSError, ValueError):
-        return False
 
 
 def load_data(path, default=None):
@@ -387,12 +316,6 @@ def record_job(ctx, section, updates, message):
     raise JobError("record", "the engine repository kept changing")
 
 
-def mailed_months(section_state, keep=12):
-    """jobs.json[section]["monthEndEmailed"]: {month: Cairo date emailed}, the latest `keep` months."""
-    m = dict((section_state or {}).get("monthEndEmailed") or {})
-    return {k: m[k] for k in sorted(m)[-keep:]}
-
-
 # ---------------------------------------------------------------- time gate
 def gate(plan, windows, done, manual):
     """windows: [(slot, from_minute, to_minute)] in Cairo local time; done: {slot: 'YYYY-MM-DD'} of runs already made.
@@ -413,7 +336,7 @@ def failure_mark():
 
 
 def report_failure(ctx_or_none, job, step, detail, engine=None, code=None):
-    """Email 'Portfolio: <job> FAILED <date>' (step and error in the body) to settings.factsheetEmail, print the masked
+    """Email 'Portfolio: <job> FAILED <date>' (step and error in the body) to the site owner, print the masked
     FAILED line, and leave a marker so the workflow's own failure step does not email twice."""
     import mail_send
     date = ctx_or_none.today() if ctx_or_none else cairo_today()

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Build the two desk pages from app.html + engine.js + engine2.js + statement.js + app2.js (placeholders /*ENGINE*/
+"""Build the desk page from app.html + engine.js + engine2.js + statement.js + app2.js (placeholders /*ENGINE*/
 /*ENGINE2*/ /*STATEMENT*/ /*APP2*/). Run `python3 build.py` from any directory: inputs are read next to this file.
-Writes portfolio-desk.html (Khaled) and yassin-desk.html (same page, Yassin's <title>) with a build stamp
-<meta name="pd-build" content="<12 hex of sha256 over the five inputs> <UTC YYYY-MM-DD HH:MM>"> right after the title."""
+Writes portfolio-desk.html (site/build_site.py wraps it into the site; the jobs render the PDF factsheet on it) with a
+build stamp <meta name="pd-build" content="<12 hex of sha256 over the five inputs> <UTC YYYY-MM-DD HH:MM>"> after the title."""
 import os, hashlib, datetime
 H = os.path.dirname(os.path.abspath(__file__))
 rd = lambda f: open(os.path.join(H, f), encoding="utf-8").read()
@@ -13,11 +13,9 @@ page = src["app.html"]
 for ph, f in [("/*ENGINE*/", "engine.js"), ("/*ENGINE2*/", "engine2.js"), ("/*STATEMENT*/", "statement.js"), ("/*APP2*/", "app2.js")]:
     assert page.count(ph) == 1, f"placeholder {ph} not found exactly once in app.html"
     page = page.replace(ph, src[f])
-title = "<title>Khaled Portfolio Desk</title>"
-assert page.count(title) == 1, "app.html must start with the Khaled <title> line"
+title = "<title>Portfolio Desk</title>"
+assert page.count(title) == 1, "app.html must start with the <title> line"
 page = page.replace(title, title + '\n<meta name="pd-build" content="' + stamp + '">', 1)
-for out, t in [("portfolio-desk.html", title), ("yassin-desk.html", "<title>Yassin Portfolio Desk</title>")]:
-    s = page.replace(title, t, 1)
-    open(os.path.join(H, out), "w", encoding="utf-8").write(s)
-    print(f"{out} {len(s)} bytes")
+open(os.path.join(H, "portfolio-desk.html"), "w", encoding="utf-8").write(page)
+print(f"portfolio-desk.html {len(page)} bytes")
 print("pd-build", stamp)

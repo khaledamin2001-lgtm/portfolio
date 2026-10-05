@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prices for the market jobs (run_market.py, run_shared_market.py), from TradingView's public scanner (15-min delayed) plus a short daily-bar
+"""Prices for the market jobs (run_shared_market.py), from TradingView's public scanner (15-min delayed) plus a short daily-bar
 backfill from TradingView's chart websocket so a missed run never leaves a hole in the price history.
 
 Usage: python3 fetch_prices.py <assets.json> [--fill N] [--no-fill] [--all]

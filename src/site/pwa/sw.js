@@ -1,7 +1,7 @@
 /* Portfolio Desk service worker. build_site.py fills in the stamps and the static file list; the built copy sits at the site
    root next to index.html so its scope is the whole site (…/portfolio/ on GitHub Pages).
-   - The page, portfolios.json, the members' shared market data (m/market.enc.json) and each portfolio's keys.json,
-     data.enc.json and exports/*: network first. If the network has
+   - The page, the members' shared market data (m/market.enc.json), the mail key (keys/mail.json) and the accounts'
+     month-end files (a/<hash>/exports/*): network first. If the network has
      not answered within 4 s, or fails outright, or answers 5xx, the copy saved on this device is served instead (a 404 or
      any other answer is passed through as is, so a missing file still reads as missing). Every 200 answer replaces the
      saved copy; a .json file is saved only if it parses. The saved copy carries an x-pd-saved-at header: lock.js shows its
@@ -9,7 +9,8 @@
    - Fonts, icons and the manifest: cache first (they only change with a new build, which gets a new cache).
    - Anything cross-origin (the TradingView scanner) and anything that is not a GET is never touched: it goes straight to the
      network and fails normally when offline.
-   Everything the site serves is either public or encrypted (data.enc.json, exports), so nothing readable lands in the cache.
+   Everything the site serves is either public or encrypted (market data, month-end files), so nothing readable lands in the
+   cache; an account's own documents are kept by lock.js (IndexedDB 'cache:<id>'), encrypted to its key.
    A new build is a new cache name: the new worker installs, skips waiting, takes over open pages, carries the saved data
    files over from the old cache (only those missing from the new one) and deletes the old caches. */
 'use strict';
@@ -21,7 +22,7 @@ const STATIC = __PD_STATIC__;      // cache-first files, relative to the scope
 const TIMEOUT_MS = 4000;
 const SCOPE = new URL(self.registration.scope);
 const STATIC_SET = new Set(STATIC);
-const DATA = /^(?:portfolios\.json|m\/market\.enc\.json|p\/[^/]+\/(?:keys\.json|data\.enc\.json|exports\/[^/]+))$/;
+const DATA = /^(?:m\/market\.enc\.json|keys\/mail\.json|a\/[^/]+\/exports\/[^/]+)$/;
 const rel = (url) => (url.origin === self.location.origin && url.pathname.startsWith(SCOPE.pathname) ? decodeURIComponent(url.pathname.slice(SCOPE.pathname.length)) : null);
 const keyFor = (u) => { const url = new URL(u, SCOPE); url.search = ''; url.hash = ''; return url.href; };   // ?t=<now> cache busters share one entry
 const SHELL = keyFor('./');
@@ -70,11 +71,7 @@ self.addEventListener('install', (event) => {
     const c = await caches.open(CACHE);
     const get = async (path) => { const r = await fetch(new URL(path, SCOPE).href, { cache: 'reload' }); if (r.status !== 200) throw new Error(path + ' ' + r.status); await save(c, keyFor(path), r); };
     await get('./');   // the page itself is required; everything else is best effort
-    await Promise.allSettled([...STATIC, 'portfolios.json'].map(get));
-    try {   // each portfolio's keys and data, so the app opens offline right after the first visit
-      const list = await (await c.match(keyFor('portfolios.json'))).json();
-      await Promise.allSettled(list.flatMap((p) => ['p/' + p.id + '/keys.json', 'p/' + p.id + '/data.enc.json']).map(get));
-    } catch (e) {}
+    await Promise.allSettled([...STATIC, 'm/market.enc.json'].map(get));   // the market data too, so the app opens offline right after the first visit
   })());
 });
 
@@ -87,7 +84,7 @@ self.addEventListener('activate', (event) => {
         const old = await caches.open(name);
         for (const req of await old.keys()) {
           const r = rel(new URL(req.url));
-          if (r && /^p\//.test(r) && !(await cur.match(req))) { const res = await old.match(req); if (res) await cur.put(req, res); }
+          if (r && /^(?:m|a)\//.test(r) && !(await cur.match(req))) { const res = await old.match(req); if (res) await cur.put(req, res); }
         }
       } catch (e) {}
       await caches.delete(name);

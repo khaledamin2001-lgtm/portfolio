@@ -1,50 +1,40 @@
 /* site/lock.js: everything specific to the live site, wrapped around the page (app.html) by build_site.py.
 
    Contents (search for the "---------- name" line):
-     portfolios ........ portfolios.json, the current portfolio
+     portfolios ........ the account open on this page
      device storage .... the per-device key store (IndexedDB) and its bookkeeping (localStorage)
-     keys / data ....... unwrapping a portfolio's private key; downloading and decrypting its data
-     the page's database  window.pdHost: the documents the page reads, and saves when editing is on
-     editing from the site  GitHub token, encrypted commits to the engine repository, job buttons
+     keys / data ....... the account's key; the month-end files
+     the page's database  window.pdHost: the documents the page reads, and saves to the account
      live prices ....... TradingView's scanner, straight from the browser
      WebAuthn with PRF . Face ID / Touch ID / fingerprint that really unwraps the key
-     screens ........... the lock screens: choose, setup key, password, unlock, forget
+     screens ........... the lock screens: choose, password, unlock, forget
      accounts .......... Firebase sign-up / sign-in, the account's encrypted documents, onboarding, email updates, Gmail
      friends ........... friend requests (checked against directory/{email}), shared copies, status, reset / delete
      admin ............. the site owner's account list
-     linked account .... a setup-key portfolio linked to a site account
      the friends hub ... the top-left menu and the Overview cards, ranked over the page's period
      installable app ... the service worker and "Install app"
      boot .............. start-up
 
-   How the setup-key portfolios are protected (device store v3):
-   Each portfolio lives under p/<id>/: its figures are published encrypted (data.enc.json) to that portfolio's public key; the
-   matching private key is published only wrapped by the portfolio's one-time setup key (keys.json — v3 files carry no
-   password hash; the device password never leaves the device, and a v2 file's `pw` field is ignored).
-   Once a device is set up it keeps the private key (PKCS8) in IndexedDB, 'dev:<id>', wrapped by AES-256-GCM under a key
-   derived from the device password (PBKDF2-SHA256, 310,000 iterations, a random 16-byte salt per device) with additional
-   data 'portfolio-device-v3'; and optionally a second wrapping, 'bio:<id>', under a key derived (HKDF-SHA256, info
-   'portfolio-bio-v3') from the WebAuthn PRF output of the device's platform passkey, so Face ID / Touch ID / fingerprint
-   really unlocks the key instead of just gating a screen (a device whose passkeys cannot do PRF gets no biometric option).
-   localStorage holds only bookkeeping: pd.dev.<id> = { v: 3, tries, at }, pd.bio.v3 = { cred } — no key material, no hash.
-   Ten wrong passwords remove the portfolio from the device; failing to download or decrypt the data never does. After a key
-   rotation (rotate_keys.py) the device's key no longer matches keys.json's public key: the page says so and the user removes
-   the old setup through the explicit "Forget" flow before entering the new setup key.
+   Every portfolio lives in its owner's site account (see "accounts" below): its documents are encrypted in the browser to
+   the account's own key, which only the account password (or its recovery code) unwraps. On each device the account is set
+   up by signing in once; the device then keeps the private key (PKCS8) in IndexedDB, 'dev:<id>', wrapped by AES-256-GCM
+   under a key derived from the account password (PBKDF2-SHA256, 310,000 iterations, a random 16-byte salt per device) with
+   additional data 'portfolio-device-v3'; and optionally a second wrapping, 'bio:<id>', under a key derived (HKDF-SHA256,
+   info 'portfolio-bio-v3') from the WebAuthn PRF output of the device's platform passkey, so Face ID / Touch ID /
+   fingerprint really unlocks the key instead of just gating a screen (a device whose passkeys cannot do PRF gets no
+   biometric option). localStorage holds only bookkeeping: pd.dev.<id> = { v: 3, tries, at }, pd.bio.v3 = { cred }, the
+   accounts on this device (pd.accounts: ids, names, public keys) — no key material, no hash. Ten wrong passwords remove the
+   account from the device (signing in adds it back); failing to download or decrypt the data never does.
    Locking (the Lock button, or 5 minutes in the background) drops the key and the decrypted documents from memory and blanks
-   the page; unlocking downloads the data again. Devices set up under v2 (private key wrapped by a non-extractable browser
-   key, password checked against the published hash) are migrated on first use without the setup key: the key is read with
-   the browser key and the user chooses a real password.
-   Installable app: sw.js (built from pwa/sw.js) keeps a copy of the page and of the ENCRYPTED data files on the device, so the
-   Home Screen app opens offline with the last loaded data. Nothing about the key changes: the private key stays in IndexedDB
-   wrapped by the password / passkey, and unlocking an offline copy needs exactly the same password. When the data on screen
-   came from that saved copy, or the device is offline, a small banner says so (#pd-offline).
-   Editing (portfolios with an "engine" repository): a device can also keep a GitHub token for that repository, sealed to the
-   portfolio's public key in IndexedDB 'tok:<id>'; saves are encrypted here and committed to the engine repository (see
-   "editing from the site" below). Forgetting the portfolio removes the token with the key. */
+   the page; unlocking downloads the data again.
+   Installable app: sw.js (built from pwa/sw.js) keeps a copy of the page and of the shared ENCRYPTED market file on the
+   device, and the account's encrypted documents are kept in IndexedDB ('cache:<id>'), so the Home Screen app opens offline
+   with the last loaded data. Unlocking an offline copy needs exactly the same password. When the data on screen came from
+   that saved copy, or the device is offline, a small banner says so (#pd-offline). */
 (function(){
   'use strict';
   const MAX_TRIES = 10, RELOCK_MS = 5 * 60e3, REFRESH_MS = 30 * 60e3, LIVE_MS = 10 * 60e3, PBKDF2_ITER = 310000;
-  const CUR_LS = 'pd.current', BIO_LS = 'pd.bio.v3', OLD_BIO_LS = 'pd.bio.v1', LEGACY_LS = 'pd.device.v1';
+  const CUR_LS = 'pd.current', BIO_LS = 'pd.bio.v3';
   const DEV_AD = 'portfolio-device-v3', BIO_INFO = 'portfolio-bio-v3';
   const enc = new TextEncoder(), dec = new TextDecoder();
   const b64 = (u) => btoa(String.fromCharCode(...new Uint8Array(u)));
@@ -61,8 +51,7 @@
   const safariTip = () => (iosSafariTab() ? '<p class="lk-tip" data-testid="live-safari-tip">Tip: add this site to your Home Screen (Share → Add to Home Screen) so Safari keeps it set up. Safari deletes a website\'s saved setup after 7 days without a visit; a Home Screen app keeps it.</p>' : '');
 
   /* ---------- portfolios ---------- */
-  let PORTFOLIOS = [], CUR = null, OPENED = null;   // CUR: {id, name}; OPENED: id whose data is on the page
-  const base = () => 'p/' + CUR.id + '/';
+  let CUR = null, OPENED = null;   // CUR: the account open on this page {id, name, cloud, uid, email}; OPENED: id whose data is on the page
   const devLS = () => 'pd.dev.' + CUR.id;
 
   /* ---------- device storage (per portfolio; the passkey is shared by the device, its PRF salt is per portfolio) ---------- */
@@ -74,18 +63,9 @@
   const getDev = () => ls.get(devLS());
   const putDev = (d) => ls.set(devLS(), d);
   const isV3 = (d) => !!d && d.v === 3;
-  const isOld = (d) => !!d && d.v !== 3 && !!d.ct;   // v2: {iv, ct, tries, at} in localStorage + a CryptoKey in IndexedDB
   const notSetUp = () => Object.assign(new Error('This device is not set up'), { code: 'not_set_up' });
   // the ONLY callers: MAX_TRIES wrong passwords, and the explicit "Forget this portfolio" flow
-  async function forget() { ls.del(devLS()); await idbDel('dev:' + CUR.id); await idbDel('bio:' + CUR.id); await idbDel('tok:' + CUR.id); await idbDel('link:' + CUR.id); LINK = null;
-    if (CUR.cloud) { await idbDel('acct:' + CUR.id); await idbDel('cache:' + CUR.id); dropAccount(CUR.id); CLOUD = null; } }
-  async function migrateLegacy() {   // devices set up before the site held more than one portfolio (single-portfolio v1 layout)
-    const d = ls.get(LEGACY_LS); if (!d) return;
-    try { const dk = await idbGet('device'); if (dk) { await idbPut('dev:khaled', dk); await idbDel('device'); } } catch (e) {}
-    ls.set('pd.dev.khaled', { iv: d.iv, ct: d.ct, tries: d.tries || 0, at: d.at });   // old format; select() migrates it to v3
-    if (!ls.get(CUR_LS)) ls.set(CUR_LS, 'khaled');
-    ls.del(LEGACY_LS);
-  }
+  async function forget() { ls.del(devLS()); for (const k of ['dev:', 'bio:', 'acct:', 'cache:']) await idbDel(k + CUR.id); dropAccount(CUR.id); CLOUD = null; }
   async function pwKey(password, salt, usages) {
     const k0 = await crypto.subtle.importKey('raw', enc.encode(password.trim()), 'PBKDF2', false, ['deriveKey']);
     return crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: PBKDF2_ITER }, k0, { name: 'AES-GCM', length: 256 }, false, usages);
@@ -101,33 +81,15 @@
     if (!r || r.v !== 3 || !r.ct) throw notSetUp();
     return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ub64(r.iv), additionalData: enc.encode(DEV_AD) }, await pwKey(password, ub64(r.salt), ['decrypt']), ub64(r.ct)));
   }
-  async function openOld() {   // v2 store: no password involved — the browser key alone opens it
-    const d = getDev(), dk = await idbGet('dev:' + CUR.id);
-    if (!d || !d.ct || !dk || !(dk instanceof CryptoKey)) throw notSetUp();
-    return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ub64(d.iv) }, dk, ub64(d.ct)));
-  }
-
   /* ---------- keys ---------- */
   let KEYS = null, PK8 = null, DATA_AT = null, lastFetch = 0, fetchTry = 0;
-  let LINK = null;   // {uid, email, refresh, pk8, pub, name}: the site account linked to this setup-key portfolio, see "linked account" below
   let SAVED_AT = null;   // set when the last data answer was sw.js's saved copy (its x-pd-saved-at header), null when it came from the network
-  async function unwrapWithSetupKey(code) { return unwrapKey(KEYS.wrap, code.toUpperCase().replace(/[^A-Z0-9]/g, '')); }
-  // a keys.json-style wrap {salt, iv, ct, iter} opened with a secret: the setup key / recovery code (cleaned), or an account password
+  // a wrap {salt, iv, ct, iter} of the account key opened with a secret: the recovery code (cleaned), or the account password
   async function unwrapKey(w, clean) {
     const k0 = await crypto.subtle.importKey('raw', enc.encode(clean), 'PBKDF2', false, ['deriveKey']);
     const k = await crypto.subtle.deriveKey({ name: 'PBKDF2', hash: 'SHA-256', salt: ub64(w.salt), iterations: w.iter }, k0, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
     return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ub64(w.iv), additionalData: enc.encode('portfolio-key-v1') }, k, ub64(w.ct)));
   }
-  // does the device's private key belong to the public key the site currently publishes? (false after a key rotation)
-  async function keyMatches(pk8) {
-    try {
-      if (!KEYS || !KEYS.pub) return true;
-      const k = await crypto.subtle.importKey('pkcs8', pk8, { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
-      const j = await crypto.subtle.exportKey('jwk', k), u = (s) => atob(s.replace(/-/g, '+').replace(/_/g, '/') + '=='.slice(0, (4 - s.length % 4) % 4));
-      return btoa('\x04' + u(j.x) + u(j.y)) === KEYS.pub;
-    } catch (e) { console.error(e); return true; }   // never block an unlock on this check itself failing
-  }
-
   /* ---------- data ---------- */
   async function unseal(e, label, pk8) {
     const priv = await crypto.subtle.importKey('pkcs8', pk8 || PK8, { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']);
@@ -138,17 +100,7 @@
     const key = await crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: epk, info: enc.encode(label) }, hk, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
     return crypto.subtle.decrypt({ name: 'AES-GCM', iv: ub64(e.iv), additionalData: enc.encode(label) }, key, ub64(e.ct));
   }
-  async function fetchData() {
-    if (CUR && CUR.cloud) return fetchCloudData();
-    const r = await fetch(base() + 'data.enc.json?t=' + Date.now(), { cache: 'no-store' });
-    if (!r.ok) throw new Error('Could not download the portfolio data (' + r.status + ')');
-    const gz = await unseal(await r.json(), 'portfolio-data-v1');
-    const plain = await new Response(new Blob([gz]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
-    const bundle = JSON.parse(plain);
-    lastFetch = Date.now(); SAVED_AT = r.headers.get('x-pd-saved-at');
-    return bundle;
-  }
-  // month-end Excel workbooks, published encrypted under p/<id>/exports/ (exports/index.json lists them)
+  // the month-end Excel workbooks and PDF factsheets
   let EXPORTS = null;
   // an account's files (run_account_mail.py publish_files): a/<hash of its uid>/exports/, the index sealed too, so the site
   // only shows that files exist to the account that can open them; entries carry paths from the site root
@@ -156,10 +108,8 @@
   window.pdExports = async () => {
     if (EXPORTS) return EXPORTS;
     try {
-      if (CUR && CUR.cloud) {
-        const r = await fetch((await acctFiles()) + 'index.enc.json?t=' + Date.now(), { cache: 'no-store' });
-        EXPORTS = r.ok && PK8 ? JSON.parse(dec.decode(await unseal(await r.json(), 'portfolio-file-v1'))) : [];
-      } else { const r = await fetch(base() + 'exports/index.json?t=' + Date.now(), { cache: 'no-store' }); EXPORTS = r.ok ? await r.json() : []; }
+      const r = await fetch((await acctFiles()) + 'index.enc.json?t=' + Date.now(), { cache: 'no-store' });
+      EXPORTS = r.ok && PK8 ? JSON.parse(dec.decode(await unseal(await r.json(), 'portfolio-file-v1'))) : [];
     } catch (e) { EXPORTS = []; }
     return EXPORTS;
   };
@@ -168,7 +118,7 @@
   window.pdExportsReset = () => { EXPORTS = null; };   // for tests: list the files again
   // accounts made on the site get their month-end files by email (run_account_mail.py) and, from then on, here too; a month
   // with no file here gets this note instead of a download
-  window.pdExportsNote = (month, ym) => (!CUR || !CUR.cloud || (EXPORTS || []).some((x) => x.month === (ym || month)) ? null
+  window.pdExportsNote = (month, ym) => (!CUR || (EXPORTS || []).some((x) => x.month === (ym || month)) ? null
     : (mailPrefs() || {}).reports ? `Your month-end Excel workbook and PDF factsheet are emailed to you when a monthly statement is posted, and can be downloaded here after that. Look for "month-end report ${month}" in your email.`
       : 'Month-end Excel and PDF files come with the month-end report: open Account → Email updates and tick "Month-end report". They are made each time a monthly statement is posted.');
   window.pdDownloadExport = async (month, kind) => {
@@ -176,13 +126,13 @@
     if (!PK8) throw new Error('The portfolio is locked. Unlock it first.');
     const k = FILE_KINDS[kind || 'xlsx']; if (!k) throw new Error('Unknown file kind ' + kind);
     const list = await window.pdExports(); const x = list.find((e) => e.month === month); if (!x || !x[k.key]) throw new Error('No ' + k.what + ' published for ' + month);
-    const r = await fetch((CUR.cloud ? '' : base()) + x[k.key] + '?t=' + Date.now(), { cache: 'no-store' }); if (!r.ok) throw new Error('Could not download the ' + k.what + ' (' + r.status + ')');
+    const r = await fetch(x[k.key] + '?t=' + Date.now(), { cache: 'no-store' }); if (!r.ok) throw new Error('Could not download the ' + k.what + ' (' + r.status + ')');
     const e = await r.json(); const bytes = await unseal(e, 'portfolio-file-v1');
     const fallback = kind === 'pdf' ? String(x.pdf).split('/').pop().replace(/\.enc\.json$/, '') : x.name;
     await downloads.save({ filename: e.name || fallback, data: new Blob([bytes], { type: k.type }) });
   };
 
-  /* ---------- the page's database: the published documents, and saves to the engine repository when editing is on ---------- */
+  /* ---------- the page's database: the account's documents and the shared market data, and saves to the account ---------- */
   let DOCS = {}, dbResolve; const listeners = new Set();
   const dbReady = new Promise((r) => (dbResolve = r));
   const snap = (id, d) => ({ id, exists: d != null, data: () => (d == null ? undefined : JSON.parse(JSON.stringify(d))), metadata: {} });
@@ -205,34 +155,22 @@
   // (pdStore), 'downloads' = saving a file
   window.pdHost = Object.freeze({ use: async (n) => (n === 'db' ? dbReady : n === 'downloads' ? downloads : null) });
 
-  /* ---------- editing from the site ----------
-     A portfolio whose portfolios.json entry names an "engine" repository (its private data repository) can be edited here.
-     The device then holds a fine-grained GitHub token for that one repository (Contents and Actions: read and write), sealed
-     to the portfolio's public key in IndexedDB 'tok:<id>' (label 'portfolio-token-v1'): only an unlocked page can read it,
-     and locking drops it from memory together with the private key. A save reads the document from the engine repository,
-     applies the page's change with the engine's own rules (store.js, pinned by src/jobs/merge_vectors.json; a whole-document
-     save made from an older copy keeps what the jobs changed meanwhile), encrypts it for the site key exactly like
-     src/jobs/store.py and commits it through the GitHub Contents API pinned to the file's current sha, so a job's commit in
-     between is never overwritten: the save is redone on the newer file. The engine's "Publish site" workflow runs on that
-     commit and republishes the site's data within a few minutes; until then this page keeps showing the saved version. The
-     price update and the inbox check can be started from here too (workflow_dispatch). */
-  const GH_API = 'https://api.github.com', TOK_LABEL = 'portfolio-token-v1', FILE_LABEL = 'portfolio-file-v1';
-  // a portfolio's engine data may sit in a folder of the repository ("engineDir", e.g. Yassin's under yassin/) with its own
-  // workflows ("workflows": {market, sync}; a kind left out has no button)
-  const JOB_NAMES = { market: 'Price update', sync: 'Inbox check' };
-  const jobFile = (kind) => { const w = (CUR && CUR.workflows) || { market: 'market.yml', sync: 'sync.yml' }; return w[kind] || null; };
-  const edir = () => (CUR && CUR.engineDir ? CUR.engineDir.replace(/^\/+|\/+$/g, '') + '/' : '');
-  let EDIT = null;                  // {token, repo, expires} while unlocked and this device is set up for editing
-  const OVERLAY = new Map();        // 'coll/doc' -> {data, at}: saves the published data does not show yet
-  const RECENT = new Map();         // 'coll/doc' -> {sha, doc, at}: this device's last commit of a document (the API can lag)
+  /* ---------- saving ----------
+     A save reads the document from the account, applies the page's change with the same rules as the jobs (store.js,
+     pinned by src/jobs/merge_vectors.json; a whole-document save made from an older copy keeps what the jobs changed
+     meanwhile), encrypts it to the account's key and writes it pinned to the document's updateTime, so a job's write in
+     between is never overwritten: the save is redone on the newer copy. */
+  const FILE_LABEL = 'portfolio-file-v1';
+  const OVERLAY = new Map();        // 'coll/doc' -> {data, at}: saves the loaded data does not show yet
+  const RECENT = new Map();         // 'coll/doc' -> {sha, doc, at}: this device's last write of a document
   let QUEUE = Promise.resolve();    // saves run one at a time, in the order the page made them
-  const engineRepo = () => (CUR && CUR.engine) || null;
-  const canEdit = () => !!(PK8 && ((CUR && CUR.cloud && CLOUD) || (EDIT && engineRepo())));
+  const canEdit = () => !!(PK8 && CUR && CLOUD);
   window.pdCanEdit = canEdit;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const b64big = (u) => { u = u instanceof Uint8Array ? u : new Uint8Array(u); let s = ''; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); };
   const toast = (m, k) => { if (window.pdToast) window.pdToast(m, k); };
-  // encrypt for the portfolio's public key: the same scheme unseal() opens and src/jobs/store.py seal() writes
+  const acctKey = () => PK8, acctPub = () => KEYS.pub;
+  // encrypt for a public key (the account's by default): the same scheme unseal() opens and src/jobs/store.py seal() writes
   async function seal(bytes, label, pubB64) {
     const site = await crypto.subtle.importKey('raw', ub64(pubB64 || KEYS.pub), { name: 'ECDH', namedCurve: 'P-256' }, false, []);
     const eph = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
@@ -244,53 +182,8 @@
     const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc.encode(label) }, key, bytes);
     return { epk: b64big(epk), iv: b64big(iv), ct: b64big(ct) };
   }
-  async function loadEdit() {
-    EDIT = null;
-    if (!engineRepo() || !PK8) return;
-    try {
-      const r = await idbGet('tok:' + CUR.id); if (!r || !r.ct) return;
-      const t = JSON.parse(dec.decode(await unseal(r, TOK_LABEL)));
-      if (t && typeof t.token === 'string' && t.repo === engineRepo()) EDIT = { token: t.token, repo: t.repo, expires: t.expires || null };
-    } catch (e) { console.warn('the editing key saved on this device could not be read', e); }
-  }
-  async function storeEdit(t) { await idbPut('tok:' + CUR.id, Object.assign({ v: 1 }, await seal(enc.encode(JSON.stringify(t)), TOK_LABEL))); }
-  const ghErr = (status, msg, repo) => Object.assign(new Error(
-    status === 401 ? 'GitHub no longer accepts the editing key on this device (it expired or was deleted). Turn editing on again with a new key'
-    : status === 403 && /rate limit/i.test(msg) ? 'GitHub is limiting requests right now. Try again in a few minutes'
-    : status === 403 ? `The editing key is not allowed to do this. It needs Contents and Actions set to "Read and write" on ${repo}`
-    : status === 404 ? 'Not found on GitHub'
-    : 'GitHub answered ' + status + (msg ? ': ' + msg : '')),
-  { status, code: status === 401 ? 'auth' : status === 403 ? 'forbidden' : status === 404 ? 'not_found' : status === 409 || status === 422 ? 'conflict' : 'github' });
-  let ghExp = null;   // the token's expiry as GitHub reports it (header github-authentication-token-expiration), when readable
-  async function gh(method, path, body, token) {
-    const tok = token || (EDIT && EDIT.token), repo = path.split('/').slice(2, 4).join('/');
-    if (!tok) throw Object.assign(new Error('Editing is not turned on on this device'), { code: 'read_only' });
-    let r;
-    try {
-      r = await fetch(GH_API + path, { method, cache: 'no-store', referrerPolicy: 'no-referrer', body: body ? JSON.stringify(body) : undefined,
-        headers: Object.assign({ Authorization: 'Bearer ' + tok, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' }, body ? { 'Content-Type': 'application/json' } : {}) });
-    } catch (e) { throw Object.assign(new Error('GitHub could not be reached. Check the connection and try again'), { code: 'network' }); }
-    const x = r.headers.get('github-authentication-token-expiration'); if (x) ghExp = x;
-    if (r.ok) return r.status === 204 ? null : r.json();
-    let msg = ''; try { msg = (await r.json()).message || ''; } catch (e) { /* no body */ }
-    throw ghErr(r.status, msg, repo);
-  }
-  const fileText = (b64s) => dec.decode(ub64(String(b64s).replace(/\s/g, '')));
-  // the engine repository's copy of one document -> {sha, doc: {version, updatedAt, data}}; {sha: null, doc: null} when absent
-  async function readEngineDoc(c, d, token, repo) {
-    repo = repo || EDIT.repo;
-    let f;
-    try { f = await gh('GET', `/repos/${repo}/contents/${edir()}db/${c}/${d}.enc.json?ref=main`, null, token); }
-    catch (e) { if (e.code === 'not_found') return { sha: null, doc: null }; throw e; }
-    const b = f.content && f.encoding === 'base64' ? f.content : (await gh('GET', `/repos/${repo}/git/blobs/${f.sha}`, null, token)).content;   // files over 1 MB come as a blob
-    let p;
-    try { p = JSON.parse(dec.decode(await unseal(JSON.parse(fileText(b)), FILE_LABEL))); }
-    catch (e) { throw Object.assign(new Error(`${c}/${d} in ${repo} cannot be opened with this portfolio's key`), { code: 'wrong_key' }); }
-    if (!p || !Number.isInteger(p.version) || p.version < 1 || !p.data || typeof p.data !== 'object' || Array.isArray(p.data)) throw new Error(`${c}/${d} in ${repo} has the wrong shape`);
-    return { sha: f.sha, doc: { version: p.version, updatedAt: p.updatedAt, data: p.data } };
-  }
   function saveDoc(op, p, data) {
-    if (!canEdit()) return Promise.reject(Object.assign(new Error(engineRepo() ? 'Editing is not turned on on this device. Use "Turn on editing" at the bottom of the page' : 'This portfolio can only be viewed on the site'), { code: 'read_only' }));
+    if (!canEdit()) return Promise.reject(Object.assign(new Error('The portfolio is locked'), { code: 'read_only' }));
     const seen = Object.prototype.hasOwnProperty.call(DOCS, p) ? JSON.parse(JSON.stringify(DOCS[p])) : undefined;   // what the page showed when it made the change
     const run = () => commitDoc(op, p, data, seen);
     const done = QUEUE.then(run, run); QUEUE = done.catch(() => {});
@@ -300,23 +193,20 @@
     if (!canEdit()) throw Object.assign(new Error('The portfolio was locked before the change was saved'), { code: 'read_only' });
     const parts = String(p).split('/'), c = parts[0], d = parts[1];
     if (parts.length !== 2 || !pdStore.NAME_RE.test(c) || !pdStore.NAME_RE.test(d)) throw Object.assign(new Error('invalid document ' + p), { code: 'invalid' });
-    const cloud = !!CUR.cloud, repo = cloud ? null : EDIT.repo, path = `${edir()}db/${c}/${d}.enc.json`, msg = `Site edit: ${CUR.id} ${p}`;
     for (let attempt = 0; ; attempt++) {
       const rc = RECENT.get(p);
-      const cur = attempt === 0 && rc && Date.now() - rc.at < 120e3 ? rc : cloud ? await readCloudDoc(c, d) : await readEngineDoc(c, d);
+      const cur = attempt === 0 && rc && Date.now() - rc.at < 120e3 ? rc : await readCloudDoc(c, d);
       const w = op === 'set' && seen !== undefined && cur.doc ? { op, data: pdStore.rebase(seen, data, cur.doc.data) } : { op, data };
       const step = (await pdStore.applyWrites([Object.assign(w, { collection: c, doc_id: d })], async () => cur.doc)).plan[0];
       try {
         if (!step) return settle(p, cur.doc ? cur.doc.data : undefined);   // unchanged
         if (step.action === 'rm') {
-          if (cloud) await deleteCloudDoc(c, d, cur.sha); else await gh('DELETE', `/repos/${repo}/contents/${path}`, { message: msg, sha: cur.sha, branch: 'main' });
+          await deleteCloudDoc(c, d, cur.sha);
           RECENT.delete(p); return settle(p, undefined);
         }
         const plain = enc.encode(JSON.stringify(step.doc));
         const env = Object.assign({ v: 1, name: d + '.json', bytes: plain.length }, await seal(plain, FILE_LABEL));
-        if (cloud) { RECENT.set(p, { sha: await writeCloudDoc(c, d, env, step.doc, cur.sha), doc: step.doc, at: Date.now() }); return settle(p, step.doc.data); }
-        const r = await gh('PUT', `/repos/${repo}/contents/${path}`, Object.assign({ message: msg, content: b64big(enc.encode(JSON.stringify(env) + '\n')), branch: 'main' }, cur.sha ? { sha: cur.sha } : {}));
-        RECENT.set(p, { sha: r && r.content ? r.content.sha : null, doc: step.doc, at: Date.now() });
+        RECENT.set(p, { sha: await writeCloudDoc(c, d, env, step.doc, cur.sha), doc: step.doc, at: Date.now() });
         return settle(p, step.doc.data);
       } catch (e) {
         if (e.code === 'conflict' && attempt < 4) { RECENT.delete(p); await sleep(800 * 2 ** attempt); continue; }   // the file changed meanwhile: redo on the new one
@@ -330,7 +220,7 @@
     if (data === undefined) delete DOCS[p]; else DOCS[p] = data;
     dropMyProfile();
     listeners.forEach(fire);
-    if (CUR && (CUR.cloud || LINK)) shareSoon();   // friends see the change too
+    if (CUR) shareSoon();   // friends see the change too
   }
   function applyOverlay() {
     for (const [p, o] of OVERLAY) {
@@ -339,95 +229,14 @@
     }
     dropMyProfile();
   }
-  const expDate = () => { const x = EDIT && (EDIT.expires || ghExp); const t = x ? Date.parse(String(x).replace(' UTC', 'Z').replace(' ', 'T')) : NaN; return isFinite(t) ? t : null; };
-  const dayText = (t) => new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(t));
-  let JOB_NOTE = '';
   function editBar() {
     whenReady(() => {
-      const on = canEdit(), el = (id) => document.getElementById(id), exp = expDate();
-      const st = el('pd-edit-state');
-      if (st) {
-        const soon = on && exp && exp - Date.now() < 14 * 864e5;
-        st.textContent = CUR && CUR.cloud ? (on ? 'Your account · changes save as you make them' : 'Your account') : !engineRepo() ? 'View only' : !on ? 'View only on this device' : JOB_NOTE || (soon ? `Editing on · the editing key expires ${dayText(exp)}` : 'Editing on · saved changes reach the site in a few minutes');
-        st.classList.toggle('stale', !!soon && !JOB_NOTE);
-      }
-      const cloud = !!(CUR && CUR.cloud);
-      for (const [id, kind] of [['pd-run-market', 'market'], ['pd-run-sync', 'sync'], ['pd-edit-menu', null]]) { const b = el(id); if (b) b.hidden = !on || cloud || (kind && !jobFile(kind)); }
-      const b = el('pd-edit-on'); if (b) b.hidden = on || cloud || !engineRepo() || !PK8;
-      const ac = el('pd-account'); if (ac) ac.hidden = !PK8;   // a setup-key portfolio offers to link the site account
-      document.body.classList.toggle('pd-edit', on);
+      const el = (id) => document.getElementById(id), st = el('pd-edit-state');
+      if (st) st.textContent = canEdit() ? 'Your account · changes save as you make them' : 'Your account';
+      const ac = el('pd-account'); if (ac) ac.hidden = !PK8;
+      document.body.classList.toggle('pd-edit', canEdit());
     });
   }
-  const TOKEN_URL = (owner) => 'https://github.com/settings/personal-access-tokens/new?name=' + encodeURIComponent('Portfolio site editing') +
-    '&description=' + encodeURIComponent('Lets the portfolio website save edits') + '&target_name=' + encodeURIComponent(owner) + '&expires_in=366&contents=write&actions=write';
-  function editOnScreen(note) {
-    const repo = engineRepo(), [owner, name] = repo.split('/');
-    screen(`<h1>Turn on editing</h1><p>Changes made here are saved to <b>${esc(name)}</b>, the portfolio's private data on GitHub, and reach the site a few minutes later. This device needs a GitHub key for that one repository; you make it once:</p>
-      <ol class="lk-steps"><li>Open <a href="${esc(TOKEN_URL(owner))}" target="_blank" rel="noopener noreferrer" data-testid="edit-token-link">GitHub → new fine-grained token</a>, signed in as <b>${esc(owner)}</b>.</li>
-      <li><b>Expiration</b>: the longest offered (the site warns before it runs out).</li>
-      <li><b>Repository access</b>: Only select repositories → <b>${esc(name)}</b>.</li>
-      <li><b>Permissions</b> → Repository permissions: <b>Contents</b> and <b>Actions</b> set to <b>Read and write</b>.</li>
-      <li><b>Generate token</b>, copy it and paste it here.</li></ol>
-      <form id="lk-edit" autocomplete="off"><input id="lk-tok" type="password" data-testid="edit-token" placeholder="github_pat_…" aria-label="GitHub token" autocapitalize="none" spellcheck="false">
-      <button class="lk-btn" id="lk-edit-go" data-testid="edit-token-submit">Turn on editing</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>
-      <p class="lk-foot">The key stays on this device, encrypted like the portfolio, and opens only that repository. You can delete it any time on GitHub (Settings → Developer settings → Personal access tokens).</p>
-      <div class="lk-links"><button type="button" class="lk-link" id="lk-edit-back" data-testid="edit-token-cancel">Cancel</button></div>`);
-    $l('#lk-edit-back').onclick = open;
-    $l('#lk-tok').focus();
-    $l('#lk-edit').onsubmit = async (ev) => {
-      ev.preventDefault(); const go = $l('#lk-edit-go'), tok = $l('#lk-tok').value.trim();
-      if (!/^(github_pat_|ghp_)[A-Za-z0-9_]{20,}$/.test(tok)) return err('That is not a GitHub token. It starts with github_pat_ and is about 90 characters long.');
-      go.disabled = true; err('Checking the key with GitHub…'); ghExp = null;
-      try {
-        const cfg = await gh('GET', `/repos/${repo}/contents/${edir()}config.json?ref=main`, null, tok).catch((e) => { throw e.code === 'not_found' ? new Error(`The key cannot open ${name}. Under "Repository access" pick Only select repositories → ${name}`) : e; });
-        let id = null; try { id = JSON.parse(fileText(cfg.content)).portfolioId; } catch (e) { /* checked below */ }
-        if (id !== CUR.id) throw new Error(`${name} does not hold ${CUR.name}`);
-        await readEngineDoc('portfolio', 'settings', tok, repo);   // opens with this portfolio's key: the right data
-        await gh('GET', `/repos/${repo}/actions/workflows?per_page=1`, null, tok).catch((e) => { throw e.code === 'forbidden' || e.code === 'not_found' ? new Error('The key needs Actions set to "Read and write" as well (Permissions → Repository permissions)') : e; });
-        const t = { token: tok, repo, expires: ghExp, at: new Date().toISOString() };
-        await storeEdit(t);
-        EDIT = { token: tok, repo, expires: ghExp };
-        RECENT.clear(); open(); listeners.forEach(fire); editBar();
-        toast('Editing is on for this device. Saves go to GitHub and reach the site in a few minutes.');
-      } catch (e) { console.error(e); go.disabled = false; err(e.message || String(e)); }
-    };
-  }
-  function editMenuScreen() {
-    const exp = expDate();
-    screen(`<h1>Editing on this device</h1><p>Saves go to <b>${esc(engineRepo())}</b> on GitHub.${exp ? ` The editing key expires on <b>${esc(dayText(exp))}</b>; make a new one before then.` : ''}</p>
-      <button class="lk-btn ghost" id="lk-edit-new" data-testid="edit-replace">Use a new editing key</button>
-      <button class="lk-btn ghost" id="lk-edit-off" data-testid="edit-off">Turn off editing on this device</button>
-      <div class="lk-links"><button type="button" class="lk-link" id="lk-edit-close" data-testid="edit-menu-close">Back</button></div>`);
-    $l('#lk-edit-close').onclick = open;
-    $l('#lk-edit-new').onclick = () => editOnScreen();
-    $l('#lk-edit-off').onclick = async () => { await idbDel('tok:' + CUR.id); EDIT = null; RECENT.clear(); open(); listeners.forEach(fire); editBar(); toast('Editing is off on this device. Delete the key on GitHub too if you no longer need it.'); };
-  }
-  window.pdEditOn = () => { if (PK8 && engineRepo()) editOnScreen(); };
-  window.pdEditMenu = () => { if (canEdit()) editMenuScreen(); };
-  // start the price update or the inbox check on GitHub, follow it, and load the new figures when it is done
-  window.pdRunJob = async (kind, btn) => {
-    const f = jobFile(kind), j = f && { file: f, what: JOB_NAMES[kind] }; if (!j || !canEdit()) return;
-    const repo = EDIT.repo, runs = async () => ((await gh('GET', `/repos/${repo}/actions/workflows/${j.file}/runs?per_page=10`)).workflow_runs || []);
-    if (btn) btn.disabled = true;
-    const note = (t) => { JOB_NOTE = t; editBar(); };
-    try {
-      const before = new Set((await runs()).map((r) => r.id));
-      await gh('POST', `/repos/${repo}/actions/workflows/${j.file}/dispatches`, { ref: 'main' });
-      note(`${j.what} started on GitHub…`);
-      toast(`${j.what} started. It takes a few minutes; the page updates when it is done.`);
-      let run = null;
-      for (let i = 0; i < 80 && canEdit(); i++) {
-        await sleep(i < 6 ? 5e3 : 15e3);
-        try { run = (await runs()).filter((r) => !before.has(r.id)).sort((a, b) => a.id - b.id)[0] || null; } catch (e) { continue; }
-        if (run) note(`${j.what} ${run.status === 'completed' ? 'finished' : run.status === 'in_progress' ? 'running' : 'queued'} on GitHub…`);
-        if (run && run.status === 'completed') break;
-      }
-      if (!run || run.status !== 'completed') toast(`${j.what} is still running. The page picks up the result on its own.`);
-      else if (run.conclusion === 'success') { toast(`${j.what} finished. Loading the new figures…`); RECENT.clear(); for (const t of [30e3, 90e3, 180e3]) setTimeout(refresh, t); }
-      else toast(`${j.what} did not finish (${run.conclusion}). GitHub emails the details.`, 'error');
-    } catch (e) { console.error(e); toast(`${j.what} could not start: ${e.message}`, 'error'); }
-    finally { if (btn) btn.disabled = false; note(''); }
-  };
 
   /* ---------- live prices straight from TradingView (15-min delayed; the scanner allows this site's origin) ---------- */
   let LIVE = null, liveAt = 0, liveTry = 0;
@@ -552,13 +361,12 @@
     const t = document.getElementById('toast'); if (t) { t.hidden = true; t.textContent = ''; }
   }
   function lock(auto) {
-    closeProfile(); FRIENDS = null; MY_HANDLE = null; LINK = null;
-    PK8 = null; DOCS = {}; DATA_AT = null; lastFetch = 0; EXPORTS = null; SAVED_AT = null; EDIT = null; CLOUD = null; MEMBERS = null; OVERLAY.clear(); RECENT.clear(); JOB_NOTE = ''; editBar();
+    closeProfile(); FRIENDS = null; MY_HANDLE = null;
+    PK8 = null; DOCS = {}; DATA_AT = null; lastFetch = 0; EXPORTS = null; SAVED_AT = null; CLOUD = null; MEMBERS = null; OVERLAY.clear(); RECENT.clear(); editBar();
     document.title = 'Stock Market Portfolio Tracker';
     listeners.forEach(fire); blank(); offlineBanner();
     if (!CUR) return chooseScreen();
-    const d = getDev();
-    if (isV3(d)) unlockScreen(auto); else if (isOld(d)) migrateScreen(); else setupScreen();
+    if (isV3(getDev())) unlockScreen(auto); else setupAgain();
   }
 
   /* ---------- WebAuthn with PRF: the passkey's PRF output is what wraps the private key ---------- */
@@ -619,51 +427,23 @@
   const switchLink = () => (allPortfolios().length > 1 || CUR.cloud ? '<button type="button" class="lk-link" id="lk-switch" data-testid="live-switch">Switch portfolio</button>' : '');
   const wireSwitch = () => { const b = $l('#lk-switch'); if (b) b.onclick = () => chooseScreen(); };
 
-  // The first screen: portfolios this device can open, then sign in / create an account; portfolios opened with a setup key
-  // (the site's own, from portfolios.json) sit behind a link unless this device is already set up for them.
+  // The first screen: the accounts this device can open, then sign in / create an account
   function chooseScreen() {
-    const mine = allPortfolios().filter((p) => p.cloud || (!p.moved && !!ls.get('pd.dev.' + p.id))), others = PORTFOLIOS.filter((p) => !p.moved && !ls.get('pd.dev.' + p.id));
+    const mine = allPortfolios();
     screen(`<h1>Stock Market Portfolio Tracker</h1><p>${mine.length ? 'Choose a portfolio to open.' : 'Track your EGX portfolio: returns, dividends, risk and the index, private to you.'}</p>
-      ${mine.length ? `<div class="lk-list">${mine.map((p) => `<button class="lk-btn" data-pick="${esc(p.id)}" data-testid="live-pick-${esc(p.id)}">${esc(p.name)}<small>${p.cloud ? 'your account' : 'ready on this device'}</small></button>`).join('')}</div>` : ''}
-      <div class="lk-list"><button class="lk-btn ${mine.length ? 'ghost' : ''}" id="lk-new-acct" data-testid="live-signup">Create your portfolio</button><button class="lk-btn ghost" id="lk-signin" data-testid="live-signin">Sign in</button></div>
-      ${others.length ? `<details class="lk-more"${mine.length || !accounts().length ? '' : ''}><summary data-testid="live-setup-key-list">Open a portfolio with a setup key</summary><div class="lk-list">${others.map((p) => `<button class="lk-btn ghost" data-pick="${esc(p.id)}" data-testid="live-pick-${esc(p.id)}">${esc(p.name)}<small>needs its setup key</small></button>`).join('')}</div></details>` : ''}`);
+      ${mine.length ? `<div class="lk-list">${mine.map((p) => `<button class="lk-btn" data-pick="${esc(p.id)}" data-testid="live-pick-${esc(p.id)}">${esc(p.name)}<small>your account</small></button>`).join('')}</div>` : ''}
+      <div class="lk-list"><button class="lk-btn ${mine.length ? 'ghost' : ''}" id="lk-new-acct" data-testid="live-signup">Create your portfolio</button><button class="lk-btn ghost" id="lk-signin" data-testid="live-signin">Sign in</button></div>`);
     document.querySelectorAll('#lock [data-pick]').forEach((b) => { b.onclick = () => select(findPortfolio(b.dataset.pick)); });
     $l('#lk-new-acct').onclick = () => signUpScreen();
     $l('#lk-signin').onclick = () => signInScreen();
   }
-  // A setup-key portfolio that moved into its owner's site account (portfolios.json "moved"): this device's old setup for
-  // it is cleared, and signing in with the account's email and password opens it from now on.
-  function movedScreen(p) {
-    ls.del('pd.dev.' + p.id); ls.del(CUR_LS);
-    for (const k of ['dev:', 'bio:', 'cache:']) idbDel(k + p.id).catch(() => {});
-    screen(`<h1>${esc(p.name)} has moved</h1><p>It now lives in your account: sign in with your email and password to open it, on this device and any other. The setup key is no longer needed.</p>
-      <div class="lk-list"><button class="lk-btn" id="lk-signin" data-testid="live-moved-signin">Sign in</button></div>`);
-    $l('#lk-signin').onclick = () => signInScreen();
-  }
   async function select(p) {
-    if (p.moved && !p.cloud) return movedScreen(p);
     if (OPENED && OPENED !== p.id) { ls.set(CUR_LS, p.id); location.reload(); return; }   // the page already shows another portfolio: start clean
-    CUR = p; ls.set(CUR_LS, p.id); KEYS = null; PK8 = null; EXPORTS = null; EDIT = null; CLOUD = null;
-    if (p.cloud) {   // an account: its public keys are kept on this device; without the device store, sign in
-      const a = accounts().find((x) => x.id === p.id); KEYS = a ? a.keys : null;
-      if (!KEYS || !isV3(getDev())) return signInScreen(p.email);
-      return unlockScreen(true);
-    }
-    try { KEYS = await (await fetch(base() + 'keys.json', { cache: 'no-store' })).json(); } catch (e) { return screen('<h1>Offline</h1><p>The portfolio could not load. Check your connection and reload.</p>'); }
-    const d = getDev();
-    if (isV3(d)) unlockScreen(true); else if (isOld(d)) migrateScreen(); else setupScreen();
-  }
-  function setupScreen(note) {
-    screen(`<h1>Set up ${esc(CUR.name)}</h1><p>Enter this portfolio's setup key once on each new phone or computer. Then you choose a password for this device; ${esc(bio)} can be added after that.</p>
-      <form id="lk-setup" autocomplete="off"><input id="lk-code" data-testid="live-setup-key" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX" autocapitalize="characters" spellcheck="false" aria-label="Setup key">
-      <button class="lk-btn" data-testid="live-setup-submit">Continue</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>
-      ${safariTip()}${switchLink()}<p class="lk-foot">The figures are encrypted. Without the setup key this page shows nothing.</p>`);
-    $l('#lk-code').focus(); wireSwitch();
-    $l('#lk-setup').onsubmit = async (ev) => { ev.preventDefault(); const b = $l('.lk-btn'); b.disabled = true; err('Checking…');
-      try { const pk8 = await unwrapWithSetupKey($l('#lk-code').value);
-        passwordScreen({ title: 'Choose a password for this device', intro: `It unlocks ${esc(CUR.name)} on this device only, and nothing here can recover it: if you forget it, you set the device up again with the setup key.`,
-          done: async (pw) => { await storeV3(pk8, pw); await afterSetup(pk8); } }); }
-      catch (e) { console.error(e); b.disabled = false; err(e && e.name === 'OperationError' ? 'That setup key is not right. Check it and try again.' : 'Could not set up: ' + (e.message || e)); } };
+    CUR = p; ls.set(CUR_LS, p.id); KEYS = null; PK8 = null; EXPORTS = null; CLOUD = null;
+    // the account's public keys are kept on this device; without the device store, sign in
+    const a = accounts().find((x) => x.id === p.id); KEYS = a ? a.keys : null;
+    if (!KEYS || !isV3(getDev())) return signInScreen(p.email);
+    return unlockScreen(true);
   }
   // password rules: at least 8 characters; not the portfolio name, its first word (with or without the possessive), the
   // portfolio id or "password" (compared trimmed and case-insensitively); both fields equal. The password is used as typed
@@ -689,25 +469,6 @@
     $l('#lk-choose').onsubmit = async (ev) => { ev.preventDefault(); if (!check()) return; go.disabled = true; err('Saving…');
       try { await done(nw.value); } catch (e) { console.error(e); err('Could not save the password: ' + (e.message || e)); check(); } };
   }
-  async function afterSetup(pk8) {   // the device store is written: open the data, then offer biometrics
-    if (!(await keyMatches(pk8))) return rotatedScreen();   // a migrated v2 device may hold a key the site has since rotated
-    PK8 = pk8;
-    try { await start(); } catch (e) { console.error(e); return dataErrorScreen(e); }
-    await offerBio(pk8);
-  }
-  async function migrateScreen() {   // v2 device store -> v3: the browser key opens the old store, then the user chooses a real password
-    let pk8;
-    try { pk8 = await openOld(); }
-    catch (e) {   // only a store that is really gone sends the user back to the setup key; anything else keeps it for a retry
-      console.error(e);
-      if (e && e.code === 'not_set_up') { ls.del(devLS()); await idbDel('dev:' + CUR.id); return setupAgain(); }
-      screen(`<h1>${esc(CUR.name)}</h1><p>This device's saved setup could not be opened just now. Nothing was removed.</p><button class="lk-btn" id="lk-mig-retry" data-testid="live-migrate-retry">Try again</button><div class="lk-links"><button type="button" class="lk-link" id="lk-mig-other">Open another portfolio</button></div>`);
-      $l('#lk-mig-retry').onclick = () => migrateScreen(); $l('#lk-mig-other').onclick = () => chooseScreen(); return;
-    }
-    passwordScreen({ title: 'Choose a password for this device', intro: `${esc(CUR.name)} is already set up here. The site now protects it with a password that only this device knows, so pick one now; the old password no longer applies. ${esc(bio)} can be turned on again afterwards.`,
-      done: async (pw) => { await storeV3(pk8, pw); ls.del(OLD_BIO_LS); await idbDel('bio:' + CUR.id); await afterSetup(pk8); },
-      back: () => chooseScreen(), backText: 'Not now: open another portfolio' });   // nothing changes until a password is chosen
-  }
   async function offerBio(pk8) {
     if (await bioReady() || !(await canBio())) return open();
     screen(`<h1>Use ${esc(bio)}?</h1><p>Unlock with ${esc(bio)} on this device. The password still works as a backup.</p>
@@ -717,20 +478,15 @@
       try { await enrollBio(pk8); open(); }
       catch (e) { console.error(e); b.disabled = false; err(e && e.code === 'no_prf' ? e.message : bio + ' was not turned on. You can use the password instead.'); } };
   }
+  // this device's saved copy of the key is gone (storage cleared): sign in again
+  function setupAgain() { const e = CUR.email; dropAccount(CUR.id); return signInScreen(e, 'Sign in again on this device.'); }
   // a wrong password: count it, forget the device after MAX_TRIES. Returns true when the device was forgotten.
-  // this device's saved copy of the key is gone (storage cleared): a setup-key portfolio asks for its setup key, an
-  // account signs in again
-  function setupAgain() {
-    if (CUR && CUR.cloud) { const e = CUR.email; dropAccount(CUR.id); return signInScreen(e, 'Sign in again on this device.'); }
-    return setupScreen('This portfolio needs to be set up again on this device.');
-  }
   async function wrongPassword() {
     const dv = getDev() || { v: 3, tries: 0 }; dv.tries = (dv.tries || 0) + 1; putDev(dv);
     if (dv.tries >= MAX_TRIES) {
-      const acct = CUR.cloud ? CUR.email : null;
+      const acct = CUR.email;
       await forget();
-      if (acct != null) signInScreen(acct, 'Too many wrong passwords on this device. Sign in again with your email and password (or your recovery code).');
-      else setupScreen('Too many wrong passwords. This portfolio was removed from the device; enter its setup key.');
+      signInScreen(acct, 'Too many wrong passwords on this device. Sign in again with your email and password (or your recovery code).');
       return true;
     }
     err(`Wrong password. ${MAX_TRIES - dv.tries} ${MAX_TRIES - dv.tries === 1 ? 'try' : 'tries'} left before this portfolio is removed from the device.`); return false;
@@ -742,7 +498,7 @@
       ${hasBio ? `<button class="lk-btn" id="lk-bio" data-testid="live-bio-unlock">Unlock with ${esc(bio)}</button><div class="lk-sep">or</div>` : ''}
       <form id="lk-pass" autocomplete="off"><input id="lk-pw" type="password" data-testid="live-password" placeholder="Password" aria-label="Password" autocomplete="current-password">
       <button class="lk-btn ${hasBio ? 'ghost' : ''}" data-testid="live-password-submit">Unlock</button><div class="lk-err" role="alert"></div></form>
-      <div class="lk-links">${switchLink()}${CUR.cloud ? '' : '<button type="button" class="lk-link" id="lk-change" data-testid="live-change-password">Change password</button>'}<button type="button" class="lk-link" id="lk-forget" data-testid="live-forget-device">Forget this portfolio on this device</button></div>`);
+      <div class="lk-links">${switchLink()}<button type="button" class="lk-link" id="lk-forget" data-testid="live-forget-device">Forget this portfolio on this device</button></div>`);
     wireSwitch();
     if (hasBio) { $l('#lk-bio').onclick = () => bioUnlock(); if (auto) bioUnlock(true); } else $l('#lk-pw').focus();
     $l('#lk-pass').onsubmit = async (ev) => { ev.preventDefault(); const pw = $l('#lk-pw').value; if (!pw.trim()) return; const b = $l('[data-testid=live-password-submit]'); b.disabled = true; err('Checking…');
@@ -751,37 +507,13 @@
         if (e && e.name === 'OperationError') await wrongPassword();
         else if (e && e.code === 'not_set_up') { console.error(e); ls.del(devLS()); setupAgain(); }   // the store is gone (storage cleared); nothing to forget
         else { console.error(e); err('Could not unlock: ' + (e.message || e)); } } };
-    if ($l('#lk-change')) $l('#lk-change').onclick = () => changePasswordScreen();
     $l('#lk-forget').onclick = () => forgetScreen(() => unlockScreen(false));
   }
   // the explicit "Forget this portfolio" flow: the one place, besides MAX_TRIES, that removes a portfolio from the device
   function forgetScreen(back, why) {
-    screen(`<h1>Forget ${esc(CUR.name)}?</h1><p>${why || ''}${CUR.cloud ? 'To open it here again, sign in with your email and password. Nothing is deleted from your account.' : 'You will need its setup key to open it here again.'}</p>
+    screen(`<h1>Forget ${esc(CUR.name)}?</h1><p>${why || ''}To open it here again, sign in with your email and password. Nothing is deleted from your account.</p>
       <button class="lk-btn" id="lk-f-yes" data-testid="live-forget-confirm">Forget it on this device</button><button class="lk-btn ghost" id="lk-f-no" data-testid="live-forget-cancel">Cancel</button>`);
     $l('#lk-f-yes').onclick = async () => { await forget(); ls.del(CUR_LS); location.reload(); }; $l('#lk-f-no').onclick = back;
-  }
-  // the site's keys were rotated (rotate_keys.py): this device's key no longer opens the data. Nothing is forgotten here —
-  // the user chooses to remove the old setup (the same explicit flow as "Forget this portfolio") and enters the new key.
-  function rotatedScreen() {
-    screen(`<h1>${esc(CUR.name)}</h1><p data-testid="live-key-rotated">This portfolio's setup key was changed, so the key saved on this device no longer opens it. Ask the owner for the new setup key, then remove the old setup here and enter it.</p>
-      <button class="lk-btn" id="lk-rot" data-testid="live-key-rotated-forget">Remove the old setup and enter the new key</button><div class="lk-links">${switchLink()}<button type="button" class="lk-link" id="lk-rot-lock" data-testid="live-key-rotated-lock">Lock</button></div>`);
-    wireSwitch(); $l('#lk-rot-lock').onclick = () => lock(false);
-    $l('#lk-rot').onclick = () => forgetScreen(rotatedScreen, 'The old setup on this device is useless now. ');
-  }
-  function changePasswordScreen() {
-    screen(`<h1>Change password</h1><p>Enter the current password for ${esc(CUR.name)} on this device first.</p>
-      <form id="lk-cur" autocomplete="off"><input id="lk-cur-pw" type="password" data-testid="live-current-password" placeholder="Current password" aria-label="Current password" autocomplete="current-password">
-      <button class="lk-btn" data-testid="live-current-password-submit">Continue</button><div class="lk-err" role="alert"></div></form>
-      <div class="lk-links"><button type="button" class="lk-link" id="lk-cur-back" data-testid="live-change-back">Back</button></div>`);
-    $l('#lk-cur-pw').focus(); $l('#lk-cur-back').onclick = () => unlockScreen(false);
-    $l('#lk-cur').onsubmit = async (ev) => { ev.preventDefault(); const pw = $l('#lk-cur-pw').value; if (!pw.trim()) return; const b = $l('.lk-btn'); b.disabled = true; err('Checking…');
-      try { const pk8 = await openV3(pw); rightPassword();
-        passwordScreen({ title: 'Choose a new password', intro: `The new password replaces the old one on this device only. ${esc(bio)}, if turned on, keeps working.`, back: () => unlockScreen(false),
-          done: async (npw) => { await storeV3(pk8, npw); await unlocked(pk8); } }); }
-      catch (e) { $l('#lk-cur-pw').value = ''; b.disabled = false;
-        if (e && e.name === 'OperationError') await wrongPassword();
-        else if (e && e.code === 'not_set_up') { console.error(e); ls.del(devLS()); setupAgain(); }
-        else { console.error(e); err('Could not check the password: ' + (e.message || e)); } } };
   }
   async function bioUnlock(quiet) {
     try { const pk8 = await bioOpen(); rightPassword(); await unlocked(pk8); }
@@ -789,9 +521,8 @@
   }
   // the device is authenticated: download the data and open the page. A data failure is reported and NEVER forgets the device.
   async function unlocked(pk8) {
-    if (!(await keyMatches(pk8))) return rotatedScreen();
     PK8 = pk8;
-    try { await start(); } catch (e) { if (e && e.code === 'gone') return; console.error(e); if (CUR.cloud && e && (e.code === 'signin' || e.code === 'auth')) return signInScreen(CUR.email, e.message); return dataErrorScreen(e); }
+    try { await start(); } catch (e) { if (e && e.code === 'gone') return; console.error(e); if (e && (e.code === 'signin' || e.code === 'auth')) return signInScreen(CUR.email, e.message); return dataErrorScreen(e); }
     open();
   }
   function dataErrorScreen(e) {
@@ -801,15 +532,13 @@
     $l('#lk-retry').onclick = async () => { const b = $l('#lk-retry'); b.disabled = true; b.textContent = 'Trying…'; if (!PK8) return lock(false); await unlocked(PK8); };
   }
   async function start() {
-    if (CUR.cloud) { await loadSession(); const g = await accountGone().catch(() => null); if (g) { await leaveGoneAccount(g); throw Object.assign(new Error('account ' + g), { code: 'gone' }); } }
-    await loadEdit(); publish(await fetchData()); dbResolve(db);
-    if (!CUR.cloud) await loadLink().catch((e) => { console.warn('linked account not opened', e); LINK = null; CLOUD = null; });
+    await loadSession(); const g = await accountGone().catch(() => null); if (g) { await leaveGoneAccount(g); throw Object.assign(new Error('account ' + g), { code: 'gone' }); }
+    publish(await fetchCloudData()); dbResolve(db);
     editBar();
-    if (CUR.cloud || LINK) housekeeping().catch((e) => console.warn('account housekeeping', e));
-    if (LINK && !CUR.cloud && CUR.id === 'khaled') ensureMainKey().catch((e) => console.warn('main key not stored', e));   // one login from now on
+    housekeeping().catch((e) => console.warn('account housekeeping', e));
     updateLive().catch((e) => { console.warn('live prices unavailable', e); notice('Live prices are unavailable right now: showing prices from the last daily update.'); }); }
-  async function refresh() { if (!PK8) return; fetchTry = Date.now(); try { const b = await fetchData(); if (b.exportedAt !== DATA_AT) publish(b); else offlineBanner(); } catch (e) { console.warn('refresh failed', e); }
-    if (CUR && (CUR.cloud || LINK) && CLOUD) listFriends().catch(() => {}); }
+  async function refresh() { if (!PK8) return; fetchTry = Date.now(); try { const b = await fetchCloudData(); if (b.exportedAt !== DATA_AT) publish(b); else offlineBanner(); } catch (e) { console.warn('refresh failed', e); }
+    if (CUR && CLOUD) listFriends().catch(() => {}); }
   window.pdLock = () => { if (CUR) lock(false); };
   window.pdSwitch = () => chooseScreen();
   window.pdSelect = (id) => { const p = findPortfolio(id); if (p && !(CUR && CUR.id === p.id)) select(p); };
@@ -819,7 +548,7 @@
      Firebase (project portfolio-desk-4d14a) is used through its REST APIs only: Identity Toolkit for the email/password
      account and Firestore for storage. Nothing readable is stored there. At sign-up the browser makes the account's own
      key pair; the private key is kept in users/{uid}.keys wrapped twice, like a site keys.json: "pwrap" by the account
-     password (PBKDF2 310,000) and "wrap" by a recovery code shown once (PBKDF2 600,000, the setup-key format). Every
+     password (PBKDF2 310,000) and "wrap" by a recovery code shown once (PBKDF2 600,000). Every
      portfolio document is sealed to the account's public key exactly like an engine document ('portfolio-file-v1') and
      stored as users/{uid}/docs/<collection>__<doc> {blob, v, at}; saves are pinned to the document's updateTime (a clash
      is redone on the newer copy, like the GitHub saves). The rules (src/cloud/firestore.rules) let each account touch only
@@ -837,7 +566,7 @@
   const saveAccount = (a) => ls.set(ACCTS_LS, accounts().filter((x) => x.id !== a.id).concat([a]));
   const dropAccount = (id) => ls.set(ACCTS_LS, accounts().filter((x) => x.id !== id));
   const acctPortfolio = (a) => ({ id: a.id, name: a.name, cloud: true, uid: a.uid, email: a.email });
-  const allPortfolios = () => PORTFOLIOS.concat(accounts().map(acctPortfolio));
+  const allPortfolios = () => accounts().map(acctPortfolio);
   const findPortfolio = (id) => allPortfolios().find((p) => p.id === id);
   const netErr = () => Object.assign(new Error('The connection failed. Check the internet and try again.'), { code: 'network' });
   // a dropped connection is tried again (up to 3 tries). Safe for every call here: sign-in calls are idempotent, and a save
@@ -876,7 +605,7 @@
       const t = await refreshToken(CLOUD.refresh);
       const changed = t.refresh !== CLOUD.refresh;
       Object.assign(CLOUD, t);
-      if (changed) { await storeSession().catch(() => {}); if (LINK) await storeLink().catch(() => {}); }
+      if (changed) await storeSession().catch(() => {});
     }
     return CLOUD.idToken;
   }
@@ -1006,10 +735,10 @@
   const cleanCode = (c) => String(c).toUpperCase().replace(/[^A-Z0-9]/g, '');
   const cleanPw = (p) => String(p).trim();
   // the account is open on this device: remember it, keep the key under the account password (and the session), load the data
-  // Everything one open portfolio or account leaves in memory, cleared before another account takes the page (otherwise
-  // its unsaved edits, its linked account, the friend being viewed or friends' figures would carry over)
+  // Everything one open account leaves in memory, cleared before another account takes the page (otherwise its unsaved
+  // edits, the friend being viewed or friends' figures would carry over)
   function resetSession() {
-    OVERLAY.clear(); RECENT.clear(); EDIT = null; LINK = null; FRIENDS = null; MY_HANDLE = null; closeProfile();
+    OVERLAY.clear(); RECENT.clear(); FRIENDS = null; MY_HANDLE = null; closeProfile();
     Object.keys(CONFIRMED).forEach((k) => delete CONFIRMED[k]);
     HUB.you = null; HUB.youData = null; HUB.friends = {}; HUB.market = null; HUB.marketAt = 0;
   }
@@ -1025,7 +754,7 @@
   }
   async function readProfile(uid) {
     const j = await fsReq('GET', `users/${uid}`);
-    return { keys: JSON.parse(fStr(j, 'keys')), name: fStr(j, 'name'), mainKey: fStr(j, 'mainKey') };
+    return { keys: JSON.parse(fStr(j, 'keys')), name: fStr(j, 'name') };
   }
   function signUpScreen(note) {
     screen(`<h1>Create your portfolio</h1><p>Your portfolio is private: it is locked with your password on this device. Nobody else can read it unless you add them as a friend.</p>
@@ -1174,8 +903,6 @@
         let pk8;
         try { pk8 = await unwrapKey(prof.keys.pwrap, p); }
         catch (x) { if (x && x.name === 'OperationError') return recoverScreen(a, prof, p, e); throw x; }   // the password was reset: the key needs the recovery code once
-        const mk = await mainKeyOf(prof, pk8);
-        if (mk) return openMainWithAccount(mk.portfolio, mk.pk8, { uid: a.localId, email: a.email || e, refresh: a.refreshToken, pk8, pub: prof.keys.pub, name: prof.name }, p, a);
         await adoptAccount(a, pk8, prof.keys, prof.name, p, e);
         await start(); open(); await offerBio(PK8);
       } catch (x) { console.error(x); go.disabled = false; err(x.message || String(x)); }
@@ -1200,7 +927,6 @@
     };
   }
   function accountScreen() {
-    if (LINK && !CUR.cloud) return linkedScreen();
     screen(`<h1>${esc(CUR.name)}</h1><p>Signed in as <b>${esc(CUR.email || (CLOUD && CLOUD.email) || '')}</b>. Your portfolio is saved in your account, locked with your password.</p>
       <button class="lk-btn ghost" id="lk-ac-pw" data-testid="account-password">Change password</button>
       <button class="lk-btn ghost" id="lk-ac-friends" data-testid="account-friends">Friends${incoming() ? ` · ${incoming()} new` : ''}</button>
@@ -1209,15 +935,12 @@
       <button class="lk-btn ghost" id="lk-ac-code" data-testid="account-new-code">Make a new recovery code</button>
       <button class="lk-btn ghost" id="lk-ac-out" data-testid="account-signout">Sign out on this device</button>
       <button class="lk-btn ghost" id="lk-ac-admin" data-testid="account-admin" ${isOwner() ? '' : 'hidden'}>Admin: your friends' accounts</button>
-      <p class="lk-hint" id="lk-ac-owner" data-testid="account-owner-note" hidden>This is your sign-in for Admin and Friends. Your main portfolio already reads your Thndr emails and sends your emails, so nothing else is needed here.</p>
       <div class="lk-links"><button type="button" class="lk-link" id="lk-ac-back" data-testid="account-back">Back</button><button type="button" class="lk-link" id="lk-ac-del" data-testid="account-delete">Delete my account</button></div>`);
     $l('#lk-ac-friends').onclick = () => friendsScreen();
     listFriends().then(() => { const b = $l('#lk-ac-friends'); if (b) b.textContent = 'Friends' + (incoming() ? ` · ${incoming()} new` : ''); }).catch(() => {});
     $l('#lk-ac-del').onclick = () => deleteScreen();
     $l('#lk-ac-admin').onclick = () => adminScreen();
-    // the owner's own account is just the sign-in for admin and friends: the main portfolio does the Thndr emails and emails
-    const ownerView = (y) => { const b = $l('#lk-ac-admin'); if (b) b.hidden = !y; ['#lk-ac-gmail', '#lk-ac-mail'].forEach((id) => { const x = $l(id); if (x) x.hidden = y; }); const n = $l('#lk-ac-owner'); if (n) n.hidden = !y; };
-    ownerView(isOwner()); checkOwner().then(ownerView).catch(() => {});
+    checkOwner().then((y) => { const b = $l('#lk-ac-admin'); if (b) b.hidden = !y; }).catch(() => {});
     $l('#lk-ac-back').onclick = open;
     $l('#lk-ac-mail').onclick = () => mailScreen();
     $l('#lk-ac-gmail').onclick = () => gmailScreen(accountScreen);
@@ -1246,7 +969,7 @@
   }
   /* Email updates (opt-in): the account lets the site owner's daily email job open its portfolio to write its heads-up
      alerts and weekly summary (src/jobs/run_account_mail.py). The browser seals {uid, email, refresh token, private key,
-     prefs} to the MAIL key (the public key in p/khaled/keys.json, label 'portfolio-mail-v1') and stores it as Firestore
+     prefs} to the MAIL key (the public key in keys/mail.json, label 'portfolio-mail-v1') and stores it as Firestore
      mail/{uid}; switching off deletes it. The job reads the portfolio with the account's own token. */
   const MAIL_LABEL = 'portfolio-mail-v1';
   const mailLS = () => 'pd.mail.' + CUR.id;
@@ -1262,15 +985,15 @@
   const sha = async (s) => b64big(await crypto.subtle.digest('SHA-256', enc.encode(s)));
   const sealTo = (pubB64, bytes, label) => seal(bytes, label, pubB64);
   async function writeMail(prefs) {
-    const mk = await (await fetch('p/khaled/keys.json', { cache: 'no-store' })).json();
-    const pkg = { v: 1, uid: CLOUD.uid, email: prefs.email, refresh: CLOUD.refresh, pk8: b64big(acctKey()), prefs: { alerts: !!prefs.alerts, weekly: !!prefs.weekly, reports: !!prefs.reports, leaderboard: mailWith(prefs).leaderboard, reportCard: mailWith(prefs).reportCard, morning: !!prefs.morning, evening: mailWith(prefs).evening, gmail: !!prefs.gmail, shareMain: !!prefs.shareMain }, at: new Date().toISOString() };
+    const mk = await (await fetch('keys/mail.json', { cache: 'no-store' })).json();
+    const pkg = { v: 1, uid: CLOUD.uid, email: prefs.email, refresh: CLOUD.refresh, pk8: b64big(acctKey()), prefs: { alerts: !!prefs.alerts, weekly: !!prefs.weekly, reports: !!prefs.reports, leaderboard: mailWith(prefs).leaderboard, reportCard: mailWith(prefs).reportCard, morning: !!prefs.morning, evening: mailWith(prefs).evening, gmail: !!prefs.gmail }, at: new Date().toISOString() };
     const env = Object.assign({ v: 1 }, await sealTo(mk.pub, enc.encode(JSON.stringify(pkg)), MAIL_LABEL));
     await fsReq('PATCH', `mail/${CLOUD.uid}`, { fields: { pkg: { stringValue: JSON.stringify(env) }, at: { stringValue: pkg.at } } });
     ls.set(mailLS(), Object.assign({}, prefs, { ref: await sha(CLOUD.refresh) }));
   }
   // nothing left on: the package is deleted, so the job no longer opens the portfolio
   async function setMail(prefs) {
-    if (mailAny(prefs) || prefs.gmail || prefs.shareMain) return writeMail(prefs);
+    if (mailAny(prefs) || prefs.gmail) return writeMail(prefs);
     await fsReq('DELETE', `mail/${CLOUD.uid}`); ls.del(mailLS());
   }
   // the job signs in with the saved refresh token: after a password change (which ends old sessions) it is sealed again
@@ -1462,7 +1185,7 @@
      the email job)} is what the site owner's admin screen lists: no figures. The owner (OWNER_EMAIL, verified) can reset
      an account there: everything of it is deleted except the sign-in; signing in again starts afresh (restartScreen). */
   // the site owner's sign-in email, as its SHA-256 (the address itself is not published); the database rules hold the
-  // address and decide, this only shows the Admin button and the "main portfolio" choice
+  // address and decide, this only shows the Admin button
   const OWNER_HASH = '467022c320757248bf70115c83d305a7e4d139c35e1be5f8117fb30d7f769347', SHARE_LABEL = 'portfolio-share-v1';
   const JOB_URL = 'https://github.com/khaledamin2001-lgtm/portfolio-engine/actions/workflows/account-mail.yml';
   let FRIENDS = null;   // the open account's links: [{uid, status, name, pub, email, handle, at}]
@@ -1529,7 +1252,6 @@
   const gunzip = async (bytes) => new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
   async function refreshShares(force) {
     if (!FRIENDS || !CLOUD || !PK8) return;
-    if (isOwner() && (mailPrefs() || {}).shareMain) return;   // the email job shares the owner's main portfolio instead
     const fr = FRIENDS.filter((f) => f.status === 'friends' && f.pub); if (!fr.length) return;
     const prof = myProfile(); if (!prof) return;
     const snapObj = { v: 2, at: new Date().toISOString(), name: CUR.name, profile: Object.assign({}, prof, { name: CUR.name, handle: MY_HANDLE || '' }) };
@@ -1690,7 +1412,6 @@
           <p class="lk-hint">3 to 20 letters, numbers or _ , starting with a letter.</p>
           <button class="lk-btn" data-testid="my-handle-save">Save username</button></form>`
       : `<p class="lk-hint" data-testid="my-handle-none">Your @username appears here once usernames are switched on for this site. Until then friends add you with your email.</p>`;
-    const main = isOwner() && !!(mailPrefs() || {}).shareMain;
     screen(`<h1>Friends</h1><p>Friends compare in percentages: returns, holdings by weight and trades as %, never any amount in EGP. They can look, never change anything.</p>
       ${mine}
       ${by('received').length ? `<p class="lk-lbl">Friend requests</p>${by('received').map((f) => row(f, `<button class="lk-btn" data-acc="${esc(f.uid)}" data-testid="friend-accept">Accept</button><button class="lk-btn ghost" data-del="${esc(f.uid)}" data-testid="friend-decline">Decline</button>`)).join('')}` : ''}
@@ -1703,7 +1424,6 @@
           <button type="button" class="lk-btn" id="lk-fr-check" data-testid="friends-verify-done">I tapped the link</button>
           <button type="button" class="lk-btn ghost" id="lk-fr-resend" data-testid="friends-verify-send">Send the link again</button></div><div class="lk-err" role="alert">${esc(note || '')}</div>`}
       <p class="lk-hint">They see your request next time they open the site (and by email if they have email updates on). Once they accept, you both see each other's portfolio. Either of you can remove it any time and it stops at once.</p>
-      ${isOwner() ? `<p class="lk-tip" data-testid="friend-owner">${main ? 'Friends see <b>your main portfolio</b>, refreshed by the job three times a day (4:15 pm, 6:15 pm and 11 pm Cairo time).' : "Friends see this account's portfolio."} <button type="button" class="lk-link" id="lk-fr-main" data-testid="friend-owner-toggle">${main ? "Show this account's portfolio instead" : 'Show my main portfolio instead'}</button></p>` : ''}
       <div class="lk-links"><button type="button" class="lk-link" id="lk-fr-back" data-testid="friends-back">Back</button></div>`);
     $l('#lk-fr-back').onclick = accountScreen;
     const fc = $l('#lk-fr-check'), fr = $l('#lk-fr-resend');
@@ -1722,16 +1442,6 @@
       try { await unfriend(f.uid); friendsScreen(); } catch (e) { console.error(e); friendsScreen(e.message || String(e)); }
     }; });
     document.querySelectorAll('#lock [data-view]').forEach((b) => { b.onclick = async () => { open(); await openProfile(b.dataset.view, true); }; });
-    const om = $l('#lk-fr-main');
-    if (om) om.onclick = async () => {
-      busy(om);
-      try {
-        const m = Object.assign({ email: CLOUD.email, alerts: false, weekly: false, reports: false, gmail: false }, mailPrefs() || {}, { shareMain: !main });
-        await setMail(m);
-        if (main) await refreshShares(true);   // back to this account's portfolio: share it now
-        toast(main ? "Friends now see this account's portfolio." : 'Friends will see your main portfolio after the next daily update.'); friendsScreen();
-      } catch (e) { console.error(e); friendsScreen(e.message || String(e)); }
-    };
     const hc = $l('#lk-h-copy'), he = $l('#lk-h-edit'), hf = $l('#lk-h-form');
     if (hc) hc.onclick = async () => { try { await navigator.clipboard.writeText('@' + handle); hc.textContent = 'Copied'; } catch (e) { hc.textContent = '@' + handle; } };
     if (he) he.onclick = () => { hf.hidden = false; he.hidden = true; $l('#lk-h-new').focus(); };
@@ -1945,134 +1655,6 @@
       catch (e) { console.error(e); b.disabled = false; err(e.message || String(e)); }
     };
   }
-  /* ---------- linked account: one place for everything ----------
-     A setup-key portfolio (the owner's main one) can carry its owner's site account, so Friends and Admin open from that
-     portfolio's Account button and there is no second, empty portfolio to switch to. Signing in once stores the account's
-     session and private key on this device in IndexedDB 'link:<id>', sealed to the portfolio's own key ('portfolio-link-v1'):
-     unlocking the portfolio opens both; locking forgets both. The account's separate entry on this device is removed. */
-  const LINK_LABEL = 'portfolio-link-v1';
-  /* ---------- one login: the account holds its main portfolio's key ----------
-     users/{uid}.mainKey = {id, pk8} of a setup-key portfolio (the owner's main one), sealed to the account's own key
-     ('portfolio-mainkey-v1'), so only someone who can open the account (its password, or its recovery code) can open it.
-     Signing in with the account's email and password then opens that portfolio directly, set up on this device with the
-     same password, with the account linked inside it (Friends, Admin): one login, no setup key, no second portfolio.
-     It is stored the first time the portfolio and the account are open together (a linked portfolio, or "Open ..." from
-     the account with the setup key once). */
-  const MAINKEY_LABEL = 'portfolio-mainkey-v1';
-  async function mainKeyOf(prof, acctPk8) {
-    if (!prof || !prof.mainKey) return null;
-    try {
-      const o = JSON.parse(dec.decode(await unseal(JSON.parse(prof.mainKey), MAINKEY_LABEL, acctPk8)));
-      const portfolio = PORTFOLIOS.find((x) => x.id === o.id);
-      return portfolio && !portfolio.moved ? { portfolio, pk8: ub64(o.pk8) } : null;   // a portfolio moved into the account opens as the account
-    } catch (e) { console.warn('main key not opened', e); return null; }
-  }
-  // a portfolio already linked on this device (before one login existed): store its key in the account once
-  async function ensureMainKey() {
-    if (ensureMainKey.done === CUR.id || CUR.moved) return; ensureMainKey.done = CUR.id;
-    const prof = await readProfile(LINK.uid);
-    if (!prof.mainKey) await saveMainKey(LINK.uid, LINK.pub, CUR.id, PK8);
-  }
-  async function saveMainKey(uid, acctPub, id, mainPk8) {
-    const env = Object.assign({ v: 1 }, await seal(enc.encode(JSON.stringify({ v: 1, id, pk8: b64big(mainPk8) })), MAINKEY_LABEL, acctPub));
-    await fsReq('PATCH', `users/${uid}`, { fields: { mainKey: { stringValue: JSON.stringify(env) } } }, 'updateMask.fieldPaths=mainKey');
-  }
-  // the account's own entry on this device goes: the main portfolio is now the one place for it
-  async function absorbAccountEntry(uid) {
-    const id = 'u_' + uid, mp = ls.get('pd.mail.' + id);
-    if (mp && !ls.get('pd.mail.' + CUR.id)) ls.set('pd.mail.' + CUR.id, mp);
-    ls.del('pd.dev.' + id); for (const k of ['dev:', 'bio:', 'tok:', 'acct:', 'cache:']) await idbDel(k + id).catch(() => {});
-    dropAccount(id); ['pd.mail.', 'pd.dir.', 'pd.status.'].forEach((k) => ls.del(k + id));
-  }
-  // switch this page to the main portfolio, opened with its key; the account (link) rides inside it. pw: the device password
-  // (the account's own when signing in); without one, the person chooses it.
-  async function openMainWithAccount(portfolio, mainPk8, link, pw, auth) {
-    if (OPENED && OPENED !== portfolio.id) resetSession();
-    CUR = portfolio; ls.set(CUR_LS, portfolio.id); PK8 = null; EXPORTS = null; EDIT = null;
-    KEYS = await (await fetch(base() + 'keys.json', { cache: 'no-store' })).json();
-    if (!(await keyMatches(mainPk8))) return rotatedScreen();
-    LINK = link; CLOUD = auth ? session(auth) : CLOUD;
-    const finish = async (devPw) => { await storeV3(mainPk8, devPw); await storeLink(); await absorbAccountEntry(link.uid); await afterSetup(mainPk8); };
-    if (pw) return finish(pw);
-    passwordScreen({ title: 'Choose a password for this device', intro: `It unlocks ${esc(CUR.name)} on this device. Your account password works too: you may use the same one.`, done: finish });
-  }
-  // from the account (the owner's sign-in): open the main portfolio, keeping its key in the account for next time
-  async function openMainFromAccount(portfolio) {
-    const link = { uid: CLOUD.uid, email: CLOUD.email, refresh: CLOUD.refresh, pk8: PK8, pub: KEYS.pub, name: CUR.name };
-    let mk = null;
-    try { mk = await mainKeyOf(await readProfile(CLOUD.uid), PK8); } catch (e) { mk = null; }
-    if (mk && mk.portfolio.id === portfolio.id) return openMainWithAccount(portfolio, mk.pk8, link, null);
-    screen(`<h1>Open ${esc(portfolio.name)}</h1><p>Enter its setup key once. It is then kept in your account, locked with your account, so from now on signing in with your email and password opens ${esc(portfolio.name)} directly, on any device.</p>
-      <form id="lk-mk" autocomplete="off"><input id="lk-mk-code" data-testid="mainkey-setup-key" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX" autocapitalize="characters" spellcheck="false" aria-label="Setup key">
-      <button class="lk-btn" id="lk-mk-go" data-testid="mainkey-submit">Continue</button><div class="lk-err" role="alert"></div></form>
-      <div class="lk-links"><button type="button" class="lk-link" id="lk-mk-back">Back</button></div>`);
-    $l('#lk-mk-back').onclick = open;
-    $l('#lk-mk').onsubmit = async (ev) => {
-      ev.preventDefault(); const b = $l('#lk-mk-go'); b.disabled = true; err('Checking…');
-      try {
-        const mkeys = await (await fetch('p/' + portfolio.id + '/keys.json', { cache: 'no-store' })).json();
-        const mainPk8 = new Uint8Array(await unwrapKey(mkeys.wrap, $l('#lk-mk-code').value.toUpperCase().replace(/[^A-Z0-9]/g, '')));
-        await saveMainKey(link.uid, link.pub, portfolio.id, mainPk8);
-        await openMainWithAccount(portfolio, mainPk8, link, null);
-      } catch (e) { console.error(e); b.disabled = false; err(e && e.name === 'OperationError' ? 'That setup key is not right. Check it and try again.' : (e.message || String(e))); }
-    };
-  }
-  const acctKey = () => (LINK ? LINK.pk8 : PK8), acctPub = () => (LINK ? LINK.pub : KEYS.pub);
-  async function storeLink() { const o = { uid: LINK.uid, email: LINK.email, refresh: (CLOUD && CLOUD.refresh) || LINK.refresh, pk8: b64big(LINK.pk8), pub: LINK.pub, name: LINK.name };
-    await idbPut('link:' + CUR.id, Object.assign({ v: 1 }, await seal(enc.encode(JSON.stringify(o)), LINK_LABEL))); }
-  async function loadLink() {
-    LINK = null;
-    const r = await idbGet('link:' + CUR.id).catch(() => null); if (!r || !r.ct) return;
-    const o = JSON.parse(dec.decode(await unseal(r, LINK_LABEL)));
-    LINK = { uid: o.uid, email: o.email, refresh: o.refresh, pk8: ub64(o.pk8), pub: o.pub, name: o.name };
-    CLOUD = { uid: o.uid, email: o.email, refresh: o.refresh, idToken: null, exp: 0 };
-  }
-  function linkScreen(note) {
-    screen(`<h1>Friends and Admin</h1><p>Sign in with your site account once, and Friends (and Admin, for the site owner) open right here from <b>${esc(CUR.name)}</b>. No second portfolio to switch to.</p>
-      <form id="lk-ln" autocomplete="on"><input id="lk-ln-email" type="email" data-testid="link-email" placeholder="Email of your site account" autocomplete="email" autocapitalize="none" spellcheck="false">
-      <input id="lk-ln-pw" type="password" data-testid="link-password" placeholder="Its password" autocomplete="current-password">
-      <button class="lk-btn" id="lk-ln-go" data-testid="link-go">Sign in</button><div class="lk-err" role="alert">${esc(note || '')}</div></form>
-      <p class="lk-hint">No site account yet? Switch portfolio, then Create your portfolio. Come back here and sign in with it.</p>
-      <div class="lk-links"><button type="button" class="lk-link" id="lk-ln-back" data-testid="link-back">Back</button></div>`);
-    $l('#lk-ln-back').onclick = open;
-    $l('#lk-ln').onsubmit = async (ev) => {
-      ev.preventDefault(); const email = $l('#lk-ln-email').value.trim(), pw = cleanPw($l('#lk-ln-pw').value); if (!email || !pw) return;
-      const b = $l('#lk-ln-go'); b.disabled = true; err('Signing in…');
-      try {
-        const a = await fbAuth('signInWithPassword', { email, password: pw, returnSecureToken: true });
-        CLOUD = session(a);
-        const prof = await readProfile(a.localId);
-        let pk8;
-        try { pk8 = new Uint8Array(await unwrapKey(prof.keys.pwrap, pw)); }
-        catch (x) { CLOUD = null; b.disabled = false; return err(x && x.name === 'OperationError' ? 'That account\'s password was reset: open it once on its own (Switch portfolio, Sign in) to finish with the recovery code, then link it here.' : (x.message || String(x))); }
-        LINK = { uid: a.localId, email: a.email || email, refresh: a.refreshToken, pk8, pub: prof.keys.pub, name: prof.name };
-        await storeLink();
-        if (!prof.mainKey) await saveMainKey(a.localId, prof.keys.pub, CUR.id, PK8).catch((x) => console.warn('main key not stored', x));   // one login from now on
-        // the account's own entry on this device goes: this portfolio is now the one place for it
-        const id = 'u_' + a.localId, mp = ls.get('pd.mail.' + id);
-        if (mp && !ls.get('pd.mail.' + CUR.id)) ls.set('pd.mail.' + CUR.id, mp);
-        ls.del('pd.dev.' + id); for (const k of ['dev:', 'bio:', 'tok:', 'acct:', 'cache:']) await idbDel(k + id).catch(() => {});
-        dropAccount(id); ['pd.mail.', 'pd.dir.', 'pd.status.'].forEach((k) => ls.del(k + id));
-        editBar(); await housekeeping().catch((e) => console.warn('account housekeeping', e));
-        toast('Signed in. Friends and Admin are under Account in this portfolio now.'); linkedScreen();
-      } catch (e) { console.error(e); CLOUD = null; LINK = null; b.disabled = false; err(e.message || String(e)); }
-    };
-  }
-  function linkedScreen() {
-    screen(`<h1>Account</h1><p>Signed in as <b>${esc(LINK.email)}</b>. Friends and Admin work from here.</p>
-      <button class="lk-btn ghost" id="lk-lk-friends" data-testid="account-friends">Friends${incoming() ? ` · ${incoming()} new` : ''}</button>
-      <button class="lk-btn ghost" id="lk-lk-admin" data-testid="account-admin" ${isOwner() ? '' : 'hidden'}>Admin: your friends' accounts</button>
-      <div class="lk-links"><button type="button" class="lk-link" id="lk-lk-back" data-testid="account-back">Back</button><button type="button" class="lk-link" id="lk-lk-out" data-testid="link-signout">Sign out of the site account here</button></div>`);
-    $l('#lk-lk-back').onclick = open;
-    $l('#lk-lk-friends').onclick = () => friendsScreen();
-    $l('#lk-lk-admin').onclick = () => adminScreen();
-    checkOwner().then((y) => { const x = $l('#lk-lk-admin'); if (x) x.hidden = !y; }).catch(() => {});
-    listFriends().then(() => { const x = $l('#lk-lk-friends'); if (x) x.textContent = 'Friends' + (incoming() ? ` · ${incoming()} new` : ''); }).catch(() => {});
-    $l('#lk-lk-out').onclick = async () => {
-      await idbDel('link:' + CUR.id).catch(() => {}); LINK = null; CLOUD = null; FRIENDS = null; MY_HANDLE = null; accountBadge();
-      editBar(); open(); toast('Signed out of the site account on this device. Your portfolio is unchanged.');
-    };
-  }
   /* ---------- the friends hub (the top-left menu), the Overview's friends cards and the friends' activity ----------
      You and your friends, ranked by the return over the period picked at the top of the page (This month, This year,
      All time, ... : the page's own period selector, window.pdPeriod), with this month / this year / all time underneath.
@@ -2131,7 +1713,7 @@
   }
   const pctH = (x) => { if (x == null || !isFinite(x)) return '—'; const t = (Math.abs(x) * 100).toFixed(1); return (t === '0.0' ? '' : x > 0 ? '+' : '−') + t + '%'; };
   const toneH = (x) => (x == null || Math.abs(x) < 0.0005 ? '' : x > 0 ? 'pos' : 'neg');
-  const hasAcct = () => !!(CLOUD && PK8 && CUR && (CUR.cloud || LINK));
+  const hasAcct = () => !!(CLOUD && PK8 && CUR);
   // a profile's figures for the page's period: the picked one, this month, this year, all time
   function figures(p, sel) {
     if (!p) return null;
@@ -2180,23 +1762,9 @@
     const card = !pend ? '' : gmailOn()
       ? '<section class="pd-friends pd-building" data-testid="history-pending"><h3>Building your portfolio…</h3><p class="pdf-empty">Your holdings, trades and returns are being built from your Thndr emails. It usually takes <b>about 10 minutes</b> after connecting Gmail. <b>We email you when it is ready</b>, and this page fills in by itself.</p></section>'
       : '<section class="pd-friends pd-building" data-testid="history-pending"><h3>One step left</h3><p class="pdf-empty">Connect the Gmail your Thndr emails go to, and your portfolio is built from them in about 10 minutes.</p><button type="button" class="pdf-add" data-hub="gmail" data-testid="pending-connect">Connect Gmail</button></section>';
-    return card + ownerHint()
+    return card
       + `<section class="pd-friends" id="pd-friends" data-testid="friends-panel">${panelInner()}</section>`;
   };
-  // The site owner signed in with the site account (friends, admin) on a fresh device: that account holds no trades, the
-  // real portfolio is the main one. Say so, with a button straight to it (the setup key the first time on a device).
-  function ownerHint() {
-    if (!CUR || !CUR.cloud || !CLOUD) return '';
-    if (OWNER.email !== String(CLOUD.email || '').toLowerCase()) { checkOwner().then((yes) => { if (yes && typeof window.renderTab === 'function') window.renderTab(true); }).catch(() => {}); return ''; }
-    const main = PORTFOLIOS.find((p) => p.id === 'khaled' && !p.moved);   // moved: the account IS the portfolio now
-    const empty = !Object.keys(DOCS).some((k) => k.startsWith('ledger/') && ((DOCS[k] || {}).rows || []).length);
-    if (!OWNER.yes || !main || !empty) return '';
-    return `<section class="pd-friends pd-building" data-testid="owner-main-hint"><h3>This is your sign-in account, not your portfolio</h3>
-      <p class="pdf-empty">It is only for friends and the admin screen, so it has no trades. Your real portfolio is <b>${esc(main.name)}</b>${ls.get('pd.dev.' + main.id) ? '' : '. Open it once with its setup key: from then on, signing in with your email and password opens it directly, on any device'}.</p>
-      <button type="button" class="btn primary" style="margin-top:10px" data-open-main="${esc(main.id)}" data-testid="owner-open-main">Open ${esc(main.name)}</button></section>`;
-  }
-  document.addEventListener('click', (e) => { const b = e.target.closest && e.target.closest('[data-open-main]'); if (!b) return; const p = PORTFOLIOS.find((x) => x.id === b.dataset.openMain); if (!p) return;
-    if (ls.get('pd.dev.' + p.id)) select(p); else openMainFromAccount(p).catch((x) => { console.error(x); toast(x.message || String(x)); }); });
   function hubHTML() {
     const acct = hasAcct(), rows = hubRows(), P = period();
     const row = (r, i) => `<button type="button" class="hub-row${r.me ? ' cur' : ''}" data-hub="profile" data-uid="${esc(r.uid)}" data-testid="hub-${r.me ? 'me' : 'friend'}">
@@ -2211,13 +1779,13 @@
       ${!acct ? `<button type="button" class="hub-note" data-hub="link" data-testid="hub-signin">See your friends here<small>${CUR.cloud ? 'sign in again to load them' : 'sign in with your site account'}</small></button>`
         : rows.length === 1 ? '<p class="hub-empty">Add friends to compare returns.</p>' : ''}
       ${others.length ? `<div class="hub-head"><span>Your other portfolios</span></div>${others.map((p) => `<div class="hub-otherrow"><button type="button" class="hub-other" data-pid="${esc(p.id)}" data-testid="switch-${esc(p.id)}">${esc(p.name)}</button><button type="button" class="hub-forget" data-hub="forget" data-id="${esc(p.id)}" data-testid="forget-${esc(p.id)}" title="Remove from this device">Remove</button></div>`).join('')}` : ''}
-      <button type="button" class="hub-other" data-testid="switch-other" onclick="pdSwitch()">Another portfolio<small>sign in, or open one with a setup key</small></button>`;
+      <button type="button" class="hub-other" data-testid="switch-other" onclick="pdSwitch()">Another portfolio<small>sign in to another account</small></button>`;
   }
   async function refreshHub(m, fromPanel) {
     const draw = () => { if (m && !m.hidden) m.innerHTML = hubHTML(); const p = document.getElementById('pd-friends'); if (p) p.innerHTML = panelInner(); };
     if (m && !fromPanel) m.innerHTML = hubHTML();   // drawn now; the page shows the menu right after this returns
     if (fromPanel) draw();
-    if (HUB.busy || !(CLOUD && PK8 && (CUR.cloud || LINK))) return;
+    if (HUB.busy || !(CLOUD && PK8 && CUR)) return;
     HUB.busy = true;
     try {
       await listFriends().catch(() => {}); draw();
@@ -2232,11 +1800,11 @@
     } finally { HUB.busy = false; }
   }
   window.pdHub = (m) => { m.classList.add('pd-hub'); refreshHub(m); };
-  // a portfolio in "Your other portfolios" leaves this device's list (nothing is deleted: its setup key or sign-in adds it again)
+  // an account in "Your other portfolios" leaves this device's list (nothing is deleted: signing in adds it again)
   async function forgetOther(id) {
     const p = findPortfolio(id); if (!p || (CUR && CUR.id === id)) return;
-    ls.del('pd.dev.' + id); for (const k of ['dev:', 'bio:', 'tok:', 'link:', 'acct:', 'cache:']) await idbDel(k + id).catch(() => {});
-    if (p.cloud) dropAccount(id);
+    ls.del('pd.dev.' + id); for (const k of ['dev:', 'bio:', 'acct:', 'cache:']) await idbDel(k + id).catch(() => {});
+    dropAccount(id);
     ['pd.mail.', 'pd.dir.', 'pd.status.'].forEach((k) => ls.del(k + id));
   }
   document.addEventListener('click', async (e) => {
@@ -2244,16 +1812,16 @@
     const m = document.getElementById('pf-menu'), what = b.dataset.hub;
     if (what === 'forget') {
       const p = findPortfolio(b.dataset.id); if (!p) return;
-      if (!confirm(`Remove ${p.name} from this device?\n\nNothing is deleted and it keeps updating. To add it back: open this menu, tap Another portfolio, and open it with its ${p.cloud ? 'email and password' : 'setup key'}.`)) return;
+      if (!confirm(`Remove ${p.name} from this device?\n\nNothing is deleted and it keeps updating. To add it back: open this menu, tap Another portfolio, and open it with its email and password.`)) return;
       await forgetOther(p.id); m.innerHTML = hubHTML(); toast(`${p.name} removed from this device.`); return;
     }
     m.hidden = true; const t = document.getElementById('pf-name'); if (t) t.setAttribute('aria-expanded', 'false');
     if (what === 'friends') return friendsScreen();
     if (what === 'gmail') return gmailSetupScreen(() => open(), false, false, true);
-    if (what === 'link') return CUR.cloud ? lock(false) : linkScreen();
+    if (what === 'link') return lock(false);
     if (what === 'profile') return openProfile(b.dataset.uid);
   });
-  window.pdAccountMenu = () => { if (!CUR || !PK8) return; if (CUR.cloud) accountScreen(); else if (LINK) linkedScreen(); else linkScreen(); };
+  window.pdAccountMenu = () => { if (CUR && PK8) accountScreen(); };
   window.pdPortfolioList = () => allPortfolios().filter((p) => (CUR && p.id === CUR.id) || !!ls.get('pd.dev.' + p.id)).map((p) => ({ id: p.id, name: p.name }));
   window.pdCurrentId = () => (CUR ? CUR.id : null);
 
@@ -2301,11 +1869,12 @@
   window.pdTick = tick; window.pdEgxOpen = egxOpen; window.pdFooterFresh = footerFresh;   // for tests
   (async () => {
     if (!window.crypto || !crypto.subtle || !window.DecompressionStream) return screen('<h1>Browser too old</h1><p>Update your browser (Safari 16.4+, Chrome 80+) to open the portfolio.</p>');
-    try { PORTFOLIOS = await (await fetch('portfolios.json', { cache: 'no-store' })).json(); } catch (e) { return screen('<h1>Offline</h1><p>The portfolio could not load. Check your connection and reload.</p>'); }
-    await migrateLegacy();
-    ls.del(OLD_BIO_LS);   // the pre-v3 passkey only gated a screen; v3 enrols afresh with PRF
-    whenReady(() => { const sw = document.getElementById('pd-switch'); if (sw && PORTFOLIOS.length > 1) sw.hidden = false; });
+    // what the old setup-key portfolios (khaled, yassin: now in their owners' accounts) left on a device
+    for (const k of ['pd.device.v1', 'pd.bio.v1', 'pd.dev.khaled', 'pd.dev.yassin', 'pd.mail.khaled', 'pd.dir.khaled', 'pd.status.khaled', 'pd.handle.khaled']) ls.del(k);
+    for (const id of ['khaled', 'yassin']) for (const k of ['dev:', 'bio:', 'tok:', 'link:', 'cache:']) idbDel(k + id).catch(() => {});
+    idbDel('device').catch(() => {});
+    whenReady(() => { const sw = document.getElementById('pd-switch'); if (sw && allPortfolios().length > 1) sw.hidden = false; });
     const last = findPortfolio(ls.get(CUR_LS));
-    if (last && (last.cloud || ls.get('pd.dev.' + last.id))) select(last); else chooseScreen();
+    if (last) select(last); else chooseScreen();
   })();
 })();

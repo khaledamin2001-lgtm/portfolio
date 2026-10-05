@@ -7,7 +7,7 @@ invoices and statements posted to the portfolio. Nothing is done for an account 
     python3 run_account_mail.py --engine DIR [--code DIR] [--now ISO] [--weekly | --no-weekly] [--dry-run]
 
 An account that opts in stores Firestore mail/{uid} = {pkg}: an envelope sealed in its browser to the MAIL key (the public
-key of p/khaled/keys.json on the site, label 'portfolio-mail-v1'; this job opens it with SETUP_KEY = KHALED_SETUP_KEY)
+key in keys/mail.json on the site, label 'portfolio-mail-v1'; this job opens it with SETUP_KEY = the KHALED_SETUP_KEY secret)
 holding {uid, email, refresh, pk8, prefs: {alerts, weekly, reports, gmail}}. That is the account's own choice to let this job open
 its portfolio (the site says so when it is switched on). For each package this job:
   1. exchanges the refresh token for an ID token (Secure Token API) and reads users/{uid}/docs AS THAT ACCOUNT (the
@@ -34,25 +34,23 @@ its portfolio (the site says so when it is switched on). For each package this j
      with both files attached, then stamped reports.emailedAt (reportsPending removed) in the account;
   6. friends: a new friend request (links/{uid}/with/*, 'received') is emailed once; for every friend ('friends') the
      portfolio's PERCENTAGES profile (tools/profile.js: returns by month, holdings by weight, trades as %; never an
-     amount) is sealed to the friend's key as shares/{uid}/to/{friend} when it changed or is a day old. The site owner's
-     own account (its sign-in email hashes to OWNER_HASH, verified, prefs.shareMain) shares the MAIN portfolio's profile
-     instead (the engine's documents, opened with the same key as the mail packages). In the first days of a month
+     amount) is sealed to the friend's key as shares/{uid}/to/{friend} when it changed or is a day old. In the first days of a month
      (prefs.leaderboard; older packages follow the other emails) the account gets one leaderboard email: last month's
      return of the account and of each friend (their shares/{friend}/to/{uid} profiles), ranked, with the index and the
      month's best sale, percentages only; sent once every friend's copy covers the month, or from the 8th (to the 10th)
      with the late ones shown as no figure;
   6b. the monthly trading report card (prefs.reportCard; older packages follow the other emails): from the 1st to the
      10th, once, as soon as last month's statement is in or from the 5th: tools/report_card.js -> emails.report_card;
-  6c. the yearly wrap-up (January 1st-10th, once, for last year; with the report card's tick; the owner's account sends
-     the MAIN portfolio's): tools/wrapped.js -> emails.wrapped, ranked among friends on the year's return;
+  6c. the yearly wrap-up (January 1st-10th, once, for last year; with the report card's tick): tools/wrapped.js ->
+     emails.wrapped, ranked among friends on the year's return;
   7. writes status/{uid}.job {at, gmail, report, friends, error} for the site owner's admin screen (no figures);
   8. saves {alertsSent, weeklySent, gmail, friendMailed, shares, leaderboardSent, reportCardSent, wrappedSent, lastReport} back to the account as users/{uid}/docs/sync__mail, encrypted to the account key.
-  9. one login: the site owner's verified account gets users/{uid}.mainKey once (the MAIN portfolio's key, sealed to the
-     account's own key, ensure_main_key), so signing in with its email and password opens the main portfolio directly.
+The site owner's own account (its sign-in email hashes to OWNER_HASH) is an ordinary account with every email on unless
+switched off, and it is told about new sign-ups.
 Emails go from the Portfolio Desk mailbox (SENDER_ADDRESS) to the address in the package only. One account failing never stops the others; the job
 exits 1 (and emails the owner) only when nothing could be done at all. Logs carry counts, never figures or addresses.
 """
-import os, sys, json, base64, hashlib, argparse, datetime, subprocess, tempfile, shutil, time, urllib.request, urllib.error, urllib.parse
+import os, re, sys, json, base64, hashlib, argparse, datetime, subprocess, tempfile, shutil, time, urllib.request, urllib.error, urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
@@ -66,9 +64,6 @@ API_KEY = "AIzaSyAYvh69A5VWAgmhKXt07RTgLpB_1hYBjA8"
 PROJECT = "portfolio-desk-4d14a"
 FS = f"https://firestore.googleapis.com/v1/projects/{PROJECT}/databases/(default)/documents"
 MAIL_LABEL = b"portfolio-mail-v1"
-MAINKEY_LABEL = b"portfolio-mainkey-v1"
-MAIN_MOVED = False      # engine config.json movedToAccount: the owner's portfolio lives in the owner's account (set by main())
-MAIN_PRIV = None        # the main portfolio's key (p/khaled/keys.json, the same key that opens the mail packages): set by main()
 SHARE_LABEL = b"portfolio-share-v1"
 OWNER_HASH = "467022c320757248bf70115c83d305a7e4d139c35e1be5f8117fb30d7f769347"     # SHA-256 of the site owner's sign-in email (the address is not published here)
 SITE = "https://khaledamin2001-lgtm.github.io/portfolio/"
@@ -205,7 +200,7 @@ def materialize(docs, shared, out):
 
 
 def macro_marks(out):
-    """The month-end macro fields the setup-key portfolios store in their marks (index close, CPI, USD/EGP, policy rate),
+    """The month-end macro fields a portfolio's marks carry (index close, CPI, USD/EGP, policy rate),
     filled from the shared macro data for every closed month that lacks them - what the site does when it reads an
     account (lock.js macroMarks), so the job's reports, weekly summary and report card show the same figures. A value
     already there is never replaced."""
@@ -239,8 +234,50 @@ def alerts_email(name, items, site):
 DOC_NAME = f"projects/{PROJECT}/databases/(default)/documents/users/{{uid}}/docs/{{c}}__{{d}}"
 
 
+# ---------------------------------------------------------------- sync.js write/ -> writes
+def writes_from_plan(write_dir, versions):
+    """Every file sync.js (or history_seed.js) wrote, as writes pinned to the versions read (0 = the document did not exist):
+    ledger_yYYYY -> ledger/yYYYY, marks -> portfolio/marks, settings -> portfolio/settings, assets_update -> update
+    portfolio/assets, import_M -> imports/M, sync_state -> sync/state."""
+    V = lambda k: versions.get(k, 0)
+    out = []
+    for f in sorted(os.listdir(write_dir)):
+        with open(os.path.join(write_dir, f), encoding="utf-8") as fh:
+            data = json.load(fh)
+        m = re.match(r"^ledger_(y\d{4})\.json$", f)
+        mi = re.match(r"^import_(\d{4}-\d{2})\.json$", f)
+        if m:
+            w = ("set", "ledger", m.group(1))
+        elif f == "marks.json":
+            w = ("set", "portfolio", "marks")
+        elif f == "settings.json":
+            w = ("set", "portfolio", "settings")
+        elif f == "assets_update.json":
+            w = ("update", "portfolio", "assets")
+        elif mi:
+            w = ("set", "imports", mi.group(1))
+        elif f == "sync_state.json":
+            w = ("set", "sync", "state")
+        else:
+            raise jc.JobError("write", f"sync.js wrote an unknown file {f}")
+        out.append({"op": w[0], "collection": w[1], "doc_id": w[2], "data": data, "if_version": V(f"{w[1]}/{w[2]}")})
+    return out
+
+
+def desk_page(code, work):
+    """Build the desk page (the site's app without the account layer) from the public repo's src/; returns its path. The
+    factsheet is rendered on it."""
+    b = os.path.join(work, "page")
+    if not os.path.isdir(b):
+        os.makedirs(b)
+        for f in ("app.html", "engine.js", "engine2.js", "statement.js", "app2.js", "build.py"):
+            shutil.copy(os.path.join(code, "src", f), b)
+        jc.run([sys.executable, os.path.join(b, "build.py")], "month-end: build page", cwd=b)
+    return os.path.join(b, "portfolio-desk.html")
+
+
 def commit_writes(http, tok, uid, keys, docs, writes, now_iso):
-    """sync.js writes (run_sync.writes_from_plan) as ONE Firestore commit, each document pinned to the updateTime read
+    """sync.js writes (writes_from_plan) as ONE Firestore commit, each document pinned to the updateTime read
     (or to not existing). Returns the documents changed; raises Conflict when one changed meanwhile."""
     out = []
     for w in writes:
@@ -279,7 +316,7 @@ HISTORY_AFTER = "2019/01/01"
 
 
 def apply_to_data(data, writes):
-    """Writes (run_sync.writes_from_plan shape) applied to a materialized data dir, so sync.js starts from them."""
+    """Writes (writes_from_plan shape) applied to a materialized data dir, so sync.js starts from them."""
     for w in writes:
         p = os.path.join(data, w["collection"], w["doc_id"] + ".json")
         os.makedirs(os.path.dirname(p), exist_ok=True)
@@ -316,7 +353,7 @@ def gmail_after(code, state, settings, now):
 
 def gmail_import(http, tok, pkg, keys, docs, shared, code, work, now, dry, read_again):
     """Fetch new Thndr emails, run sync.js, save its writes. Returns (summary, write_dir, data_dir, counts)."""
-    import imap_fetch, run_sync
+    import imap_fetch
     login = (docs.get("sync/gmail") or {}).get("data") or {}
     if not login.get("address") or not login.get("appPassword"):
         raise jc.JobError("Gmail", "no Gmail login saved in the account (connect Gmail again on the site)")
@@ -358,7 +395,7 @@ def gmail_import(http, tok, pkg, keys, docs, shared, code, work, now, dry, read_
         os.makedirs(os.path.dirname(sp), exist_ok=True)
         with open(sp, "w", encoding="utf-8") as f:
             json.dump({"id": "state", "data": sd}, f)
-        seed_writes = run_sync.writes_from_plan(os.path.join(work, "seed"), {}) if seed else []
+        seed_writes = writes_from_plan(os.path.join(work, "seed"), {}) if seed else []
         apply_to_data(data, seed_writes)
         os.makedirs(run)
         r = subprocess.run(["node", os.path.join(code, "src", "tools", "sync.js"), "--data", data, "--inbox", inbox, "--out", run, "--today", today],
@@ -368,7 +405,7 @@ def gmail_import(http, tok, pkg, keys, docs, shared, code, work, now, dry, read_
         with open(os.path.join(run, "summary.json"), encoding="utf-8") as f:
             summary = json.load(f)
         vers = {k: v.get("version", 0) for k, v in docs.items()}
-        writes = merge_writes(seed_writes, run_sync.writes_from_plan(os.path.join(run, "write"), vers))
+        writes = merge_writes(seed_writes, writes_from_plan(os.path.join(run, "write"), vers))
         if seed:   # a history import: only the latest month's report is emailed; the rest are history
             months = sorted(w["doc_id"] for w in writes if w["collection"] == "imports")
             for w in writes:
@@ -416,9 +453,7 @@ def report_page(code):
         cmd = os.environ.get("JOBS_PLAYWRIGHT_SETUP")
         if cmd:
             jc.run(["bash", "-c", cmd], "month-end: install Playwright", timeout=900)
-        import run_sync
-        from types import SimpleNamespace
-        _PAGE["path"] = run_sync.desk_page(SimpleNamespace(code=code, config={"portfolioId": "account"}), work)
+        _PAGE["path"] = desk_page(code, work)
     return _PAGE["path"]
 
 
@@ -434,7 +469,7 @@ def publish_files(uid, pub_b64, priv, entries, work, remote=None):
     key ('portfolio-file-v1', as the owner's exports) under a/<hash of the uid>/exports/, and the list of them
     (index.enc.json) sealed the same way, so nobody but the account sees what is there. entries: [(M, [(filename, bytes,
     type)])]; a month already listed is replaced. One commit to the site repository (SITE_TOKEN), retried on a race."""
-    import publish
+    import site_git
     folder = files_dir(uid)
     remote = remote or os.environ.get("SITE_REMOTE") or "https://github.com/khaledamin2001-lgtm/portfolio.git"
     author = jc.author_args("SITE_COMMIT_AUTHOR", "Portfolio jobs <noreply@github.com>")
@@ -444,7 +479,7 @@ def publish_files(uid, pub_b64, priv, entries, work, remote=None):
         if wait:
             time.sleep(wait)
         site = os.path.join(work, "site-files")
-        env = publish.clone(None, remote, site)
+        env = site_git.clone(remote, site)
         d = os.path.join(site, folder)
         os.makedirs(d, exist_ok=True)
         ip = os.path.join(d, "index.enc.json")
@@ -505,7 +540,7 @@ def month_end(code, data, M, name, work):
         jc.log(f"month-end {M}: factsheet not made ({jc.mask(e.detail)[:120]}); sending the workbook")
     sm = json.load(open(sm_p)) if os.path.exists(sm_p) else None
     files = (["the PDF factsheet"] if len(att) == 2 else []) + ["the Excel workbook"]
-    subj, text, html = emails.monthend(name, M, sm, files, account=True)
+    subj, text, html = emails.monthend(name, M, sm, files)
     return subj, text, html, att
 
 
@@ -664,34 +699,6 @@ def seal_bytes(plain, pub_b64, label):
     return json.dumps({"v": 1, "epk": b(epk), "iv": b(iv), "ct": b(AESGCM(key).encrypt(iv, plain, label))}, separators=(",", ":"))
 
 
-def ensure_main_key(http, tok, uid, acct_pub_b64, main_priv, portfolio_id="khaled"):
-    """One login for the site owner: users/{uid}.mainKey = {id, pk8} of the MAIN portfolio, sealed to the owner's account
-    key (as site/lock.js saveMainKey), written once when missing. Signing in with the account's email and password then
-    opens the main portfolio directly on any device. Returns True when it was written."""
-    from cryptography.hazmat.primitives import serialization
-    st, j = http.json("GET", f"{FS}/users/{uid}", headers={"Authorization": "Bearer " + tok})
-    if st != 200 or (((j or {}).get("fields") or {}).get("mainKey") or {}).get("stringValue"):
-        return False
-    pk8 = main_priv.private_bytes(serialization.Encoding.DER, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
-    env = seal_bytes(json.dumps({"v": 1, "id": portfolio_id, "pk8": base64.b64encode(pk8).decode()}).encode(), acct_pub_b64, MAINKEY_LABEL)
-    st, _ = http.json("PATCH", f"{FS}/users/{uid}?updateMask.fieldPaths=mainKey", {"fields": {"mainKey": {"stringValue": env}}},
-                      headers={"Authorization": "Bearer " + tok})
-    if st != 200:
-        raise jc.JobError("one login", f"Firestore answered {st} saving the main key")
-    return True
-
-
-def drop_main_key(http, tok, uid):
-    """Removes users/{uid}.mainKey (the main portfolio moved into this account). Returns True when there was one."""
-    st, j = http.json("GET", f"{FS}/users/{uid}", headers={"Authorization": "Bearer " + tok})
-    if st != 200 or not (((j or {}).get("fields") or {}).get("mainKey") or {}).get("stringValue"):
-        return False
-    st, _ = http.json("PATCH", f"{FS}/users/{uid}?updateMask.fieldPaths=mainKey", {"fields": {}}, headers={"Authorization": "Bearer " + tok})
-    if st != 200:
-        raise jc.JobError("one login", f"Firestore answered {st} removing the main key")
-    return True
-
-
 def confirmed_friend(http, tok, f):
     """A link's name, email and key are written by the other person: seal to that key only when directory/{email} (which
     only the owner of that sign-in email can write) names the same account and the same key. A request sent to an
@@ -762,21 +769,20 @@ def gmail_error_email(name, err, site):
     return emails.gmail_error(name, err)
 
 
-def run_one(http, pkg, shared, code, now, weekly_due, dry, send, main_docs=None):
-    """Returns a short status string for the log (no figures, no address). main_docs: a callable giving the owner's main
-    portfolio documents (only used for the verified owner account with prefs.shareMain)."""
+def run_one(http, pkg, shared, code, now, weekly_due, dry, send):
+    """Returns a short status string for the log (no figures, no address)."""
     tok, uid = id_token(http, pkg["refresh"])
     if uid and uid != pkg["uid"]:
         raise jc.JobError("sign-in", "the package belongs to another account")
     try:
-        return _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs)
+        return _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send)
     except Exception as e:
         if not dry:
             write_status_job(http, tok, pkg["uid"], {"at": jc.now_iso(), "error": f"{getattr(e, 'step', type(e).__name__)}: {jc.mask(str(getattr(e, 'detail', e)))[:160]}"})
         raise
 
 
-def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs):
+def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send):
     priv, keys = account_key(pkg["pk8"])
     docs = read_account(http, tok, pkg["uid"], priv)
     settings = (docs.get("portfolio/settings") or {}).get("data") or {}
@@ -785,26 +791,18 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
     state = dict((state_doc or {}).get("data") or {})
     sent = dict(state.get("alertsSent") or {})
     prefs = pkg.get("prefs") or {}
-    # The site owner's own account. Before the move it is only a sign-in for the admin screen and friends (the main
-    # portfolio reads the owner's Thndr emails and sends the owner's emails), so it gets no import and no emails.
-    # Once the main portfolio is copied into it (settings.migratedFrom, migrate_main.py) it runs in SHADOW: the same
-    # Gmail import as any account, every email suppressed, so the two copies can be compared. Once the engine says the
-    # portfolio moved (config.json movedToAccount) it is LIVE: an ordinary account with every email on by default.
+    # The site owner's own account: every email on unless switched off, and its Thndr emails read while its Gmail login is
+    # there (its mail package dates from before Gmail could be connected on the site)
     owner_acct = hashlib.sha256(str(token_claims(tok).get("email") or "").lower().encode()).hexdigest() == OWNER_HASH
-    migrated = owner_acct and bool(settings.get("migratedFrom"))
-    shadow, live_owner = migrated and not MAIN_MOVED, migrated and MAIN_MOVED
-    if live_owner:
+    if owner_acct:
         prefs = {"alerts": True, "weekly": True, "reports": True, "reportCard": True, "leaderboard": True,
-                 **{k: v for k, v in prefs.items() if k != "shareMain"}, "gmail": True}
+                 **{k: v for k, v in prefs.items() if k != "shareMain"}, "gmail": bool(prefs.get("gmail") or docs.get("sync/gmail"))}
     # the monthly friends leaderboard: its own tick on the site; packages from before it follow the other emails
     lb_on = prefs.get("leaderboard", owner_acct or any(prefs.get(k, True) for k in ("alerts", "weekly", "reports")))
-    # the monthly trading report card: the same (the owner's sign-in account before the move: never)
-    card_on = (not owner_acct or live_owner) and prefs.get("reportCard", any(prefs.get(k, True) for k in ("alerts", "weekly", "reports")))
-    # the yearly wrap-up (January) goes with the report card tick; the owner's, from the main portfolio until the move
-    wrap_on = owner_acct or card_on
-    if owner_acct and not live_owner:
-        prefs = {"alerts": False, "weekly": False, "reports": False, "gmail": shadow, "shareMain": prefs.get("shareMain")}
-    quiet = shadow      # nothing from the import is emailed while the main portfolio still sends the owner's emails
+    # the monthly trading report card: the same
+    card_on = prefs.get("reportCard", any(prefs.get(k, True) for k in ("alerts", "weekly", "reports")))
+    # the yearly wrap-up (January) goes with the report card tick
+    wrap_on = card_on
     today = now.strftime("%Y-%m-%d")
     site = SITE
     work = tempfile.mkdtemp(prefix="acct-", dir=os.environ.get("RUNNER_TEMP") or None)
@@ -838,7 +836,7 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                         notes.append("history import done")
                     elif em.get("notify") and (prefs.get("alerts", True) or imported):
                         outgoing.append(emails.sync_email(em["subject"], em["parts"], account=True) if em.get("parts") else (em["subject"], em["text"], None))
-                        notes.append("import email not sent (shadow copy)" if quiet else "import email sent")
+                        notes.append("import email sent")
                     for k in (summary.get("digest") or {}).get("emailed") or []:
                         sent[k] = today
                     state["gmail"] = {"ok": True, "at": jc.now_iso(), "found": c.get("found", 0), "new": c.get("kept", 0),
@@ -849,7 +847,7 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                     state["gmail"] = {"ok": True, "at": jc.now_iso(), "found": 0, "new": 0, "applied": 0, "held": 0}
                     if (state.get("history") or {}).get("reason") != reason:
                         subj, body, html = history_wait_email(name, reason, site)
-                        if not dry and not quiet:
+                        if not dry:
                             send(pkg["email"], subj, body, html)
                     state["history"] = {"status": "waiting", "reason": reason, "at": jc.now_iso()}
                     notes.append("history import waiting for a monthly statement")
@@ -860,7 +858,7 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                     state["gmail"] = {"ok": False, "at": jc.now_iso(), "error": err, "errorSent": prev.get("errorSent")}
                     if prev.get("errorSent") != err:
                         subj, body, html = gmail_error_email(name, err, site)
-                        if not dry and not quiet:
+                        if not dry:
                             send(pkg["email"], subj, body, html)
                         state["gmail"]["errorSent"] = err
                     notes.append(f"gmail not done ({getattr(e, 'step', type(e).__name__)})")
@@ -868,7 +866,7 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                     data = os.path.join(work, "data")
                 changed = True
                 for subj, body, html in outgoing:
-                    if not dry and not quiet:
+                    if not dry:
                         send(pkg["email"], subj, body, html)
             if prefs.get("alerts", True) and overlay is None:
                 r = subprocess.run(["node", os.path.join(code, "src", "jobs", "account_alerts.js"), "--data", data, "--today", today], capture_output=True, text=True, timeout=300)
@@ -971,25 +969,18 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                     friends = [f for f in links if f.get("status") == "friends" and f.get("pub")]
                     friends_n = len(friends)
                     own_st = ((cur_docs.get("portfolio/settings") or {}).get("data") or {})
-                    if friends and not own_st.get("inception") and not (prefs.get("shareMain") and owner_acct):
+                    if friends and not own_st.get("inception"):
                         notes.append("friends: nothing to share yet (no portfolio)")
                         friends = []
                     if friends:
-                        cl = token_claims(tok)
-                        owner = hashlib.sha256(str(cl.get("email") or "").lower().encode()).hexdigest() == OWNER_HASH
-                        main = bool(prefs.get("shareMain") and main_docs and owner and cl.get("email_verified"))
                         handle = own_handle(http, tok, pkg["uid"])
-                        if main:
-                            md = main_docs()
-                            snap = share_profile(md, shared, code, work, ((md.get("portfolio/settings") or {}).get("data") or {}).get("name") or "Main portfolio", handle, "main")
-                        else:
-                            snap = share_profile(cur_docs, shared, code, work, name, handle, "own")
+                        snap = share_profile(cur_docs, shared, code, work, name, handle, "own")
                         before = json.dumps(state.get("shares") or {}, sort_keys=True)
                         n = share_to_friends(http, tok, pkg["uid"], friends, snap, state, now)
                         if n or json.dumps(state.get("shares") or {}, sort_keys=True) != before:
                             changed = True
                         if n:
-                            notes.append(f"{n} friend cop{'y' if n == 1 else 'ies'} refreshed{' (main portfolio)' if main else ''}")
+                            notes.append(f"{n} friend cop{'y' if n == 1 else 'ies'} refreshed")
                         # on the 1st of the month (or the first days, until every friend's copy covers the month): how
                         # you and your friends ranked last month, in percentages, to this account's own address
                         M = prev_month(now)
@@ -1008,14 +999,12 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                                 changed = True
                 except Exception as e:      # friends never stop the rest
                     notes.append(f"friends not done ({getattr(e, 'step', type(e).__name__)})")
-            # the yearly wrap-up: the 1st to the 10th of January, once, for last year (the owner's from the MAIN portfolio),
+            # the yearly wrap-up: the 1st to the 10th of January, once, for last year,
             # ranked among friends on the year's return once their copies cover December (or from the 8th)
             WY = now.year - 1
             if wrap_on and not dry and now.month == 1 and now.day <= 10 and state.get("wrappedSent") != WY:
                 try:
-                    cl = token_claims(tok)
-                    use_main = owner_acct and not live_owner and main_docs and cl.get("email_verified")
-                    wdocs = main_docs() if use_main else cur_docs
+                    wdocs = cur_docs
                     wname = ((wdocs.get("portfolio/settings") or {}).get("data") or {}).get("name") or name
                     if not ((wdocs.get("portfolio/settings") or {}).get("data") or {}).get("inception"):
                         state["wrappedSent"] = WY       # no portfolio: nothing to wrap
@@ -1048,20 +1037,6 @@ def _run_one(http, tok, pkg, shared, code, now, weekly_due, dry, send, main_docs
                             changed = True
                 except Exception as e:      # never stops the rest; the next run tries again (until the 10th)
                     notes.append(f"wrapped not done ({getattr(e, 'step', type(e).__name__)})")
-            # one login: the owner's verified account holds the main portfolio's key (once) - until the portfolio moved
-            # into the account, when the key is taken away again so signing in opens the account's own copy
-            if live_owner and not dry:
-                try:
-                    if drop_main_key(http, tok, pkg["uid"]):
-                        notes.append("one login: the account now opens its own portfolio")
-                except Exception as e:
-                    notes.append(f"main key not removed ({getattr(e, 'step', type(e).__name__)})")
-            elif owner_acct and not dry and MAIN_PRIV is not None and token_claims(tok).get("email_verified"):
-                try:
-                    if ensure_main_key(http, tok, pkg["uid"], keys["pub"], MAIN_PRIV):
-                        notes.append("one login set up (the account opens the main portfolio)")
-                except Exception as e:
-                    notes.append(f"one login not set up ({getattr(e, 'step', type(e).__name__)})")
             # the owner hears about every new account (the admin list, read with the owner's verified sign-in)
             if owner_acct and not dry:
                 try:
@@ -1124,30 +1099,18 @@ def main(argv=None, http=None, send=None):
         if not os.path.exists(os.path.join(shared, "latest.json")):
             raise jc.JobError("setup", "no shared market data yet (shared/latest.json)")
         step = "mail key"
-        keys = store.load_keys(os.path.join(a.code, "p", "khaled", "keys.json"))
-        key = os.environ.get("SETUP_KEY", "").strip()
-        if not key:
-            raise jc.JobError("mail key", "SETUP_KEY is not set")
-        priv = store.unlock(keys, key)
-        global MAIN_PRIV, MAIN_MOVED
-        MAIN_PRIV = priv
-        MAIN_MOVED = jc.main_moved(os.path.abspath(a.engine))
+        priv = jc.mail_key(a.code)
         http = http or Http()
         step = "list"
         pkgs = list_packages(http)
         send = send or (None if a.dry_run else smtp_sender())
         ok = bad = 0
-        main_cache = {}
-        def main_docs():
-            if "d" not in main_cache:
-                main_cache["d"] = store.read_all(os.path.abspath(a.engine), os.path.join(a.code, "p", "khaled", "keys.json"), priv)
-            return main_cache["d"]
         for i, p in enumerate(pkgs, 1):
             try:
                 pkg = open_mail_pkg(priv, p["pkg"])
                 if pkg.get("uid") != p["uid"]:
                     raise jc.JobError("package", "the package names another account")
-                jc.log(f"account {i}: " + run_one(http, pkg, shared, a.code, now, weekly_due, a.dry_run, send, main_docs))
+                jc.log(f"account {i}: " + run_one(http, pkg, shared, a.code, now, weekly_due, a.dry_run, send))
                 ok += 1
             except Exception as e:      # one account never stops the others
                 bad += 1

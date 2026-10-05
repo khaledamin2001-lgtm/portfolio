@@ -3,15 +3,15 @@
 SENDER_APP_PASSWORD (a Gmail made only for sending). The owner's own Gmail (GMAIL_ADDRESS / GMAIL_APP_PASSWORD) is only
 read for Thndr emails and never sends. The From line shows SENDER_NAME (default "Portfolio Desk").
 
-The only allowed recipient is the portfolio's own portfolio/settings.factsheetEmail (decrypted from the engine repo);
-any other address is refused. Plain text body plus an optional HTML alternative; attachments only for the portfolio's
-own month-end files (workbook and PDF factsheet). run_account_mail.py uses build() for a site account's own address.
+send() and send_failure() go to the site owner only (jobs_common.Ctx.recipient: config.json ownerEmail, else
+GMAIL_ADDRESS); any other address is refused. Plain text body plus an optional HTML alternative. run_account_mail.py and
+run_morning.py use build() / smtp_send() for a site account's own address (the one in its mail package).
 
     python3 mail_send.py --engine DIR [--code DIR] --subject S --text FILE [--html FILE] [--to ADDR]
     python3 mail_send.py --failure JOB --engine DIR [--code DIR] [--step S] [--error E]
         the workflow's last-resort failure step: "Portfolio: <JOB> FAILED <Cairo date>". Skipped when the job already
-        emailed its own failure (marker file, see jobs_common.failure_mark). When the settings cannot be decrypted
-        (e.g. the setup key itself is the problem) it goes to GMAIL_ADDRESS - the owner's own mailbox.
+        emailed its own failure (marker file, see jobs_common.failure_mark). Without a readable config.json it goes to
+        GMAIL_ADDRESS - the owner's own mailbox.
 
 Env for tests: SMTP_HOST, SMTP_PORT, SMTP_SSL=0 (plain SMTP). Prints one status line, never the message or a secret."""
 import os, re, sys, ssl, time, smtplib, argparse
@@ -83,11 +83,11 @@ def smtp_send(msg, sender, pw, to):
 
 
 def send(ctx, subject, text, html=None, to=None, attachments=None):
-    """Send to the portfolio's one allowed address (ctx.recipient()). `to`, when given, must be that same address.
+    """Send to the site owner (ctx.recipient()). `to`, when given, must be that same address.
     Returns 'sent'."""
     allowed = ctx.recipient()
     if to is not None and to.strip().lower() != allowed.lower():
-        raise jc.JobError("email", "refusing to email anyone but settings.factsheetEmail")
+        raise jc.JobError("email", "refusing to email anyone but the site owner")
     if not subject or "\n" in subject or "\r" in subject:
         raise jc.JobError("email", "bad subject")
     sender, pw = _sender()
@@ -96,7 +96,7 @@ def send(ctx, subject, text, html=None, to=None, attachments=None):
 
 
 def send_failure(ctx, engine, code, subject, body, html=None):
-    """FAILED notice. Uses settings.factsheetEmail when the settings can be read, else the sender's own address."""
+    """FAILED notice to the site owner (else GMAIL_ADDRESS, else the sender's own mailbox)."""
     if ctx is None and engine:
         try:
             ctx = jc.Ctx(engine, code)
@@ -115,7 +115,7 @@ def send_failure(ctx, engine, code, subject, body, html=None):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Send one email to settings.factsheetEmail via Gmail SMTP.")
+    ap = argparse.ArgumentParser(description="Send one email to the site owner via Gmail SMTP.")
     ap.add_argument("--engine", required=True)
     ap.add_argument("--code")
     ap.add_argument("--subject")

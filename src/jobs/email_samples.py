@@ -5,8 +5,8 @@
     python3 email_samples.py --engine DIR --code DIR --pdfjs NODE_MODULES [--dry-run OUTDIR]
 
 Each subject starts with "[Sample]". The first email lists them all: who gets each one and when. The account emails
-come from src/tests/test_account_mail.py (fake Firebase and mailer, DUMP_EMAILS), the owner's from the job functions
-themselves. Recipient: the owner's settings.factsheetEmail (jobs_common.Ctx.recipient), never anyone else.
+come from src/tests/test_account_mail.py (fake Firebase and mailer, DUMP_EMAILS), the site owner's notices from the job
+functions themselves. Recipient: the site owner (jobs_common.Ctx.recipient), never anyone else.
 Env: SETUP_KEY, GMAIL_ADDRESS / GMAIL_APP_PASSWORD. Needs node, a node_modules with pdfjs-dist OUTSIDE the code
 checkout (--pdfjs; the test copies the checkout) and Playwright (for the PDF factsheet)."""
 import os, sys, json, base64, shutil, argparse, tempfile, subprocess, urllib.request, datetime
@@ -16,35 +16,32 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import jobs_common as jc  # noqa: E402
-import mail_send, run_market, run_sync, alarm_key, emails  # noqa: E402
+import mail_send, email_gate, alarm_key, emails  # noqa: E402
 
 SITE = "https://khaledamin2001-lgtm.github.io/portfolio/"
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 # (key, who gets it and when) in the order they are sent; the key is matched against the samples made below
 GUIDE = [
-    ("market", "You · after each EGX close, Sun-Thu about 3:45 pm"),
-    ("posted", "You · at the 4:15 / 6:15 / 11 pm check, when a Thndr statement or invoice was added (friends get the same for their own portfolio)"),
-    ("review", "You · at a check, when a Thndr email could not be used (friends: the same, for their own)"),
-    ("missing", "You · at a check from the 10th, when last month's statement has not arrived (friends: the same, for their own)"),
-    ("weekly", "You · Thursday evening (friends who switch it on get their own)"),
-    ("factsheet", "You · when your monthly statement is posted"),
-    ("reminder", "You · on the 11th, if last month's statement is still not posted"),
+    ("posted", "Everyone · at the 4:15 / 6:15 / 11 pm check, when a Thndr statement or invoice was added"),
+    ("review", "Everyone · at a check, when a Thndr email could not be used"),
+    ("missing", "Everyone · at a check from the 10th, when last month's statement has not arrived"),
+    ("alerts", "Everyone · after a market close, when there is a new heads-up on the portfolio"),
+    ("weekly", "Everyone · Thursday evening"),
+    ("monthend", "Everyone · when the monthly statement is posted: the Excel workbook and PDF factsheet attached"),
+    ("friend", "Everyone · when someone sends a friend request on the site"),
+    ("built", "Everyone · once, when \"Build it from my Thndr emails\" has built the portfolio"),
+    ("waiting", "Everyone · once, when the portfolio cannot be built yet (no monthly statement in the Gmail)"),
+    ("gmail", "Everyone · once, when the Gmail app password stops working"),
+    ("leaderboard", "Everyone · on the 1st of the month: how you and your friends ranked last month (percentages only)"),
+    ("card", "Everyone · early each month (once last month's statement is in, or the 5th): the trading report card"),
+    ("wrapped", "Everyone · January 1st to 10th: last year, wrapped (best and worst sale, most traded, ranked among friends)"),
+    ("morning", "Everyone · Sunday to Thursday at 9 am: the morning brief before the market opens (on for you, ticked by friends)"),
+    ("evening", "Everyone · Sunday to Thursday at 4:30 pm: the after-close recap of the day (on for you, ticked by friends)"),
     ("signup", "You · when someone new signs up on the site"),
     ("token", "You · 14 days before the site's publishing key expires"),
     ("alarmkey", "You · 14, 7, 3, 2 and 1 days before the on-time alarm key expires"),
     ("failed", "You · only when a job fails"),
-    ("alerts", "Friends · after a market close, when there is a new heads-up on their portfolio"),
-    ("monthend", "Friends · when their monthly statement is posted: the Excel workbook and PDF factsheet attached"),
-    ("friend", "Friends · when someone sends them a friend request on the site"),
-    ("built", "Friends · once, when \"Build it from my Thndr emails\" has built their portfolio"),
-    ("waiting", "Friends · once, when their portfolio cannot be built yet (no monthly statement in their Gmail)"),
-    ("gmail", "Friends · once, when their Gmail app password stops working"),
-    ("leaderboard", "Friends · on the 1st of the month: how they and their friends ranked last month (percentages only)"),
-    ("card", "You and friends · early each month (once last month's statement is in, or the 5th): your trading report card"),
-    ("wrapped", "You and friends · January 1st to 10th: last year, wrapped (best and worst sale, most traded, ranked among friends)"),
-    ("morning", "You (and friends who tick it) · Sunday to Thursday at 9 am: the morning brief before the market opens"),
-    ("evening", "You (and friends who tick it) · Sunday to Thursday at 4:30 pm: the after-close recap of the day"),
 ]
 
 
@@ -100,32 +97,21 @@ def sync_email(tools, syn, work, today, pdf_args=None, subject="Your monthly E-s
 
 
 class _Demo:
-    """Just enough of jobs_common.Ctx for the owner's email functions, on the demo portfolio."""
-    config = {"name": "Demo Portfolio", "siteRepo": "khaledamin2001-lgtm/portfolio"}
-    live = True
-    def settings(self): return {"name": "Demo Portfolio"}
+    """Just enough of jobs_common.Ctx for the owner's notices."""
+    config = {"siteRepo": "khaledamin2001-lgtm/portfolio"}
     def today(self): return "2026-10-11"
 
 
-def owner_samples(tools, syn, work, acct):
+def owner_samples(tools, syn, work):
+    """The site owner's notices, and the two import emails made straight from sync.js."""
     got = []
     real = (mail_send.send, mail_send.send_failure, urllib.request.urlopen)
     mail_send.send = lambda ctx, subject, text, html=None, to=None, attachments=None: got.append({"subject": subject, "text": text, "html": html, "att": attachments or []}) or "kept"
     mail_send.send_failure = lambda ctx, e, c, subject, body, html=None: got.append({"subject": subject, "text": body, "html": html, "att": []}) or "kept"
     out = {}
     try:
-        o = {"latest": {"asOf": "2026-09-30T15:12+03:00", "quotes": {f"S{i}": {} for i in range(296)}, "missing": ["ZZB"],
-                        "index": {"EGX30CAPPED": {"close": 64525.40, "chg": -0.65, "date": "2026-09-30"}}, "rates": {"policy": {"rate": 0.19, "date": "2026-09"}}},   # private-scan: synthetic
-             "fillErrors": {"ZZA": "x"}, "bench": {"divYield": 0.0372}}   # private-scan: synthetic
-        s, t, h = run_market.success_email(o, {"historyMonths": ["2026-09"], "sessions": 1, "newAssets": 0, "marksFilled": {}}, True)
-        out["market"] = {"subject": s, "text": t, "html": h, "att": []}
         out["missing"] = sync_email(tools, syn, work, "2026-10-11")
         out["review"] = sync_email(tools, syn, work, "2026-10-02", ["--name", "Someone Else", "--month", "2026-09"])
-        mk = tempfile.mkdtemp(dir=work)
-        os.makedirs(os.path.join(mk, "portfolio"))
-        json.dump({"data": {"months": {"2026-09": {"cash": 1, "securities": 2, "provisional": True}}}}, open(os.path.join(mk, "portfolio", "marks.json"), "w"))
-        run_sync.site_url = lambda ctx: SITE
-        got.clear(); run_sync.backstop(_Demo(), {"prevMonth": "2026-09", "dayOfMonth": 11, "today": "2026-10-11"}, mk, os.path.join(mk, "w"), {}); out["reminder"] = got[0]
 
         class R:
             headers = {"github-authentication-token-expiration": "2026-10-25 00:00:00 UTC"}
@@ -134,28 +120,16 @@ def owner_samples(tools, syn, work, acct):
         urllib.request.urlopen = lambda *a, **k: R()
         env = os.environ.get("SITE_TOKEN")
         os.environ["SITE_TOKEN"] = "sample"
-        got.clear(); run_sync.token_check(_Demo(), {"today": "2026-10-11"}, {}); out["token"] = got[0]
+        got.clear(); email_gate.token_check(_Demo(), "2026-10-11", {}); out["token"] = got[0]
         os.environ.pop("SITE_TOKEN") if env is None else os.environ.__setitem__("SITE_TOKEN", env)
         s, t, h = alarm_key.reminder(datetime.date(2026, 10, 18), datetime.date(2026, 10, 11))
         out["alarmkey"] = {"subject": s, "text": t, "html": h, "att": []}
         mark = os.environ.get("JOBS_FAILURE_MARK")
         os.environ["JOBS_FAILURE_MARK"] = os.path.join(work, "failure-mark")
-        got.clear(); jc.report_failure(_Demo(), "market", "fetch prices", "the EGX price source did not answer (HTTP 503)"); out["failed"] = got[0]
+        got.clear(); jc.report_failure(_Demo(), "shared market data", "fetch prices", "the EGX price source did not answer (HTTP 503)"); out["failed"] = got[0]
         os.environ.pop("JOBS_FAILURE_MARK") if mark is None else os.environ.__setitem__("JOBS_FAILURE_MARK", mark)
     finally:
         mail_send.send, mail_send.send_failure, urllib.request.urlopen = real
-    # the owner's month-end email: the demo portfolio's own factsheet (PDF + headline figures) and workbook
-    import run_account_mail
-    M, rp = "2026-08", os.path.join(work, "report")
-    os.makedirs(rp)
-    sm_p, pdf_p, xl_p, xlsx_p = (os.path.join(rp, f) for f in ("summary.json", "Demo-Portfolio-Aug-26.pdf", "xl.json", "Demo-Portfolio-Aug-26.xlsx"))
-    jc.run(["node", os.path.join(tools, "factsheet.js"), "--page", run_account_mail.report_page(CODE), "--data", syn, "--month", M,
-            "--out", os.path.join(rp, "f.html"), "--pdf", pdf_p, "--summary", sm_p], "samples: factsheet", timeout=600)
-    jc.run(["node", os.path.join(tools, "excel.js"), "--data", syn, "--month", M, "--out", xl_p], "samples: excel.js")
-    jc.run([sys.executable, os.path.join(tools, "excel.py"), xl_p, xlsx_p], "samples: excel.py")
-    s, t, h = emails.monthend("Demo Portfolio", M, json.load(open(sm_p)), ["the PDF factsheet", "the Excel workbook"])
-    out["factsheet"] = {"subject": s, "text": t, "html": h, "att": [(os.path.basename(pdf_p), open(pdf_p, "rb").read(), "application/pdf"),
-                                                                  (os.path.basename(xlsx_p), open(xlsx_p, "rb").read(), XLSX)]}
     return out
 
 
@@ -174,7 +148,7 @@ def main(argv=None):
         shutil.copytree(os.path.join(CODE, "src", "tools"), tools, ignore=shutil.ignore_patterns("node_modules"))
         shutil.copytree(a.pdfjs, os.path.join(tools, "node_modules"))
         acct, syn = account_samples(CODE, tools, work)
-        samples = {**acct, **owner_samples(tools, syn, work, acct)}
+        samples = {**acct, **owner_samples(tools, syn, work)}
         order = [k for k, _ in GUIDE if samples.get(k)]
         from mail_html import email as mail
         guide = dict(GUIDE)
@@ -182,8 +156,8 @@ def main(argv=None):
         theirs = [f"{i + 1}. {samples[k]['subject']} — {guide[k].split(' · ', 1)[1]}" for i, k in enumerate(order) if not guide[k].startswith("You")]
         it, ih = mail("Email samples", "Every email the portfolio sends", [
             ("p", "One sample of each, made from a made-up \"Demo Portfolio\": none of the figures are yours. The number matches the [Sample] number in each subject."),
-            ("h", "Emails you get", "you run the platform; these are about your own portfolio and the jobs"), ("list", mine),
-            ("h", "Emails your friends get", "only to their own address, only when they switch them on in their account; never to you"), ("list", theirs),
+            ("h", "Emails every account gets", "you included; each only to the account's own address, about its own portfolio"), ("list", theirs),
+            ("h", "Emails only you get", "you run the platform: sign-ups and the jobs' notices"), ("list", mine),
             ("box", "info", None, ["Real emails never start with [Sample]."])], button=("Open the site", SITE))
         msgs = [("[Sample] 0 · every email the portfolio sends", it, ih, [])]
         msgs += [(f"[Sample] {i + 1} · {samples[k]['subject']}", samples[k]["text"], samples[k]["html"], samples[k]["att"]) for i, k in enumerate(order)]

@@ -7,16 +7,16 @@ the public repository and run in CI.
 
 What is scanned: every file git tracks plus every untracked file git would add (`git ls-files` + `--others
 --exclude-standard`), or every file under the directory when it is not a git checkout. Not content-scanned: the encrypted
-data (p/<id>/data.enc.json, p/<id>/exports/*.enc.json - their SHAPE is checked instead), p/<id>/keys.json (shape checked:
-public key + wrapped private key only), fonts and other binary files.
+files (m/market.enc.json, the accounts' a/<hash>/exports/*.enc.json - their SHAPE is checked instead), keys/mail.json
+(shape checked: public key + wrapped private key only), fonts and other binary files.
 
 Hits (each printed as  path:line  kind  with the value masked):
   path       a file that must never be committed: seed.json / expected.json (private test fixtures), a database export
              or sync folder (export-*/, sync-*/, synct/, inv/, private/, secret/, fixN/ scratch output), a plain
-             workbook / PDF / e-mail / .b64 dump, a private key (private.pk8, *.pem, *.key), anything under p/<id>/ other
-             than the encrypted files, keys.json, data.fingerprint and exports/index.json
-  shape      p/<id>/*.enc.json that is not {v, at?, name?, bytes?, epk, iv, ct} with base64 ciphertext; a keys.json that is
-             not {v, pub, wrap:{kdf, iter, salt, iv, ct}}
+             workbook / PDF / e-mail / .b64 dump, a private key (private.pk8, *.pem, *.key), anything under a/ that is not
+             a/<24 hex>/exports/<name>.enc.json, anything under keys/ but keys/mail.json
+  shape      an .enc.json under m/ or a/ that is not {v, at?, name?, bytes?, epk, iv, ct} with base64 ciphertext;
+             keys/mail.json that is not {v, pub, wrap:{kdf, iter, salt, iv, ct}}
   email      an e-mail address outside ALLOW_EMAILS / ALLOW_EMAIL_DOMAINS
   digits     a standalone run of 7+ digits (Thndr Unified Codes, phone numbers, national IDs, card/IBAN numbers) that is not
              in ALLOW_NUMBERS; also 4x4 card-number groups and EG IBANs
@@ -111,29 +111,25 @@ def main():
         for d in parts[:-1]:
             for rx, why in BAD_DIRS:
                 if rx.search(d): hit(f, 0, 'path', f'{why} ({d}/)')
-        in_p = len(parts) >= 3 and parts[0] == 'p'
-        if ext in BAD_EXT and not (in_p and base.endswith('.enc.json')): hit(f, 0, 'path', BAD_EXT[ext])
-        if in_p:
-            rest = '/'.join(parts[2:])
-            ok_p = rest in ('data.enc.json', 'data.fingerprint', 'keys.json', 'exports/index.json') or (len(parts) == 4 and parts[2] == 'exports' and base.endswith('.enc.json'))
-            if not ok_p: hit(f, 0, 'path', 'only encrypted files, keys.json, data.fingerprint and exports/index.json belong under p/<id>/')
+        in_enc = len(parts) >= 2 and parts[0] in ('a', 'm')
+        if ext in BAD_EXT and not (in_enc and base.endswith('.enc.json')): hit(f, 0, 'path', BAD_EXT[ext])
+        if parts[0] == 'a' and not (len(parts) == 4 and re.fullmatch(r'[0-9a-f]{24}', parts[1]) and parts[2] == 'exports' and base.endswith('.enc.json')):
+            hit(f, 0, 'path', 'only a/<24 hex>/exports/<name>.enc.json belongs under a/')
+        if parts[0] == 'keys' and f != 'keys/mail.json': hit(f, 0, 'path', 'only keys/mail.json belongs under keys/')
         # ---- shapes of the encrypted / key files (not content-scanned) ----
-        if in_p and base.endswith('.enc.json'):
+        if in_enc and base.endswith('.enc.json'):
             try:
                 x = json.load(open(full))
                 bad = not isinstance(x, dict) or not {'v', 'epk', 'iv', 'ct'} <= set(x) or set(x) - ENC_KEYS or not isinstance(x['ct'], str) or len(x['ct']) < 32 or not B64.match(x['ct'])
             except Exception: bad = True
             if bad: hit(f, 0, 'shape', 'not an encrypted envelope {v, epk, iv, ct}')
             continue
-        if in_p and base == 'keys.json':
+        if f == 'keys/mail.json':
             try:
                 x = json.load(open(full)); w = x.get('wrap') or {}
                 bad = set(x) != {'v', 'pub', 'wrap'} or set(w) != {'kdf', 'iter', 'salt', 'iv', 'ct'} or '-----BEGIN' in json.dumps(x)
             except Exception: bad = True
-            if bad: hit(f, 0, 'shape', 'keys.json must hold only {v, pub, wrap:{kdf, iter, salt, iv, ct}}')
-            continue
-        if in_p and base == 'data.fingerprint':
-            if not re.fullmatch(r'[0-9a-f]{64}\s*', open(full).read()): hit(f, 0, 'shape', 'data.fingerprint must be one sha256 hex')
+            if bad: hit(f, 0, 'shape', 'keys/mail.json must hold only {v, pub, wrap:{kdf, iter, salt, iv, ct}}')
             continue
         # ---- content ----
         if ext in BINARY_EXT or 'fonts' in parts[:-1] or 'vendor' in parts[:-1]: continue   # vendor/: third-party builds (pdf.js)

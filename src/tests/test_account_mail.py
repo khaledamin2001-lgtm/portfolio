@@ -38,14 +38,14 @@ def check(name, ok, detail=""):
 SYN, PDFJS_TOOLS = sys.argv[1], sys.argv[2]
 tmp = tempfile.mkdtemp()
 try:
-    # the mail key = a throwaway stand-in for p/khaled/keys.json, opened with its setup key like the job does
-    code = os.path.join(tmp, "code"); os.makedirs(os.path.join(code, "p", "khaled"))
+    # the mail key = a throwaway stand-in for keys/mail.json, opened with its setup key like the job does
+    code = os.path.join(tmp, "code"); os.makedirs(os.path.join(code, "keys"))
     shutil.copytree(os.path.join(ROOT), os.path.join(code, "src"), ignore=shutil.ignore_patterns("__pycache__"))
     shutil.copytree(os.path.join(PDFJS_TOOLS, "node_modules"), os.path.join(code, "src", "tools", "node_modules"), symlinks=True)
     sec = os.path.join(tmp, "sec")
-    subprocess.run([sys.executable, os.path.join(ROOT, "site", "make_keys.py"), os.path.join(code, "p", "khaled", "keys.json"), sec], check=True, capture_output=True)
+    subprocess.run([sys.executable, os.path.join(ROOT, "site", "make_keys.py"), os.path.join(code, "keys", "mail.json"), sec], check=True, capture_output=True)
     os.environ["SETUP_KEY"] = open(os.path.join(sec, "setup_key.txt")).read().strip()
-    mail_pub = store.load_keys(os.path.join(code, "p", "khaled", "keys.json"))["pub"]
+    mail_pub = store.load_keys(os.path.join(code, "keys", "mail.json"))["pub"]
     # an account: its own key pair, its documents from the synthetic export sealed to it (as the browser stores them)
     acct = ec.generate_private_key(ec.SECP256R1())
     pk8 = base64.b64encode(acct.private_bytes(serialization.Encoding.DER, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())).decode()
@@ -164,16 +164,21 @@ try:
     def adoc(uid, key, k):
         rec = DB.get(f"users/{uid}/docs/{k.replace('/', '__')}")
         return json.loads(store.unseal(key, rec["blob"]).decode())["data"] if rec else None
-    # the site owner's own account: shares the MAIN portfolio (the engine's documents, from the synthetic export)
+    # the site owner's own account: an ordinary account with its own portfolio (the synthetic one); its heads-up, weekly
+    # summary and month-end report switched off here, the rest (report card, leaderboard, wrap-up) on by default
     oacct = ec.generate_private_key(ec.SECP256R1())
     opk8 = base64.b64encode(oacct.private_bytes(serialization.Encoding.DER, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())).decode()
+    opub_b64 = base64.b64encode(oacct.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)).decode()
     OUID = "Uowner"
-    store.migrate(SYN, eng, os.path.join(code, "p", "khaled", "keys.json"))
-    DB[f"users/{OUID}/docs/portfolio__settings"] = {"blob": store.encode_doc({"pub": base64.b64encode(oacct.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)).decode()}, "settings", 1, {"name": "Owner account"}, "2026-09-20T00:00:00Z").decode().strip(), "updateTime": stamp()}
+    for c in ("portfolio", "ledger"):
+        for f in os.listdir(os.path.join(SYN, c)):
+            x = json.load(open(os.path.join(SYN, c, f))); data = x.get("data", x) if isinstance(x, dict) and isinstance(x.get("data"), dict) else x
+            if c == "portfolio" and f == "settings.json":
+                data = {**data, "name": "Owner Portfolio"}
+            DB[f"users/{OUID}/docs/{c}__{f[:-5]}"] = {"blob": store.encode_doc({"pub": opub_b64}, f[:-5], 1, data, "2026-09-20T00:00:00Z").decode().strip(), "updateTime": stamp()}
     ram.OWNER_HASH = hashlib.sha256(b"owner@example.com").hexdigest()     # a stand-in owner
-    DB[f"mail/{OUID}"] = {"pkg": seal_mail({"uid": OUID, "email": "owner@example.com", "refresh": "RT3", "pk8": opk8, "prefs": {"alerts": True, "weekly": True, "gmail": True, "shareMain": True}})}
-    # account 1 asks for the main portfolio too: it is not the owner, so it must share its own
-    DB[f"mail/{UID}"] = {"pkg": seal_mail({"uid": UID, "email": "friend@example.com", "refresh": "RT1", "pk8": pk8, "prefs": {"alerts": True, "weekly": True, "shareMain": True}})}
+    OWNER_PREFS = {"alerts": False, "weekly": False, "reports": False}
+    DB[f"mail/{OUID}"] = {"pkg": seal_mail({"uid": OUID, "email": "owner@example.com", "refresh": "RT3", "pk8": opk8, "prefs": OWNER_PREFS})}
     CLAIMS = {UID: {"email": "friend@example.com", "email_verified": True}, GUID: {"email": "friend.gmail@example.com", "email_verified": True},
               OUID: {"email": "owner@example.com", "email_verified": True}}
     def jwt(u):
@@ -295,21 +300,13 @@ try:
     check("the job succeeds", rc == 0)
     gsent = [m for m in sent if m["to"] == "friend2@example.com"]
     hsent = [m for m in sent if m["to"] in ("hist2@example.com", "wait2@example.com")]
-    check("the owner account (Gmail and emails switched on) gets no import and no email: it only shares",
+    check("the owner's account with those emails switched off and no Gmail connected gets no import and no email (it shares with friends like anyone)",
           not [m for m in sent if m["to"] == "owner@example.com"] and all(f["addr"] in ("friend.gmail@example.com", "hist@example.com", "wait@example.com") for f in fetches), json.dumps([m["subject"] for m in sent if m["to"] == "owner@example.com"]))
     sent[:] = [m for m in sent if m["to"] == "friend@example.com"]
     check("account 1: new heads-up items, the weekly summary, then the friend request, to its own address",
           len(sent) == 3 and "heads-up" in sent[0]["subject"] and sent[1]["html"] and sent[2]["subject"] == "Zeyad's Portfolio wants to be friends on the portfolio site"
           and "?friends" in sent[2]["text"], json.dumps([m["subject"] for m in sent]))
     sent[:] = sent[:2]
-    # one login: the owner's verified account now holds the MAIN portfolio's key, sealed to the account's key
-    mk = (PROFILES.get(OUID) or {}).get("mainKey", {}).get("stringValue")
-    opened_mk = ram.open_json(oacct, mk, b"portfolio-mainkey-v1") if mk else {}
-    main_pk8 = store.unlock(store.load_keys(os.path.join(code, "p", "khaled", "keys.json")), os.environ["SETUP_KEY"]).private_bytes(
-        serialization.Encoding.DER, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
-    check("one login: the owner's account gets the main portfolio's key, sealed to its own key; no other account does",
-          opened_mk.get("id") == "khaled" and base64.b64decode(opened_mk.get("pk8", "")) == main_pk8 and profile_writes == [OUID]
-          and "mainKey" not in (PROFILES.get(UID) or {}), json.dumps(profile_writes))
     # friends
     check("friends: a copy is written for every friend and nobody else (not for a link posing as a friend with another key)", sorted(share_writes) == sorted([(UID, GUID), (GUID, UID), (GUID, OUID), (OUID, GUID)]), json.dumps(share_writes))
     s1 = open_share(acct, (GUID, UID))
@@ -322,10 +319,10 @@ try:
     check("friends: the copy holds percentages only (no amounts, share counts, prices, documents, Thndr account or Gmail login)",
           not any(k in j1s for k in ('"amt"', '"q"', '"p"', '"mv"', '"cash"', '"docs"', '"account"', "abcdefghijklmnop")) and all(abs(h["w"]) <= 1 for h in p1["holdings"]), j1s[:300])
     s2 = open_share(gacct, (UID, GUID))
-    check("friends: an account that is not the owner asking for the main portfolio shares its own profile", s2.get("v") == 2 and s2["name"] != "Main" and (s2.get("profile") or {}).get("months"))
+    check("friends: account 1's copy is its own profile", s2.get("v") == 2 and s2["name"] == "Demo Portfolio" and (s2.get("profile") or {}).get("months"), json.dumps(s2)[:200])
     s3 = open_share(gacct, (OUID, GUID))
-    check("friends: the owner's verified account shares the MAIN portfolio's profile",
-          s3.get("v") == 2 and (s3.get("profile") or {}).get("months") and s3["name"] != "Owner account", json.dumps(s3)[:200])
+    check("friends: the owner's account shares its own portfolio's profile, like anyone",
+          s3.get("v") == 2 and (s3.get("profile") or {}).get("months") and s3["name"] == "Owner Portfolio", json.dumps(s3)[:200])
     jg, j1 = json.loads(STATUS.get(GUID, {}).get("job", "{}")), json.loads(STATUS.get(UID, {}).get("job", "{}"))
     check("admin status: the job writes each account's line (Gmail result, month-end report, friends), no figures (account 1 lists 2 friend links: its friend and the impostor link)",
           jg.get("gmail", {}).get("ok") and jg.get("friends") == 2 and jg.get("report") == "Aug-26 sent 2026-09-24" and j1.get("friends") == 2 and not j1.get("gmail"), json.dumps([jg, j1]))
@@ -405,7 +402,7 @@ try:
     sent.clear(); commits.clear(); share_writes.clear()
     rc2 = ram.main(argv, http=FakeHttp(), send=send)
     check("friends: a second run rewrites no unchanged copy and emails no request again", share_writes == [], json.dumps(share_writes))
-    check("one login: written once", profile_writes == [OUID], json.dumps(profile_writes))
+    check("nothing writes to the accounts' profiles (users/{uid})", profile_writes == [], json.dumps(profile_writes))
     check("a second run sends nothing (each alert once, one summary a week)", rc2 == 0 and sent == [], json.dumps([m["subject"] for m in sent]))
     check("gmail: a second run finds nothing new and changes no portfolio document", [n for u, n in commits if u == GUID] == [1] and sorted(r["id"] for r in (gdoc("ledger/y2026") or {}).get("rows") or []) == ["o1", "o2"], json.dumps(commits))
     STATUS["Unewbie"] = {"name": "Newbie's Portfolio", "email": "newbie@example.com"}
@@ -457,7 +454,7 @@ try:
     lb = lb_run("2026-09-03T13:30:00Z")
     rc3 = {m["to"]: m for m in sent if " report card" in m["subject"]}
     g = lb.get("friend2@example.com") or {}
-    check("leaderboard: on the 3rd, an account whose friends' copies all cover August gets it (the owner too, ranked on the main portfolio)",
+    check("leaderboard: on the 3rd, an account whose friends' copies all cover August gets it (the owner too)",
           g.get("subject", "").startswith("August 2026 leaderboard: you are #") and g["subject"].endswith(" of 3") and "Demo" in g["text"] and "Owner" in g["text"]
           and (lb.get("owner@example.com") or {}).get("subject", "").endswith(" of 2"), json.dumps({k: v["subject"] for k, v in lb.items()}))
     check("leaderboard: an account with a friend who has no copy for it waits (until the 8th)", "friend@example.com" not in lb)
@@ -472,11 +469,11 @@ try:
     rc8 = {m["to"]: m for m in sent if " report card" in m["subject"]}
     check("report card: on the 3rd, only the account whose August statement is in gets it (to its own address); the others on the 5th or later",
           sorted(rc3) == ["friend2@example.com", "hist2@example.com"] and rc3["friend2@example.com"]["subject"].startswith("Friend Portfolio: August 2026 report card · ")
-          and sorted(rc8) == ["friend@example.com"], json.dumps([list(rc3), list(rc8)]))
+          and sorted(rc8) == ["friend@example.com", "owner@example.com"], json.dumps([list(rc3), list(rc8)]))
     check("report card: an account with nothing in the month (still waiting to be built) gets none, and it is not asked again",
           (adoc(WUID, wacct, "sync/mail") or {}).get("reportCardSent") == "2026-08")
-    check("report card: the site owner's sign-in account (no portfolio of its own) never gets one, the history accounts' empty months neither break the run",
-          "owner@example.com" not in rc3 and "owner@example.com" not in rc8)
+    check("report card: the owner's account gets its own on by default (switched off only by unticking it), the history accounts' empty months do not break the run",
+          rc8["owner@example.com"]["subject"].startswith("Owner Portfolio: August 2026 report card · "), json.dumps({k: v["subject"] for k, v in rc8.items()}))
     check("report card: the account's own figures (its sales and its month), recorded as sent",
           "AUGUST 2026 NEXT TO JULY 2026" in rc8["friend@example.com"]["text"] and "Sales  0  1" in rc8["friend@example.com"]["text"] and (adoc(UID, acct, "sync/mail") or {}).get("reportCardSent") == "2026-08", rc8["friend@example.com"]["text"][:400])
     check("leaderboard: on the 8th the waiting account gets it, with the friends whose copies are there", list(lb) == ["friend@example.com"]
@@ -498,110 +495,52 @@ try:
     gpk = base64.b64encode(gk.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)).decode()
     check("open_json opens what seal_json sealed", ram.open_json(gk, ram.seal_json({"v": 2, "x": [1]}, gpk, b"portfolio-share-v1"), b"portfolio-share-v1") == {"v": 2, "x": [1]})
 
-    # ---- the yearly wrap-up: early January, last year, ranked among friends; the owner's from the main portfolio ----
+    # ---- the yearly wrap-up: early January, last year, ranked among friends ----
     def wrap_run(now):
         sent.clear(); ram.main(["--engine", eng, "--code", code, "--now", now], http=FakeHttp(), send=send)
         return {m["to"]: m for m in sent if " wrapped · " in m["subject"]}
     wr = wrap_run("2027-01-08T13:30:00Z")
-    check("wrapped: on the 8th of January every account with a portfolio gets its 2026 (the owner's from the main portfolio), to its own address",
+    check("wrapped: on the 8th of January every account with a portfolio gets its 2026 (the owner's too), to its own address",
           sorted(wr) == ["friend2@example.com", "friend@example.com", "hist2@example.com", "owner@example.com"] and all(": your 2026 wrapped · " in m["subject"] for m in wr.values())
           and "2026 IN NUMBERS" in wr["owner@example.com"]["text"], json.dumps({k: v["subject"] for k, v in wr.items()}))
     check("wrapped: ranked among friends (percentages only), the account without friends without a ranking",
           "YOU AND YOUR FRIENDS" in wr["friend@example.com"]["text"] and "Friend Portfolio" in wr["friend@example.com"]["text"] and "YOU AND YOUR FRIENDS" not in wr["hist2@example.com"]["text"])
     check("wrapped: once a year", wrap_run("2027-01-08T17:30:00Z") == {} and wrap_run("2027-02-02T13:30:00Z") == {})
 
-    # ---- the morning brief (run_morning.py): the owner's main portfolio, and the accounts that switched it on ----
-    import run_morning, jobs_common as jc
+    # ---- the morning brief and the after-close recap (run_morning.py): the accounts that switched them on, the owner's by default ----
+    import run_morning
     opkg = DB[f"mail/{OUID}"]["pkg"]
-    json.dump({"portfolioId": "khaled", "name": "Main", "siteRepo": "x/y", "siteFolder": "p/khaled"}, open(os.path.join(eng, "config.json"), "w"))
-    real_record = jc.record_job
-    jc.record_job = lambda ctx, section, updates, message: (lambda st: (st.setdefault(section, {}).update(updates), jc.save_jobs_state(ctx, st)))(jc.jobs_state(ctx))
-    owner_sent = []
     def morning(now):
-        sent.clear(); owner_sent.clear()
-        run_morning.main(["--engine", eng, "--code", code, "--now", now], http=FakeHttp(), send=send, send_owner=lambda ctx, s, t, h: owner_sent.append((s, t)) or "sent")
+        sent.clear()
+        run_morning.main(["--engine", eng, "--code", code, "--now", now], http=FakeHttp(), send=send)
         return [m for m in sent if "morning brief" in m["subject"]]
+    def evening(now, prefs_evening=True):
+        sent.clear()
+        DB[f"mail/{UID}"]["pkg"] = seal_mail({"uid": UID, "email": "friend@example.com", "refresh": "RT1", "pk8": pk8, "prefs": {"alerts": True, "morning": True, "evening": prefs_evening}})
+        run_morning.main(["--engine", eng, "--code", code, "--now", now, "--evening"], http=FakeHttp(), send=send)
+        return [m for m in sent if "after the close" in m["subject"]]
     try:
         DB[f"mail/{UID}"]["pkg"] = seal_mail({"uid": UID, "email": "friend@example.com", "refresh": "RT1", "pk8": pk8, "prefs": {"alerts": True, "morning": True}})
-        DB[f"mail/{OUID}"]["pkg"] = seal_mail({"uid": OUID, "email": "owner@example.com", "refresh": "RT3", "pk8": opk8, "prefs": {"shareMain": True, "morning": True}})
+        DB[f"mail/{OUID}"]["pkg"] = seal_mail({"uid": OUID, "email": "owner@example.com", "refresh": "RT3", "pk8": opk8, "prefs": {**OWNER_PREFS, "morning": False, "evening": False}})
         ms = morning("2026-09-24T06:00:00Z")      # Thursday 9:00 Cairo
-        check("morning brief: the owner's main portfolio, to the owner's address (through the owner's mail lock)",
-              len(owner_sent) == 1 and owner_sent[0][0].startswith("Demo Portfolio: morning brief") and "YOUR HOLDINGS" in owner_sent[0][1], json.dumps([x[0] for x in owner_sent]))
-        check("morning brief: only the account that switched it on gets one, to its own address (not the owner's sign-in account, not the others)",
-              [m["to"] for m in ms] == ["friend@example.com"] and "morning brief" in ms[0]["subject"] and "YOUR HOLDINGS" in ms[0]["text"], json.dumps([[m["to"], m["subject"]] for m in ms]))
-        check("morning brief: once a day", morning("2026-09-24T06:20:00Z") == [] and owner_sent == [])
-        check("morning brief: nothing on a Friday", morning("2026-09-25T06:00:00Z") == [] and owner_sent == [])
-        check("morning brief: the next session day, again", len(morning("2026-09-27T06:00:00Z")) == 1 and len(owner_sent) == 1)
-        # the after-close recap (run_morning.py --evening, 16:30 Cairo): accounts that ticked it, only when today's close is in
-        def evening(now, prefs_evening=True):
-            sent.clear(); owner_sent.clear()
-            DB[f"mail/{UID}"]["pkg"] = seal_mail({"uid": UID, "email": "friend@example.com", "refresh": "RT1", "pk8": pk8, "prefs": {"alerts": True, "morning": True, "evening": prefs_evening}})
-            run_morning.main(["--engine", eng, "--code", code, "--now", now, "--evening"], http=FakeHttp(), send=send, send_owner=lambda ctx, s, t, h: owner_sent.append((s, t)) or "sent")
-            return [m for m in sent if "after the close" in m["subject"]]
+        check("morning brief: only the account that switched it on gets one, to its own address (the owner switched it off here, the others never ticked it)",
+              [m["to"] for m in ms] == ["friend@example.com"] and "morning brief" in ms[0]["subject"] and "YOUR HOLDINGS" in ms[0]["text"], json.dumps([[m["to"], m["subject"]] for m in sent]))
+        check("morning brief: once a day", morning("2026-09-24T06:20:00Z") == [])
+        check("morning brief: nothing on a Friday", morning("2026-09-25T06:00:00Z") == [])
+        check("morning brief: the next session day, again", len(morning("2026-09-27T06:00:00Z")) == 1)
         es = evening("2026-09-24T13:30:00Z")      # Thursday 16:30 Cairo; the synthetic market data closes on 24 Sep
-        check("after-close recap: the account that ticked it gets today's close, to its own address (nothing from the old owner setup)",
+        check("after-close recap: the account that ticked it gets today's close, to its own address",
               [m["to"] for m in es] == ["friend@example.com"] and "today vs index" in es[0]["subject"] and "AFTER THE CLOSE" in es[0]["text"].upper()
-              and "YOUR HOLDINGS" in es[0]["text"] and "If the EGX30 Capped fell 5%" not in es[0]["text"] and owner_sent == [], json.dumps([[m["to"], m["subject"]] for m in sent]))
+              and "YOUR HOLDINGS" in es[0]["text"] and "If the EGX30 Capped fell 5%" not in es[0]["text"], json.dumps([[m["to"], m["subject"]] for m in sent]))
         check("after-close recap: once a day, and separate from the morning brief", evening("2026-09-24T13:50:00Z") == [])
         check("after-close recap: not when the market data has no close for today (a holiday, or not published yet)", evening("2026-09-27T13:30:00Z") == [])
         check("after-close recap: not for an account that did not tick it", evening("2026-09-29T13:30:00Z", prefs_evening=False) == [])
+        # the owner's package without these choices (from before they existed): both on unless switched off
+        DB[f"mail/{OUID}"]["pkg"] = seal_mail({"uid": OUID, "email": "owner@example.com", "refresh": "RT3", "pk8": opk8, "prefs": OWNER_PREFS})
+        check("morning brief: the owner's account gets it without ticking it", "owner@example.com" in [m["to"] for m in morning("2026-10-04T06:00:00Z")])
+        check("after-close recap: the owner's account too", "owner@example.com" in [m["to"] for m in evening("2026-09-24T14:10:00Z")])
     finally:
-        jc.record_job = real_record
         DB[f"mail/{UID}"]["pkg"], DB[f"mail/{OUID}"]["pkg"] = upkg, opkg
-
-    # ---- moving the main portfolio into the owner's account: copy, shadow (no emails), then live ----
-    import migrate_main
-    os.environ["GMAIL_ADDRESS"], os.environ["GMAIL_APP_PASSWORD"] = "owner.gmail@example.com", "abcdefghijklmnop"
-    cfg_path = os.path.join(eng, "config.json")
-    cfg0 = open(cfg_path).read() if os.path.exists(cfg_path) else None
-    try:
-        before = set(k for k in DB if k.startswith(f"users/{OUID}/docs/"))
-        rc_m = migrate_main.main(["--engine", eng, "--code", code, "--mode", "copy"], http=FakeHttp())
-        oset = adoc(OUID, oacct, "portfolio/settings") or {}
-        check("migrate: the main portfolio is copied into the owner's account in one go (market data stays shared)",
-              rc_m == 0 and oset.get("migratedFrom") and oset.get("inception") and adoc(OUID, oacct, "ledger/y2026") is not None
-              and not any("/market__" in k or "/history__" in k for k in DB if k.startswith(f"users/{OUID}/docs/"))
-              and (adoc(OUID, oacct, "sync/gmail") or {}).get("address") == "owner.gmail@example.com", json.dumps(sorted(k.rsplit('/', 1)[1] for k in DB if k.startswith(f'users/{OUID}/docs/'))))
-        check("migrate: a second copy is refused", migrate_main.main(["--engine", eng, "--code", code, "--mode", "copy"], http=FakeHttp()) == 1)
-        # the main portfolio's month-end files move too: sealed again to the account's key, in its own folder on the site
-        mexp = os.path.join(code, "p", "khaled", "exports")
-        os.makedirs(mexp, exist_ok=True)
-        mkeys = os.path.join(code, "p", "khaled", "keys.json")
-        open(os.path.join(mexp, "Main-Aug-26.xlsx.enc.json"), "wb").write(store.seal(mkeys, b"PK-main-workbook", "Main-Aug-26.xlsx"))
-        json.dump([{"month": "2026-08", "name": "Main-Aug-26.xlsx", "file": "exports/Main-Aug-26.xlsx.enc.json"}], open(os.path.join(mexp, "index.json"), "w"))
-        rc_f = migrate_main.main(["--engine", eng, "--code", code, "--mode", "files"], http=FakeHttp())
-        chk2 = os.path.join(tmp, "site-check2")
-        subprocess.run(["git", "clone", "-q", os.environ["SITE_REMOTE"], chk2], check=True, capture_output=True)
-        ofd = os.path.join(chk2, ram.files_dir(OUID))
-        oidx = json.loads(store.unseal(oacct, open(os.path.join(ofd, "index.enc.json"), "rb").read())) if os.path.exists(os.path.join(ofd, "index.enc.json")) else []
-        check("migrate: the main portfolio's month-end files are in the owner account's folder, opened with the account's key",
-              rc_f == 0 and oidx and oidx[0]["month"] == "2026-08" and store.unseal(oacct, open(os.path.join(chk2, oidx[0]["file"]), "rb").read()) == b"PK-main-workbook", json.dumps(oidx))
-        sent.clear(); fetches.clear()
-        ram.main(["--engine", eng, "--code", code, "--now", "2026-09-29T19:30:00Z"], http=FakeHttp(), send=send)
-        check("shadow: the owner's account reads the owner's Gmail and saves the import, but nothing is emailed to the owner",
-              any(f["addr"] == "owner.gmail@example.com" for f in fetches) and not [m for m in sent if m["to"] == "owner@example.com"]
-              and ((adoc(OUID, oacct, "sync/state") or {}).get("seen") or {}).get("18a0b0c0d0e0f001"), json.dumps([[m["to"], m["subject"]] for m in sent]))
-        check("shadow: the one login stays (signing in still opens the main portfolio)", "mainKey" in PROFILES.get(OUID, {}))
-        cfg = json.load(open(cfg_path)) if cfg0 else {"portfolioId": "khaled", "name": "Main", "siteRepo": "x/y", "siteFolder": "p/khaled"}
-        json.dump({**cfg, "movedToAccount": True}, open(cfg_path, "w"))
-        sent.clear()
-        ram.main(["--engine", eng, "--code", code, "--now", "2026-09-24T19:30:00Z", "--weekly"], http=FakeHttp(), send=send)
-        mine = [m["subject"] for m in sent if m["to"] == "owner@example.com"]
-        check("live: the owner's account is an ordinary account now: its own weekly summary, and the one login is removed",
-              any("week" in x.lower() for x in mine) and "mainKey" not in PROFILES.get(OUID, {}), json.dumps(mine))
-        owner_sent.clear(); sent.clear()
-        run_morning.main(["--engine", eng, "--code", code, "--now", "2026-10-04T06:00:00Z"], http=FakeHttp(), send=send, send_owner=lambda ctx, s, t, h: owner_sent.append((s, t)) or "sent")
-        check("live: the morning brief comes from the account, not from the engine",
-              owner_sent == [] and [m["to"] for m in sent if "morning brief" in m["subject"]].count("owner@example.com") == 1, json.dumps([[m["to"], m["subject"]] for m in sent]))
-        sent.clear()
-        run_morning.main(["--engine", eng, "--code", code, "--now", "2026-09-24T13:30:00Z", "--evening"], http=FakeHttp(), send=send)
-        check("live: the owner's account gets the after-close recap without ticking it (on by default for the owner)",
-              [m["to"] for m in sent if "after the close" in m["subject"]].count("owner@example.com") == 1, json.dumps([[m["to"], m["subject"]] for m in sent]))
-    finally:
-        if cfg0 is None:
-            os.path.exists(cfg_path) and os.remove(cfg_path)
-        else:
-            open(cfg_path, "w").write(cfg0)
 
     # ---- a friendship made by @username: the asker's side has no email until it is accepted ----
     class HandleHttp:

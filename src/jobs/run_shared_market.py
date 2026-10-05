@@ -151,7 +151,7 @@ def members_pub(override=None):
 
 
 def publish(code, envelope, message, remote=None):
-    import publish as pub
+    import site_git as pub
     work = tempfile.mkdtemp(prefix="shared-site-", dir=os.environ.get("RUNNER_TEMP") or None)
     try:
         remote = remote or os.environ.get("SITE_REMOTE") or "https://github.com/khaledamin2001-lgtm/portfolio.git"
@@ -161,7 +161,7 @@ def publish(code, envelope, message, remote=None):
         for wait in (0, 2, 4, 8, 16):
             if wait:
                 time.sleep(wait)
-            env = pub.clone(None, remote, site)
+            env = pub.clone(remote, site)
             dest = os.path.join(site, *SITE_PATH.split("/"))
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             with open(dest, "w") as f:

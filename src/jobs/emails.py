@@ -2,9 +2,9 @@
 """Every email the jobs send, in one place and one design (src/jobs/mail_html.py). Each function returns
 (subject, text, html): the plain text is the alternative for mail apps that do not show HTML.
 
-The owner's (the site owner, who runs the platform): market, sync_email (his own portfolio's Thndr emails), monthend,
-reminder, token, alarm_key, failure, signup. A site account's (each to its own address only): alerts, sync_email,
-weekly (src/tools/weekly.js), monthend, friend, built, waiting, gmail_error."""
+A site account's, each to its own address only (the site owner's account included): sync_email (its Thndr emails),
+alerts, weekly (src/tools/weekly.js), monthend, friend, built, waiting, gmail_error, leaderboard, report_card, wrapped,
+morning (the morning brief and the after-close recap). The site owner's notices: token, alarm_key, failure, signup."""
 import datetime
 from mail_html import email, tone_of
 
@@ -57,38 +57,7 @@ def egp(x, dp=0):
     return "—" if not isnum(x) else f"{x:,.{dp}f}".replace("-", "−") + " EGP"
 
 
-# ---------------------------------------------------------------- the owner's
-def market(out, info, published):
-    """After each EGX close: what the market update fetched and saved."""
-    L = out.get("latest") or {}
-    ix = (L.get("index") or {}).get("EGX30CAPPED") or {}
-    close_date = ix.get("date") or max((d for H in out.get("histories") or [] for d in (H.get("days") or {})), default=None) or (L.get("asOf") or "")[:10]
-    pol = (L.get("rates") or {}).get("policy") or {}
-    bench = out.get("bench") or {}
-    asof = str(L.get("asOf") or "")
-    missing = sorted(set(out.get("fillErrors") or {}) | set(L.get("missing") or []))
-    names = {"cpi": "Inflation (CPI)", "usdegp": "USD/EGP", "cashRate": "CBE rate"}
-    filled = [f"{names[k]}: {', '.join(v)}" for k, v in (info.get("marksFilled") or {}).items() if v and k in names]
-    chg = ix.get("chg")
-    tiles = [("EGX30 Capped", f"{ix['close']:,.2f}" if isnum(ix.get("close")) else "—",
-              f"{chg:+.2f}% on the day".replace("-", "−") if isnum(chg) else None, tone_of(chg, 0.005) if isnum(chg) else None),
-             ("Stocks priced", str(len(L.get("quotes") or {})), f"as of {asof[11:16]} Cairo" if len(asof) >= 16 else None, None)]
-    facts = [("CBE policy rate", pct(pol.get("rate"), sign=False) + (f" (since {month_name(pol['date'])})" if pol.get("date") else "")),
-             ("Index dividend yield", pct(bench.get("divYield"), sign=False)),
-             ("Price history saved", f"{', '.join(month_name(m) for m in info['historyMonths']) or 'none'} · {info['sessions']} session{'' if info['sessions'] == 1 else 's'}"),
-             ("New index members", str(info.get("newAssets") or "none"))]
-    if filled:
-        facts.append(("Month-end figures filled", "; ".join(filled)))
-    blocks = [("tiles", tiles), ("facts", facts)]
-    if missing:
-        blocks.append(("box", "warn", f"No price today for {len(missing)} stock{'' if len(missing) == 1 else 's'}", [", ".join(missing) + " — the last known price is kept."]))
-    blocks.append(("box", "good", "The site is updated." if published else "The site already had today's data.", []))
-    title = f"EGX30 Capped {pct(chg / 100, 2)} today" if isnum(chg) else "Market update"
-    text, html = email("Market update", title, blocks, subtitle=day(close_date), button=("Open the site", SITE),
-                       preheader=f"EGX30 Capped {tiles[0][1]} ({tiles[0][2] or ''})")
-    return f"Portfolio: market updated {close_date}", text, html
-
-
+# ---------------------------------------------------------------- Thndr import, month-end, and the site owner's notices
 def sync_email(subject, parts, account=False):
     """The Thndr inbox email (statement posted / needs review / not arrived / heads-up) from sync.js summary.email.parts."""
     name = parts.get("name") or "Portfolio"
@@ -124,9 +93,8 @@ def sync_email(subject, parts, account=False):
     return subject, text, html
 
 
-def monthend(name, M, sm, files, account=False, guest=False):
-    """The month-end email: the headline figures (factsheet.js --summary) and the files attached. guest: a portfolio the
-    site owner runs for someone without an account (Yassin's): no site button, a line saying where it comes from."""
+def monthend(name, M, sm, files):
+    """The month-end email to an account: the headline figures (factsheet.js --summary) and the files attached."""
     S = f"{MON[int(M[5:7]) - 1]}-{M[2:4]}"
     blocks = []
     idx = lambda b: f"EGX30 Capped {pct(b, 1)}" if isnum(b) else None
@@ -148,25 +116,12 @@ def monthend(name, M, sm, files, account=False, guest=False):
     if files:
         blocks.append(("box", "info", "Attached: " + " and ".join(files), ["The PDF is the full factsheet (returns vs the index, risk, sectors, attribution). The Excel workbook has every sheet: Summary, Monthly, Holdings, Ledger, Closed trades, Income, Attribution, Marks & inputs."]))
     else:
-        blocks.append(("p", "The full factsheet and the Excel workbook are on the site: Reports, then " + S + "." if not guest else "The full factsheet could not be attached this time."))
-    subj = f"{name} · month-end report {S}" if account or guest else f"{name} · factsheet {S}"
-    text, html = email(name, f"{month_name(M)} report", blocks, subtitle="Month-end report" if guest else "Month-end, from your Thndr statement",
-                       button=None if guest else ("Open your portfolio" if account else "Open Reports", SITE),
-                       foot=(ACCOUNT_FOOT if account else "Your portfolio is tracked for you on a private portfolio site; this report comes once a month. Reply to this email with any question." if guest else None),
+        blocks.append(("p", "The full factsheet and the Excel workbook are on the site: Reports, then " + S + "."))
+    subj = f"{name} · month-end report {S}"
+    text, html = email(name, f"{month_name(M)} report", blocks, subtitle="Month-end, from your Thndr statement",
+                       button=("Open your portfolio", SITE), foot=ACCOUNT_FOOT,
                        preheader=(f"Value {egp(sm.get('value'))} · {MON[int(M[5:7]) - 1]} {pct(sm.get('monthRet'), 1)}" if sm else None))
     return subj, text, html
-
-
-def reminder(name, P, state):
-    """The 11th of the month: last month's statement is still not posted."""
-    S = f"{MON[int(P[5:7]) - 1]}-{P[2:4]}"
-    blocks = [("p", f"Your {month_name(P)} Thndr monthly statement has not been added to {name} yet."),
-              ("box", "info", "What to do", [
-                  "Already in your Gmail? Then it was held: look for the \"needs your review\" email.",
-                  "Not in your Gmail? Request it in the Thndr app. It is added at the next check (4:15 pm, 6:15 pm or 11 pm)."]),
-              ("p", f"{MONTH[int(P[5:7]) - 1]}'s month-end value is {state}; the statement replaces it with Thndr's own figures.")]
-    text, html = email(name, f"{S} statement not posted yet", blocks, button=("Open the portfolio", SITE))
-    return f"{name}: {S} Thndr statement not posted yet", text, html
 
 
 def token(d, today=None):

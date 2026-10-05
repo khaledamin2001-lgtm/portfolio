@@ -9,7 +9,6 @@ export-*/
 secret/
 # build outputs (src/build.py; the site publishes ../index.html built from them)
 portfolio-desk.html
-yassin-desk.html
 # tests/test_dietz.js writes its Excel-shape scratch files (real data) under fix2/ fix3/ fix4/ when run with the private
 # exports (gitignore has no end-of-line comments: a comment must be on its own line)
 /fix[0-9]*/

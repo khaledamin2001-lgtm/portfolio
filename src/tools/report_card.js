@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /* The monthly trading report card (engine2.js reportCard): how last month's trading went next to the month before (closed
    trades, win rate, holding days, best and worst trade, the month's return vs the EGX30 Capped, your limits, tips), from an
-   export folder. The inbox job (run_sync.py, the owner's portfolio) and the account job (run_account_mail.py) email it.
+   export folder. The account job (run_account_mail.py) emails it.
      node report_card.js --data DIR [--overlay <plan dir>/write] --month YYYY-MM [--today YYYY-MM-DD]
    Overlay files (a sync plan's write/ dir) replace the folder's documents as in weekly.js: ledger_yYYYY.json, marks.json,
    settings.json, assets_update.json (merged into assets). Prints one JSON line: {ok, card} or {ok: false, error}. */

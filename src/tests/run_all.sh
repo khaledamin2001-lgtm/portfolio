@@ -4,7 +4,7 @@
 # Nothing here needs private data or network access except `tools`, which installs pdfjs-dist@3.11.174 (for sync.js) into
 # a temp dir unless PDFJS_NODE_MODULES points at a node_modules that already has it. Everything that writes goes to a temp
 # dir; the working tree is left as it was. Needs: node 20+, python 3.11+ with openpyxl, pillow and cryptography.
-# The live-site browser tests are separate: node src/tests/site_smoke.js, node src/tests/site_edit.js (need Playwright + Chromium).
+# The live-site browser tests are separate: node src/tests/site_smoke.js, node src/tests/site_cloud.js (need Playwright + Chromium).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/portfolio-checks.XXXXXX")"
@@ -32,9 +32,9 @@ step_syntax() {
   local n=0
   while IFS= read -r -d '' f; do node --check "$f" || die "node --check $f"; n=$((n+1)); done < <(find src -name '*.js' -not -path '*/node_modules/*' -print0 | sort -z)
   echo "  $n JavaScript files ok"
-  say "syntax: python -m py_compile on every .py in src/ and tools/"
+  say "syntax: python -m py_compile on every .py in src/"
   n=0
-  while IFS= read -r -d '' f; do python3 -m py_compile "$f" || die "py_compile $f"; n=$((n+1)); done < <(find src tools -name '*.py' -not -path '*/node_modules/*' -print0 | sort -z)
+  while IFS= read -r -d '' f; do python3 -m py_compile "$f" || die "py_compile $f"; n=$((n+1)); done < <(find src -name '*.py' -not -path '*/node_modules/*' -print0 | sort -z)
   echo "  $n Python files ok"
 }
 
@@ -134,33 +134,30 @@ EOF
   python3 src/jobs/fetch_prices.py --help > "$O/fp.out"; grep -q 'usage: fetch_prices.py' "$O/fp.out" || die "fetch_prices.py --help"
   echo "  ok: fetch_prices.py --help"
 
-  say "tools: export.py + encrypt_file.py round trip with a throwaway key"
-  python3 src/tests/crypto_roundtrip.py "$ROOT" "$S" "$O/Demo.xlsx" "$O/crypto" > "$O/crypto.out" || die "crypto round trip"
-  jsonline "$O/crypto.out" "d['ok'] and d['exportDocs'] >= 10"
 }
 
 step_build() {
   say "copies in sync: src/{engine,engine2,statement}.js == src/tools/*"
   for f in engine.js engine2.js statement.js; do cmp "src/$f" "src/tools/$f" || die "src/tools/$f differs from src/$f (cp src/$f src/tools/)"; done
   echo "  ok"
-  say "build: src/build.py (desk pages) and src/site/build_site.py (site wrapper) in a temp copy"
+  say "build: src/build.py (desk page) and src/site/build_site.py (site wrapper) in a temp copy"
   local B="$TMP/build" W="$TMP/site"
   cp -r src "$B"; mkdir -p "$W"
   (cd "$B" && python3 build.py > "$TMP/build.out") || die "build.py"
   sed 's/^/  /' "$TMP/build.out"
-  for p in portfolio-desk.html yassin-desk.html; do grep -Eq '<meta name="pd-build" content="[0-9a-f]{12} [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}">' "$B/$p" || die "$p has no pd-build stamp"; done
+  for p in portfolio-desk.html; do grep -Eq '<meta name="pd-build" content="[0-9a-f]{12} [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}">' "$B/$p" || die "$p has no pd-build stamp"; done
   (cd "$B/site" && python3 build_site.py "$W" > "$TMP/site.out") || die "build_site.py"
-  local I="$W/index.html"; nonempty "$I" "$W/portfolios.json" "$W/manifest.webmanifest" "$W/icon-192.png"
+  local I="$W/index.html"; nonempty "$I" "$W/manifest.webmanifest" "$W/icon-192.png"
   grep -q '<meta http-equiv="Content-Security-Policy" content="default-src '"'"'self'"'"';' "$I" || die "site index.html: no Content-Security-Policy meta"
   if grep -Eq 'fonts\.(googleapis|gstatic)\.com' "$I"; then die "site index.html still references Google Fonts"; fi
   grep -Eq '<meta name="pd-build" content="[0-9a-f]{12} ' "$I" || die "site index.html has no pd-build stamp"
   echo "  ok: index.html $(wc -c < "$I") bytes, CSP meta present, no Google Fonts, stamp $(grep -Eo 'pd-build" content="[0-9a-f]{12}' "$I" | cut -d'"' -f3)"
-  say "published site matches src/: ./index.html, portfolios.json, manifest, icons == a fresh build (build time ignored)"
+  say "published site matches src/: ./index.html, manifest, icons == a fresh build (build time ignored)"
   local strip='s/<meta name="pd-build" content="[^"]*">//'
   if ! diff -q <(sed "$strip" "$I") <(sed "$strip" index.html) >/dev/null; then
     die "./index.html is not what src/ builds - rebuild the site (cd src && python3 build.py && cd site && python3 build_site.py <repo>) and commit index.html with the src/ change"
   fi
-  for f in portfolios.json manifest.webmanifest; do cmp -s "$W/$f" "$f" || die "./$f differs from a fresh build_site.py output"; done
+  for f in manifest.webmanifest; do cmp -s "$W/$f" "$f" || die "./$f differs from a fresh build_site.py output"; done
   for f in "$W"/fonts/*; do cmp -s "$f" "fonts/$(basename "$f")" || die "fonts/$(basename "$f") differs from src/site/fonts"; done
   # icons: compared by pixels (PNG bytes depend on the Pillow/zlib build), a mean difference under 1 level per channel
   python3 - "$W" <<'EOF' || die "an icon differs from a fresh build_site.py output"

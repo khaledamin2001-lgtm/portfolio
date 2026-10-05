@@ -8,7 +8,7 @@ import os, sys, json, tempfile, shutil
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "jobs"))
 import jobs_common as jc      # noqa: E402
-import run_market, run_sync, imap_fetch, publish, mail_send   # noqa: E402
+import email_gate, imap_fetch, site_git, mail_send, run_account_mail as ram   # noqa: E402
 
 fails = 0
 
@@ -19,77 +19,19 @@ def check(name, ok):
     fails += 0 if ok else 1
 
 
-# ---- market: marks patch (synthetic figures)   private-scan: synthetic
-out = {"prevMonth": {"month": "2026-08", "benchClose": 100.5}, "currentMonth": "2026-09",
-       "macro": {"cpiMoM": {"2026-07": 0.01, "2026-08": 0.02, "2026-09": 0.03}, "cpiSource": "CPI src",
-                 "fxEom": {"2026-07": 48.1, "2026-08": None}, "fxSource": "FX src",
-                 "cashRate": {"2026-07": 0.2, "2026-08": 0.19}, "cashRateSource": "Rate src"}}
-marks = {"months": {"2026-07": {"cash": 1, "securities": 2, "cpi": 0.5, "usdegp": 47.0, "provisional": False},
-                    "2026-08": {"cash": 3, "source": "statement", "benchClose": None, "cashRate": 0.18},
-                    "2026-09": {"cash": 4}}}
-p = run_market.marks_patch(marks, out)
-check("marks: benchClose filled for prevMonth when missing/non-numeric", p.get("2026-08", {}).get("benchClose") == 100.5)
-check("marks: existing numeric values never overwritten (cpi, usdegp, cashRate)", "cpi" not in p.get("2026-07", {}) and "usdegp" not in p.get("2026-07", {})
-      and "cashRate" not in p.get("2026-08", {}))
-check("marks: missing values filled with their source", p["2026-07"]["cashRate"] == 0.2 and p["2026-07"]["cashRateSource"] == "Rate src"
-      and p["2026-08"]["cpi"] == 0.02 and p["2026-08"]["cpiSource"] == "CPI src")
-check("marks: a null macro value is not written", "usdegp" not in p.get("2026-08", {}))
-check("marks: the current month and months not in the marks are never touched", "2026-09" not in p and set(p) <= set(marks["months"]))
-check("marks: cash/securities/source/provisional never in the patch", not any(k in v for v in p.values() for k in ("cash", "securities", "source", "provisional")))
-p2 = run_market.marks_patch({"months": {"2026-08": {"benchClose": 99.0}}}, out)
-check("marks: benchClose kept when already numeric", "benchClose" not in p2.get("2026-08", {}))
-
-# ---- market: write plan pinned to versions
-tmp = tempfile.mkdtemp()
-try:
-    def put(c, d, v, data):
-        os.makedirs(f"{tmp}/{c}", exist_ok=True)
-        json.dump({"id": d, "version": v, "data": data}, open(f"{tmp}/{c}/{d}.json", "w"))
-    put("market", "latest", 7, {"quotes": {}})
-    put("history", "2026-09", 3, {"month": "2026-09", "days": {}})
-    put("bench", "egx30", 2, {"members": [], "capWeight": 0.15, "actions": []})
-    put("portfolio", "marks", 5, marks)
-    put("portfolio", "assets", 4, {"items": {"Alpha Co": {"name": "Alpha Co", "symbol": "ALPH"}}})
-    o = dict(out, latest={"quotes": {"ALPH": {"price": 1}}}, bench={"members": [{"s": "ALPH"}], "asOf": "2026-09-28", "divYield": None},
-             histories=[{"month": "2026-08", "days": {"2026-08-31": {"ALPH": 1}}}, {"month": "2026-09", "days": {"2026-09-01": {"ALPH": 1}}}],
-             newAssets={"Alpha Co": {"name": "Alpha Co", "watch": True}, "Beta Co": {"name": "Beta Co", "symbol": "BETA", "watch": True}})
-    w, info = run_market.build_writes(tmp, o)
-    byk = {(x["collection"], x["doc_id"]): x for x in w}
-    check("market plan: market/latest set, pinned", byk[("market", "latest")]["op"] == "set" and byk[("market", "latest")]["if_version"] == 7)
-    check("market plan: history set when absent (if_version 0), update {days} when present",
-          byk[("history", "2026-08")]["op"] == "set" and byk[("history", "2026-08")]["if_version"] == 0
-          and byk[("history", "2026-09")] == {"op": "update", "collection": "history", "doc_id": "2026-09", "data": {"days": {"2026-09-01": {"ALPH": 1}}}, "if_version": 3})
-    check("market plan: bench update touches members/asOf only (divYield not a number)", byk[("bench", "egx30")]["data"] == {"members": [{"s": "ALPH"}], "asOf": "2026-09-28"})
-    check("market plan: only new index members become watch entries", byk[("portfolio", "assets")]["data"] == {"items": {"Beta Co": o["newAssets"]["Beta Co"]}}
-          and byk[("portfolio", "assets")]["if_version"] == 4)
-    check("market plan: never a ledger/settings/imports/sync write", not any(x["collection"] in ("ledger", "imports", "sync") or x["doc_id"] == "settings" for x in w))
-    o2 = dict(o, latest={"asOf": "2026-09-28T15:12+03:00", "quotes": {"ALPH": {"price": 1}}, "missing": [],
-                         "index": {"EGX30CAPPED": {"close": 1234.5, "chg": -0.42, "date": "2026-09-28"}}, "rates": {"policy": {"rate": 0.22, "date": "2026-08"}}})   # private-scan: synthetic
-    subj, body, html = run_market.success_email(o2, info, True)
-    check("market email: subject names the close date", subj == "Portfolio: market updated 2026-09-28")
-    fig = "EGX30 Capped: 1,234.50 (−0.42% on the day)"   # private-scan: synthetic
-    check("market email: market figures in the body", fig in body and "CBE policy rate: 22.00% (since August 2026)" in body
-          and "Price history saved: August 2026, September 2026" in body and "The site is updated." in body)
-    check("market email: the same figures in the HTML", "1,234.50" in html and "22.00%" in html and "Open the site" in html and html.startswith("<!doctype html>"))   # private-scan: synthetic
-    check("market email: nothing from the portfolio's own documents", "Alpha Co" not in body and "cash" not in body.lower())
-    o3 = dict(o2, fillErrors={"ZZA": "x"}, latest=dict(o2["latest"], missing=["ZZA", "ZZB"]))
-    check("market email: a symbol both unfilled and missing is listed once", "ZZA, ZZB — the last known price is kept." in run_market.success_email(o3, info, True)[1])
-finally:
-    shutil.rmtree(tmp)
-
 # ---- sync: write/ files -> store writes
 tmp = tempfile.mkdtemp()
 try:
     for f in ("ledger_y2026.json", "marks.json", "settings.json", "assets_update.json", "import_2026-09.json", "sync_state.json"):
         json.dump({"x": f}, open(f"{tmp}/{f}", "w"))
-    w = run_sync.writes_from_plan(tmp, {"ledger/y2026": 9, "portfolio/marks": 2, "portfolio/settings": 3, "portfolio/assets": 4, "sync/state": 5})
+    w = ram.writes_from_plan(tmp, {"ledger/y2026": 9, "portfolio/marks": 2, "portfolio/settings": 3, "portfolio/assets": 4, "sync/state": 5})
     got = {(x["op"], x["collection"], x["doc_id"], x["if_version"]) for x in w}
     check("sync plan: every file maps to its store write, pinned (0 = new doc)", got == {
         ("set", "ledger", "y2026", 9), ("set", "portfolio", "marks", 2), ("set", "portfolio", "settings", 3),
         ("update", "portfolio", "assets", 4), ("set", "imports", "2026-09", 0), ("set", "sync", "state", 5)})
     json.dump({}, open(f"{tmp}/surprise.json", "w"))
     try:
-        run_sync.writes_from_plan(tmp, {})
+        ram.writes_from_plan(tmp, {})
         check("sync plan: an unknown write file is an error", False)
     except jc.JobError:
         check("sync plan: an unknown write file is an error", True)
@@ -98,13 +40,40 @@ finally:
 
 # ---- time gate
 P = lambda t, d="2026-09-28": {"today": d, "minuteOfDay": int(t[:2]) * 60 + int(t[3:])}
-check("gate: sync 16:14 no, 16:15 afternoon, 18:14 afternoon, 18:15 evening, 23:00 night, 00:30 after midnight, 07:00 no",
-      [jc.gate(P(t), run_sync.WINDOWS, {}, False)[0] for t in ("16:14", "16:15", "18:14", "18:15", "22:59", "23:00", "23:59", "00:30", "07:00")]
+check("gate: the email run 16:14 no, 16:15 afternoon, 18:14 afternoon, 18:15 evening, 23:00 night, 00:30 after midnight, 07:00 no",
+      [jc.gate(P(t), email_gate.WINDOWS, {}, False)[0] for t in ("16:14", "16:15", "18:14", "18:15", "22:59", "23:00", "23:59", "00:30", "07:00")]
       == [None, "afternoon", "afternoon", "evening", "evening", "night", "night", "after midnight", None])
 check("gate: a slot already run today is skipped, yesterday's is not",
-      jc.gate(P("19:17"), run_sync.WINDOWS, {"evening": "2026-09-28"}, False)[0] is None and jc.gate(P("19:17"), run_sync.WINDOWS, {"evening": "2026-09-27"}, False)[0] == "evening")
-check("gate: market before 15:10 no, 15:10 yes; manual always", jc.gate(P("15:09"), run_market.WINDOW, {}, False)[0] is None
-      and jc.gate(P("15:10"), run_market.WINDOW, {}, False)[0] == "day" and jc.gate(P("03:00"), run_market.WINDOW, {"day": "2026-09-28"}, True)[0] == "manual")
+      jc.gate(P("19:17"), email_gate.WINDOWS, {"evening": "2026-09-28"}, False)[0] is None and jc.gate(P("19:17"), email_gate.WINDOWS, {"evening": "2026-09-27"}, False)[0] == "evening")
+check("gate: a run by hand always counts", jc.gate(P("03:00"), email_gate.WINDOWS, {"after midnight": "2026-09-28"}, True)[0] == "manual")
+# the gate itself on a throwaway engine checkout: the first firing in a slot runs and is recorded, a second one does not
+import subprocess   # noqa: E402
+tmp = tempfile.mkdtemp()
+try:
+    eng, out, code = os.path.join(tmp, "engine"), os.path.join(tmp, "gh_output"), os.path.join(tmp, "code")
+    os.makedirs(eng); os.makedirs(code)
+    os.symlink(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), os.path.join(code, "src"))   # this checkout's src/ (CI runs a copy)
+    json.dump({"siteRepo": "x/y", "ownerEmail": "owner@example.com"}, open(os.path.join(eng, "config.json"), "w"))
+    for c in (["init", "-q", "-b", "main"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "seed"]):
+        subprocess.run(["git", "-C", eng] + c, check=True, capture_output=True)
+    _tok = os.environ.pop("SITE_TOKEN", None)
+    os.environ["GITHUB_OUTPUT"] = out
+    try:
+        rc1 = email_gate.main(["--engine", eng, "--code", code, "--now", "2026-09-28T13:20:00Z"])          # Monday 16:20 Cairo
+        st = json.load(open(os.path.join(eng, "jobs.json")))
+        rc2 = email_gate.main(["--engine", eng, "--code", code, "--now", "2026-09-28T14:00:00Z"])          # 17:00, the same slot
+        rc3 = email_gate.main(["--engine", eng, "--code", code, "--now", "2026-09-28T10:00:00Z"])          # 13:00, no slot
+    finally:
+        os.environ.pop("GITHUB_OUTPUT", None)
+        if _tok is not None:
+            os.environ["SITE_TOKEN"] = _tok
+    ran = [l for l in open(out).read().splitlines() if l.startswith("ran=")]
+    log = subprocess.run(["git", "-C", eng, "log", "--format=%s"], capture_output=True, text=True).stdout
+    check("email gate: the first firing in a slot runs and is recorded (jobs.json committed), a second or one outside the slots does not",
+          (rc1, rc2, rc3) == (0, 0, 0) and ran == ["ran=true", "ran=false", "ran=false"] and st["sync"]["slots"] == {"afternoon": "2026-09-28"}
+          and "jobs: email run 2026-09-28 afternoon" in log)
+finally:
+    shutil.rmtree(tmp)
 
 # ---- IMAP helpers
 check("imap: the Gmail query", imap_fetch.QUERY.format(after="2026/09/22") ==
@@ -134,27 +103,18 @@ check("imap: a statement an earlier run held is read again",
 check("imap: subjects kept", all(s.startswith(imap_fetch.KEEP) for s in ("Your Thndr Invoice", "Your requested E-statement - Sep 2026", "Your monthly E-statement - Aug 2026"))
       and not "Invoice ready".startswith(imap_fetch.KEEP))
 
-# ---- publish allow-list
-ok = ["data.enc.json", "data.fingerprint", "exports/A-Portfolio-Sep-26.xlsx.enc.json", "exports/index.json"]
-bad = ["data.json", "exports/A.xlsx", "exports/a/b.enc.json", "keys.json", "../x.enc.json", "exports/.hidden.enc.json"]
-check("publish: allow-list", all(publish.ALLOWED.match(x) for x in ok) and not any(publish.ALLOWED.match(x) for x in bad))
+# ---- what the jobs publish to the site is always an encrypted envelope
 tmp = tempfile.mkdtemp()
 try:
     json.dump({"v": 1, "name": "x", "bytes": 3, "epk": "QUJD", "iv": "QUJD", "ct": "QUJDREVGR0hJSktMTU5PUA=="}, open(f"{tmp}/e.json", "w"))
     json.dump({"v": 1, "plain": "no"}, open(f"{tmp}/p.json", "w"))
-    check("publish: envelope shape check", publish.is_envelope(f"{tmp}/e.json") and not publish.is_envelope(f"{tmp}/p.json"))
+    check("publish: envelope shape check", site_git.is_envelope(f"{tmp}/e.json") and not site_git.is_envelope(f"{tmp}/p.json"))
 finally:
     shutil.rmtree(tmp)
 
-# ---- the monthly report card: due once last month's statement is in; its email with and without sales
+# ---- the monthly report card email, with and without sales
 tmp = tempfile.mkdtemp()
 try:
-    os.makedirs(f"{tmp}/data/imports"); os.makedirs(f"{tmp}/write")
-    check("report card: no statement for the month yet", not run_sync.statement_posted(f"{tmp}/data", f"{tmp}/write", "2026-09"))
-    json.dump({"id": "2026-09", "data": {"fullMonth": True}}, open(f"{tmp}/data/imports/2026-09.json", "w"))
-    json.dump({"fullMonth": True}, open(f"{tmp}/write/import_2026-10.json", "w"))
-    check("report card: a statement in the data, or one this run posted, counts",
-          run_sync.statement_posted(f"{tmp}/data", f"{tmp}/write", "2026-09") and run_sync.statement_posted(f"{tmp}/data", f"{tmp}/write", "2026-10"))
     import emails
     base = {"month": "2026-09", "prevMonth": "2026-08", "ret": 0.03, "bench": 0.05, "prevRet": 0.051, "prevBench": 0.01, "provisional": False,
             "activity": {"buys": 2, "sells": 3, "deposits": 1000, "withdrawals": 0}, "limits": None, "tips": ["A tip."]}
@@ -180,41 +140,26 @@ try:
 except jc.JobError:
     check("mail: another recipient is refused", True)
 
-# ---- recipient: config.json "recipient" wins over settings.factsheetEmail; "failureRecipient" takes the FAILED notices
+# ---- the site owner's address: config.json ownerEmail, else GMAIL_ADDRESS; FAILED notices go there too
 class RCtx:
-    def __init__(self, config, settings):
-        self.config, self._s = config, settings
-    def settings(self):
-        return self._s
-check("recipient: settings.factsheetEmail by default", jc.Ctx.recipient(RCtx({}, {"factsheetEmail": "a@example.com"})) == "a@example.com")
-check("recipient: config.json recipient overrides it", jc.Ctx.recipient(RCtx({"recipient": "owner@example.com"}, {"factsheetEmail": "b@example.com"})) == "owner@example.com")
-fc = RCtx({"recipient": "friend@example.com", "failureRecipient": "owner@example.com"}, {})
-fc.recipient = lambda: jc.Ctx.recipient(fc)
-check("recipient: a portfolio's emails to its own person, its FAILED notices to the platform owner",
-      jc.Ctx.recipient(fc) == "friend@example.com" and jc.Ctx.failure_recipient(fc) == "owner@example.com")
-fc2 = RCtx({"recipient": "friend@example.com"}, {})
-fc2.recipient = lambda: jc.Ctx.recipient(fc2)
-check("recipient: without failureRecipient, FAILED notices go to the recipient", jc.Ctx.failure_recipient(fc2) == "friend@example.com")
+    def __init__(self, config):
+        self.config = config
+_g = os.environ.pop("GMAIL_ADDRESS", None)
 try:
-    jc.Ctx.recipient(RCtx({"recipient": "not an address"}, {}))
-    check("recipient: an invalid address is refused", False)
-except jc.JobError:
-    check("recipient: an invalid address is refused", True)
-
-# ---- reports: months already on the site are skipped
-import run_reports   # noqa: E402
-tmp = tempfile.mkdtemp()
-try:
-    os.makedirs(f"{tmp}/p/demo/exports")
-    json.dump([{"month": "2026-08", "file": "exports/x.enc.json"}], open(f"{tmp}/p/demo/exports/index.json", "w"))
-    class PCtx:
-        code = tmp
-        config = {"siteFolder": "p/demo"}
-    check("reports: published months come from the site's exports index", run_reports.published_months(PCtx()) == {"2026-08"})
-    PCtx.config = {"siteFolder": "p/none"}
-    check("reports: no index means nothing published yet", run_reports.published_months(PCtx()) == set())
+    check("owner address: config.json ownerEmail", jc.Ctx.recipient(RCtx({"ownerEmail": "owner@example.com"})) == "owner@example.com")
+    os.environ["GMAIL_ADDRESS"] = "mailbox@example.com"
+    check("owner address: else the GMAIL_ADDRESS secret", jc.Ctx.recipient(RCtx({})) == "mailbox@example.com")
+    fc = RCtx({"ownerEmail": "owner@example.com"}); fc.recipient = lambda: jc.Ctx.recipient(fc)
+    check("owner address: FAILED notices go to the owner too", jc.Ctx.failure_recipient(fc) == "owner@example.com")
+    try:
+        jc.Ctx.recipient(RCtx({"ownerEmail": "not an address"}))
+        check("owner address: an invalid address is refused", False)
+    except jc.JobError:
+        check("owner address: an invalid address is refused", True)
 finally:
-    shutil.rmtree(tmp)
+    os.environ.pop("GMAIL_ADDRESS", None)
+    if _g is not None:
+        os.environ["GMAIL_ADDRESS"] = _g
 
 # ---- shared market: history days merge, macro accumulates, month-end index closes from history
 import run_shared_market as rsm   # noqa: E402
@@ -245,31 +190,6 @@ finally:
 # ---- log masking
 m = jc.mask("value 1,234,567.89 and 98765.43 at line 12")   # private-scan: synthetic
 check("mask: figures hidden in logs, small numbers kept", "1,234" not in m and "98765" not in m and "12" in m)
-
-# ---- an inbox email that could not be sent is kept (sync/outbox, encrypted like any document) and sent by the next run
-tmp = tempfile.mkdtemp()
-try:
-    os.makedirs(os.path.join(tmp, "sync"))
-    commits_, sends_ = [], []
-    real_apply, real_send = jc.apply_and_commit, mail_send.send
-    jc.apply_and_commit = lambda ctx, writes, msg: commits_.append(writes) or ({"changed": [], "results": []}, None)
-    def failing_send(ctx, s, t, h=None, to=None, attachments=None):
-        raise OSError("smtp down")
-    run_sync.keep_unsent(None, tmp, "Subj", "Text", "<b>Html</b>", OSError("smtp down"))
-    kept = commits_[-1][0] if commits_ else {}
-    check("unsent email: kept as sync/outbox, created only if absent", kept.get("op") == "set" and kept.get("collection") == "sync" and kept.get("doc_id") == "outbox"
-          and kept.get("if_version") == 0 and kept["data"]["subject"] == "Subj" and kept["data"]["html"] == "<b>Html</b>")
-    json.dump({"data": kept["data"], "version": 1}, open(os.path.join(tmp, "sync", "outbox.json"), "w"))
-    mail_send.send = failing_send; commits_.clear()
-    run_sync.resend_outbox(None, tmp)
-    check("unsent email: still failing, it stays (nothing deleted)", not commits_ and os.path.exists(os.path.join(tmp, "sync", "outbox.json")))
-    mail_send.send = lambda ctx, s, t, h=None, to=None, attachments=None: sends_.append((s, t, h)) or "sent"
-    run_sync.resend_outbox(None, tmp)
-    check("unsent email: the next run sends it and then deletes it", sends_ == [("Subj", "Text", "<b>Html</b>")] and commits_ and commits_[-1][0]["op"] == "delete"
-          and not os.path.exists(os.path.join(tmp, "sync", "outbox.json")))
-finally:
-    jc.apply_and_commit, mail_send.send = real_apply, real_send
-    shutil.rmtree(tmp)
 
 # ---- the on-time alarm key: the watcher's daily expiry check and the reminder email
 import datetime, urllib.request, kick_new_accounts as kna, alarm_key   # noqa: E402
@@ -354,26 +274,6 @@ check("account reports: closed months get the shared index close, CPI, USD/EGP a
       _m["2026-07"]["benchClose"] == 9 and _m["2026-08"]["benchClose"] == 2 and _m["2026-08"]["cpi"] == 0.01 and _m["2026-08"]["cpiSource"] == "s"
       and _m["2026-08"]["usdegp"] == 50 and _m["2026-08"]["cashRate"] == 0.2 and "benchClose" not in _m["2999-01"])
 shutil.rmtree(_t, ignore_errors=True)
-
-import migrate_main as _mm   # noqa: E402
-_eng = {"portfolio/settings": {"data": {"portfolioId": "khaled", "inception": "2025-08"}}, "ledger/y2026": {"data": {"rows": []}},
-        "imports/2026-08": {"data": {"fullMonth": True, "reports": {"factsheetSentAt": "2026-09-05T10:00:00Z"}, "reportsPending": True}},
-        "imports/2026-09": {"data": {"fullMonth": True, "reportsPending": True}}, "imports/2026-10": {"data": {"fullMonth": True, "reportsPending": True}},
-        "market/latest": {"data": {}}, "history/2026-09": {"data": {}}, "bench/egx30": {"data": {}}, "sync/state": {"data": {"alertsSent": {"exdiv:X": "2026-09-01"}}},
-        "sync/outbox": {"data": {}}}
-_acct = {"sync/mail": {"data": {"friendMailed": {"u1": "2026-09-01"}, "weeklySent": "2026-09-24"}, "updateTime": "t"}}
-_w, _n = _mm.plan_copy(_eng, _acct, {"sync": {"monthEndEmailed": {"2026-09": "2026-10-01"}, "weeklySent": "2026-10-01", "reportCardSent": "2026-09"}},
-                       {"address": "a@example.com", "appPassword": "x"}, "2026-10-03T00:00:00Z")
-_by = {f"{w['collection']}/{w['doc_id']}": w["data"] for w in _w}
-check("migrate: the portfolio's documents are copied, never the market data or an outbox; settings say where it came from",
-      set(_by) == {"portfolio/settings", "ledger/y2026", "imports/2026-08", "imports/2026-09", "imports/2026-10", "sync/state", "sync/mail", "sync/gmail"}
-      and _by["portfolio/settings"]["migratedFrom"] == "khaled")
-check("migrate: months the main portfolio already reported are stamped, a month still owed stays pending",
-      _by["imports/2026-08"]["reports"]["emailedAt"] == "2026-09-05T10:00:00Z" and "reportsPending" not in _by["imports/2026-08"]
-      and _by["imports/2026-09"]["reports"]["emailedAt"] == "2026-10-01" and _by["imports/2026-10"].get("reportsPending") is True)
-check("migrate: what was already sent carries over into the account's record, which keeps its own entries",
-      _by["sync/mail"]["friendMailed"] == {"u1": "2026-09-01"} and _by["sync/mail"]["alertsSent"] == {"exdiv:X": "2026-09-01"}
-      and _by["sync/mail"]["weeklySent"] == "2026-10-01" and _by["sync/mail"]["reportCardSent"] == "2026-09" and _by["sync/gmail"]["address"] == "a@example.com")
 
 import mail_send as _ms   # noqa: E402
 _env0 = {k: os.environ.get(k) for k in ("GMAIL_ADDRESS", "GMAIL_APP_PASSWORD", "SENDER_ADDRESS", "SENDER_APP_PASSWORD", "SENDER_NAME")}
