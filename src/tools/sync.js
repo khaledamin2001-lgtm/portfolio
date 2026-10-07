@@ -31,7 +31,9 @@
    becomes q N, p P, whatever the ledger row typed by hand looked like. (Pricing of fund units
    and the conversion of old gram-denominated rows live in the engine, not here.)
    Bonus shares: a statement line "Bonus Shares - <stock> (<n> @ 0 EGP)" (or Stock Dividend / Free Shares /
-   منحة) becomes a ledger row { t: 'Bonus', q: n, amt: 0 } — no cash moves, the share count goes up.
+   منحة) becomes a ledger row { t: 'Bonus', q: n, amt: 0 } — no cash moves, the share count goes up. Before the
+   statement arrives, a bonus issue or split listed in bench/egx30.actions books that row on its ex-day
+   (applyCorporateActions), since prices are not back-adjusted.
    Sender: before anything is parsed the email must come from *.thndr.app AND carry a DKIM pass for that domain
    in the receiving host's Authentication-Results (TS.authCheck); otherwise it is held and nothing from it is used.
    An invoice email is all-or-nothing: if any of its blocks cannot be read, nothing from that email is written.
@@ -255,6 +257,43 @@ function applyMoneyEmail(kind, parsed, d, entry) {
   return entry.changes.length ? 'applied' : 'unchanged';
 }
 
+// ---------- corporate actions (bonus shares, splits) ----------
+// bench/egx30.actions lists the market's corporate actions ({s, date, ratio = new shares ÷ old shares, kind}). Prices
+// are never back-adjusted, so a held stock that goes ex-bonus needs its free shares in the ledger the same day, not
+// when the monthly statement arrives weeks later. For each 'bonus' or 'split' with ratio > 1, dated in the last 60
+// days, after tracking started, in a month no statement has closed, and held the day before: a Bonus row of
+// floor(held × (ratio − 1)) shares, unless one is already within 7 days. state.actionsBooked[key] keeps it to once per
+// action; the monthly statement then corrects the count (its own Bonus line replaces this one).
+const ACTION_KINDS = new Set(['bonus', 'split']);
+function applyCorporateActions(todayStr) {
+  const out = [];
+  state.actionsBooked = state.actionsBooked || {};
+  (bench.actions || []).forEach((ac) => {
+    if (!ac || !ac.s || !/^\d{4}-\d{2}-\d{2}$/.test(ac.date || '') || !(ac.ratio > 1) || !ACTION_KINDS.has(ac.kind)) return;
+    const key = `${ac.s}:${ac.date}`;
+    if (state.actionsBooked[key] || ac.date > todayStr || days(ac.date, todayStr) > 60) return;
+    if (settings.trackFrom && ac.date <= settings.trackFrom) return;
+    if (monthClosed(ac.date.slice(0, 7))) return;
+    const names = Object.values(assets).filter((a) => a && !a.fund && (a.symbol || '').toUpperCase() === ac.s.toUpperCase()).map((a) => a.name);
+    if (!names.length) return;
+    const held = {};
+    tx.forEach((t) => { if (t.d < ac.date && names.includes(t.a) && t.acc !== 'MF' && (t.t === 'Buy' || t.t === 'Sell' || t.t === 'Bonus')) held[t.a] = (held[t.a] || 0) + (t.t === 'Sell' ? -1 : 1) * (t.q || 0); });
+    const booked = tx.some((t) => t.t === 'Bonus' && names.includes(t.a) && days(t.d, ac.date) <= 7);
+    const entry = { id: `action-${key}`, subject: `${ac.s} ${ac.label || ac.kind} on ${ac.date}`, date: Date.parse(ac.date + 'T12:00:00Z'), kind: 'action', status: 'unchanged', changes: [], reasons: [], notes: [], unchanged: 0 };
+    Object.entries(held).forEach(([a, sh]) => {
+      const q = Math.floor(sh * (ac.ratio - 1) + 1e-9);
+      if (!(sh > 0.5) || !(q > 0) || booked) return;
+      const row = { id: newId(), d: ac.date, t: 'Bonus', a, q, amt: 0, acc: 'Main', src: `action-${ac.date}`, note: `${ac.label || ac.kind} (ratio ${ac.ratio}); the monthly statement confirms the count` };
+      tx.push(row); touch(ac.date); entry.changes.push(`added ${desc(row)} (${sh} shares held × ${+(ac.ratio - 1).toFixed(6)})`);
+    });
+    if (!entry.changes.length && !booked) return;   // not held: nothing to book, nothing to remember
+    if (entry.changes.length) { entry.status = 'applied'; entry.notes.push('free shares from a corporate action, added on the day it went ex; the monthly statement corrects the count if Thndr rounds differently'); log.push(entry); }
+    state.actionsBooked[key] = todayStr;
+    out.push(entry);
+  });
+  return out;
+}
+
 // ---------- statements ----------
 function applyStatement(st, entry, msg) {
   if (!st.cash) { entry.reasons.push('no account statement among the PDFs'); return 'hold'; }
@@ -348,7 +387,21 @@ function applyStatement(st, entry, msg) {
   Object.keys(frozen).sort().forEach((m) => entry.notes.push(`left unchanged in closed ${lbl(m)}: ${frozen[m].join('; ')}`));
   // verify: the corrected ledger must re-reconcile cleanly
   const assets2 = { ...assets, ...addAssets };
-  const rc2 = TS.reconcile(st, next, assets2, marks);
+  let rc2 = TS.reconcile(st, next, assets2, marks);
+  // a Bonus row booked from a corporate action (applyCorporateActions) is an estimate: when the statement prints no
+  // Bonus line of its own and the snapshot's share count is only a rounding away (≤ 5 shares or 2%), it takes that count
+  if (final) {
+    let fixed = 0;
+    (rc2.holdings || []).filter((h) => h.ok === false && h.statementQty > 0).forEach((h) => {
+      const t = next.find((x) => x.t === 'Bonus' && x.a === h.name && /^action-/.test(x.src || '') && x.d >= st.from && x.d <= st.to);
+      const d = h.statementQty - h.ledgerQty;
+      if (!t || !(t.q + d > 0) || Math.abs(d) > Math.max(5, t.q * 0.02)) return;
+      const before = desc(t);
+      t.q = Math.round((t.q + d) * 1e4) / 1e4; t.note = [t.note, 'share count per Thndr statement'].filter(Boolean).join('; ');
+      ops.push(`corrected ${before} → ${desc(t)} (the statement's share count)`); fixed++;
+    });
+    if (fixed) rc2 = TS.reconcile(st, next, assets2, marks);
+  }
   // a symbol-less stock (first seen on an invoice) that the snapshot lists under its ticker: record the ticker on the
   // existing asset, keeping the ledger name, so the next month prices it and the statement no longer holds
   const aliasAssets = {};
@@ -481,6 +534,9 @@ async function run() {
       progress = true;
     }
   }
+  // bonus shares and splits that went ex since the last statement (after the emails, so a statement that already
+  // carries the Bonus line wins)
+  applyCorporateActions(today);
   // missing monthly statement alert: raised once per month (state.alerts[M]), listing every month still missing
   const missing = missingStatements(today, settings, imports, marks);
   let alert = null;
@@ -522,7 +578,7 @@ async function run() {
     monthlyPosted, monthlyPending: monthlyPending(imports, monthlyPosted), alert, toolSha: state.toolSha,
     writes: fs.readdirSync(path.join(out, 'write')),
     email: applied.length || holds.length || alert || heads.length ? {
-      subject: holds.length ? `${who}: ${holds.length} Thndr email${holds.length > 1 ? 's' : ''} need${holds.length > 1 ? '' : 's'} your review` : applied.some((e) => e.monthly) ? `${who}: ${applied.filter((e) => e.monthly).map((e) => lbl(e.monthly)).join(', ')} statement posted` : alert && !applied.length ? `${who}: ${alert.map(lbl).join(', ')} Thndr statement${alert.length > 1 ? 's have' : ' has'} not arrived` : applied.length ? `${who}: updated from Thndr` : `${who}: heads-up — ${heads.length > 1 ? `${heads.length} things to look at` : heads[0].text.split(' (')[0].split(';')[0]}`,
+      subject: holds.length ? `${who}: ${holds.length} Thndr email${holds.length > 1 ? 's' : ''} need${holds.length > 1 ? '' : 's'} your review` : applied.some((e) => e.monthly) ? `${who}: ${applied.filter((e) => e.monthly).map((e) => lbl(e.monthly)).join(', ')} statement posted` : alert && !applied.length ? `${who}: ${alert.map(lbl).join(', ')} Thndr statement${alert.length > 1 ? 's have' : ' has'} not arrived` : applied.length && applied.every((e) => e.kind === 'action') ? `${who}: ${[...new Set(applied.map((e) => e.subject.split(' ')[0]))].join(', ')} bonus shares added` : applied.length ? `${who}: updated from Thndr` : `${who}: heads-up — ${heads.length > 1 ? `${heads.length} things to look at` : heads[0].text.split(' (')[0].split(';')[0]}`,
       text: lines.join('\n').replace(/\n+$/, '') + '\n\n' + SITE_URL,
       notify: holds.length > 0 || !!alert || heads.length > 0 || applied.some((e) => e.monthly || (e.kind !== 'invoice' && !MONEY.has(e.kind))),
       // the same content in pieces, for the HTML email (src/jobs/emails.py sync_email)
@@ -591,4 +647,4 @@ function toolSha() {
   return { sync: sha('sync.js'), statement: sha('statement.js'), engine: sha('engine.js'), engine2: sha('engine2.js'), at: new Date().toISOString() };
 }
 if (require.main === module) run().catch((e) => { console.error(e); process.exit(1); });
-module.exports = { parseInvoices, applyInvoice, applyInvoiceEmail, applyMoneyEmail, applyStatement, monthlyPending, missingStatements, digest, drawdownCheck, lbl, toolSha, run, _state: () => ({ tx, assets, changed, settings, marks, log }), _reset };
+module.exports = { parseInvoices, applyInvoice, applyInvoiceEmail, applyMoneyEmail, applyCorporateActions, applyStatement, monthlyPending, missingStatements, digest, drawdownCheck, lbl, toolSha, run, _state: () => ({ tx, assets, changed, settings, marks, log }), _reset };

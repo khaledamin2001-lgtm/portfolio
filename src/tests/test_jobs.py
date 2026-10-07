@@ -187,6 +187,33 @@ try:
 finally:
     shutil.rmtree(tmp)
 
+# ---- shared market: corporate actions found from the as-traded closes (never booked by themselves: kind 'detected')
+tmp = tempfile.mkdtemp()
+try:
+    os.makedirs(f"{tmp}/history")
+    json.dump({"month": "2026-10", "days": {"2026-10-05": {"BIG": 38.5, "DIP": 10, "OLD": 20, "SEEN": 50, "EGX30": 100},
+                                            "2026-10-06": {"BIG": 38.84, "DIP": 10, "OLD": 20, "SEEN": 50, "EGX30": 100},
+                                            "2026-10-07": {"BIG": 12, "DIP": 8.1, "OLD": 15, "SEEN": 25, "EGX30": 70}}}, open(f"{tmp}/history/2026-10.json", "w"))
+    json.dump({"actions": [{"s": "SEEN", "date": "2026-10-07", "ratio": 2, "kind": "bonus"}]}, open(f"{tmp}/bench.json", "w"))
+    asked = []
+    tv = {"BIG": 1.0, "DIP": 1.0, "OLD": 1.333333}
+    found = rsm.detect_actions(tmp, "2026-10-07", lambda s, d: asked.append(s) or tv[s])
+    acts = {a["s"]: a for a in json.load(open(f"{tmp}/bench.json"))["actions"]}
+    check("corporate actions: a fall past any daily limit is flagged from the price, one TradingView confirms with its ratio",
+          sorted(a["s"] for a in found) == ["BIG", "OLD"] and acts["BIG"]["kind"] == "detected" and acts["BIG"]["ratioSource"] == "price fall"
+          and abs(acts["BIG"]["ratio"] - 38.84 / 12) < 1e-3 and acts["OLD"]["ratio"] == 1.333333 and acts["OLD"]["ratioSource"] == "TradingView")
+    check("corporate actions: an ordinary fall within the daily limit, a known action and the indices are left alone",
+          "DIP" not in acts and acts["SEEN"]["kind"] == "bonus" and "SEEN" not in asked and "EGX30" not in asked and "EGX30" not in acts)
+    tv["BIG"] = 3.2288508
+    again = rsm.detect_actions(tmp, "2026-10-08", lambda s, d: tv[s])
+    acts = {a["s"]: a for a in json.load(open(f"{tmp}/bench.json"))["actions"]}
+    check("corporate actions: reported once; a price-fall guess takes TradingView's ratio once it adjusts",
+          not again and acts["BIG"]["ratio"] == 3.228851 and acts["BIG"]["ratioSource"] == "TradingView" and len(acts) == 3)
+    subj, body = rsm.actions_email(found, "2026-10-07")
+    check("corporate actions: the owner's email names the stocks and how to confirm", "BIG" in subj and "OLD" in subj and '"bonus"' in body)
+finally:
+    shutil.rmtree(tmp)
+
 # ---- log masking
 m = jc.mask("value 1,234,567.89 and 98765.43 at line 12")   # private-scan: synthetic
 check("mask: figures hidden in logs, small numbers kept", "1,234" not in m and "98765" not in m and "12" in m)

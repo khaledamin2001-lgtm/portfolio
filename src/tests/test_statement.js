@@ -92,5 +92,52 @@ for (const [label, order] of [['cash first', [cash, mf]], ['fund statement first
   e = { changes: [], reasons: [], notes: [], unchanged: 0 }; S.applyInvoice({ d: '2026-08-10', type: 'Buy', name: 'X', code: 'EGS00000X000', qty: 1, gross: 10, total: 10.1, fund: false }, e);
   check('an invoice in a closed month changes nothing', !S._state().tx.length && /already final/.test(e.notes.join()), JSON.stringify(e));
 }
+// 5. corporate actions: a bonus issue that went ex gets its Bonus row on the day (prices are not back-adjusted)
+{
+  const assets = { 'Orascom Dev': { name: 'Orascom Dev', symbol: 'ORHD' }, CIB: { name: 'CIB', symbol: 'COMI' } };
+  const tx = () => [{ id: 'd', d: '2026-09-01', t: 'Deposit', amt: 100000, acc: 'Main' },   // private-scan: synthetic
+    { id: 'b1', d: '2026-09-10', t: 'Buy', a: 'Orascom Dev', q: 1000, amt: -40000, acc: 'Main' },
+    { id: 's1', d: '2026-09-20', t: 'Sell', a: 'Orascom Dev', q: 100, amt: 4100, acc: 'Main' },
+    { id: 'b2', d: '2026-10-07', t: 'Buy', a: 'Orascom Dev', q: 50, amt: -600, acc: 'Main' }];   // bought on the ex-day: no bonus on it
+  const bench = (extra) => ({ members: [], actions: [{ s: 'ORHD', date: '2026-10-07', ratio: 3.2288508184, kind: 'bonus', label: '2.2289-for-1 bonus' }].concat(extra || []) });
+  const marks = { '2026-09': { source: 'statement', provisional: false } }, imports = { '2026-09': { fullMonth: true } };
+  S._reset(tx(), assets, {}, { bench: bench(), marks, imports });
+  let out = S.applyCorporateActions('2026-10-07');
+  let rows = S._state().tx.filter((t) => t.t === 'Bonus');
+  check('a bonus issue on a held stock books floor(held × (ratio − 1)) free shares on its ex-day', rows.length === 1 && rows[0].a === 'Orascom Dev' && rows[0].q === Math.floor(900 * 2.2288508184) && rows[0].d === '2026-10-07' && rows[0].amt === 0 && out.length === 1 && out[0].status === 'applied', JSON.stringify(rows));
+  out = S.applyCorporateActions('2026-10-08');
+  check('the same action is booked only once', S._state().tx.filter((t) => t.t === 'Bonus').length === 1 && !out.length);
+  S._reset(tx().concat([{ id: 'x', d: '2026-10-09', t: 'Bonus', a: 'Orascom Dev', q: 2006, amt: 0, acc: 'Main' }]), assets, {}, { bench: bench(), marks, imports });
+  S.applyCorporateActions('2026-10-12');
+  check('a Bonus row already within 7 days (typed or from a statement) is left as it is', S._state().tx.filter((t) => t.t === 'Bonus').length === 1);
+  S._reset(tx(), assets, {}, { bench: { members: [], actions: [{ s: 'ORHD', date: '2026-10-07', ratio: 1.4, kind: 'rights' }, { s: 'COMI', date: '2026-10-07', ratio: 2, kind: 'bonus' }] }, marks, imports });
+  S.applyCorporateActions('2026-10-07');
+  check('a rights issue, or a stock not held, books nothing', !S._state().tx.some((t) => t.t === 'Bonus'));
+  S._reset(tx(), assets, {}, { bench: { members: [], actions: [{ s: 'ORHD', date: '2026-09-25', ratio: 2, kind: 'bonus' }] }, marks, imports });
+  S.applyCorporateActions('2026-10-07');
+  check('nothing in a month its monthly statement closed', !S._state().tx.some((t) => t.t === 'Bonus'));
+  S._reset(tx(), assets, { trackFrom: '2026-10-07' }, { bench: bench(), marks, imports });
+  S.applyCorporateActions('2026-10-07');
+  check('nothing on or before tracking started (the opening holdings already have it)', !S._state().tx.some((t) => t.t === 'Bonus'));
+  S._reset(tx(), assets, {}, { bench: bench(), marks, imports });
+  S.applyCorporateActions('2026-10-06');
+  check('nothing before the ex-day', !S._state().tx.some((t) => t.t === 'Bonus'));
+  // October's monthly statement: no Bonus line of its own, the snapshot one share above the estimate (Thndr rounded up)
+  const oct = (extraShares, rows) => {
+    S._reset(tx().slice(0, 3), { ...assets }, { account: { holder: 'x' } }, { bench: bench(), marks: { ...marks }, imports: { ...imports } });   // private-scan: synthetic
+    S.applyCorporateActions('2026-10-07');
+    const est = 900 + Math.floor(900 * 2.2288508184);
+    const st = { from: '2026-10-01', to: '2026-10-31', month: '2026-10', fullMonth: true, mf: null,
+      snapshot: { holdings: [{ ticker: 'ORHD', name: 'Orascom Development Egypt', qty: est + extraShares, value: (est + extraShares) * 12, kind: 'stock' }], total: (est + extraShares) * 12 },   // private-scan: synthetic
+      cash: { start: 64100, end: 64100, rows: rows || [] } };   // private-scan: synthetic
+    const entry = { changes: [], reasons: [], notes: [], unchanged: 0 };
+    return { status: S.applyStatement(st, entry, { id: 'm10' }), entry, bonus: S._state().tx.filter((t) => t.t === 'Bonus'), est };
+  };
+  let o = oct(1);
+  check('the monthly snapshot corrects a booked bonus by a rounding difference instead of holding the statement',
+    o.status === 'applied' && o.bonus.length === 1 && o.bonus[0].q === o.est - 900 + 1 && o.entry.changes.some((c) => /statement's share count/.test(c)), JSON.stringify([o.status, o.entry.reasons, o.bonus]));
+  o = oct(300);
+  check('a snapshot far from the booked bonus still holds the statement for review', o.status === 'hold' && /holdings differ/.test(o.entry.reasons.join()), JSON.stringify([o.status, o.entry.reasons]));
+}
 console.log(fail ? `${fail} FAILED` : 'ALL PASS');
 process.exit(fail ? 1 : 0);
