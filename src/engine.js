@@ -147,6 +147,11 @@
       if (isOpen && !px && fallback) { const f = fallback(name); if (f) px = { price: f.p, date: f.d, source: 'model' }; }
       const openCost = isOpen ? p.buyCost - p.soldBasis : 0;
       const mv = isOpen && px ? open * px.price : null;
+      // the quote's day change is per share against the previous close as traded; on a bonus issue's ex-day (a Bonus row
+      // dated on the price's date) the previous close was for fewer shares, so the day change is the holding's:
+      // today's shares × price against yesterday's shares × previous close
+      const bonusDay = px && px.source === 'auto' && px.chg != null && px.date ? sum(ledger.filter((t) => t.t === 'Bonus' && t.a === name && t.d === px.date).map((t) => t.q || 0)) : 0;
+      const chg = px && px.source === 'auto' ? (bonusDay > 0 && open - bonusDay > thr ? ((1 + px.chg / 100) * open / (open - bonusDay) - 1) * 100 : px.chg) : null;
       const unreal = isOpen ? (mv != null ? mv - openCost : null) : 0;
       const realized = p.proceeds - p.soldBasis;
       const total = realized + (unreal || 0) + p.divs;
@@ -157,7 +162,7 @@
         name, symbol: sym, sector: a.sector || 'Unclassified', firstBuy: p.firstBuy, lastSell: p.lastSell,
         bought: p.bought, bonus: p.bonus, sold: p.sold, open, status: isOpen ? 'Open' : 'Closed',
         buyCost: p.buyCost, proceeds: p.proceeds, soldBasis: p.soldBasis, openCost, divs: p.divs, realized,
-        price: px ? px.price : null, priceDate: px ? px.date : null, priceSource: px ? px.source : null, chg: px && px.source === 'auto' ? px.chg : null,
+        price: px ? px.price : null, priceDate: px ? px.date : null, priceSource: px ? px.source : null, chg,
         avgCost: isOpen && open ? openCost / open : null,
         mv, unreal, total, roi: p.buyCost > 0 ? total / p.buyCost : 0,
         holdDays: dayNum(holdEnd) - dayNum(p.firstBuy),

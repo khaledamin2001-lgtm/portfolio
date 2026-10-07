@@ -59,16 +59,17 @@ function dailySection(){
 const WD3 = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 function plShares(led, upTo){ const sh={}; led.forEach(t=>{ if(t.d<=upTo && t.a && (t.t==='Buy'||t.t==='Sell'||t.t==='Bonus')) sh[t.a]=(sh[t.a]||0)+(t.t==='Sell'?-1:1)*(t.q||0); }); return sh; }
 function plLivePrices(){ const R=S.R; return new Map(R.pos.open.filter(r=>r.priceSource==='auto'&&r.priceDate===R.today&&r.price>0).map(r=>[r.name,r.price])); }
-// value change of each asset between two closes (or the last close and live prices), plus its own cash rows in between
+// value change of each asset between two closes (or the last close and live prices), plus its own cash rows in between;
+// its % change is the holding's (bonus shares received in between count, so an ex-bonus day is not a per-share drop)
 function plMoves(from, to, live){
   const R=S.R, price=PA.makePricer(S.assets, R.ledger, pbook()), led=PE.sortLedger(R.ledger);
   const sh0=plShares(led,from), sh1=plShares(led,to), out={}; let other=0, flow=0, unpriced=[];
-  led.forEach(t=>{ if(t.d>from && t.d<=to){ if(t.t==='Deposit'||t.t==='Withdrawal'){ flow+=t.amt||0; return; } if(t.a) (out[t.a]||(out[t.a]={cash:0})).cash+=t.amt||0; else other+=t.amt||0; } });
+  led.forEach(t=>{ if(t.d>from && t.d<=to){ if(t.t==='Deposit'||t.t==='Withdrawal'){ flow+=t.amt||0; return; } if(t.a){ const o=out[t.a]||(out[t.a]={cash:0}); o.cash+=t.amt||0; if(t.t==='Bonus') o.bonus=(o.bonus||0)+(t.q||0); } else other+=t.amt||0; } });
   new Set([...Object.keys(sh0),...Object.keys(sh1),...Object.keys(out)]).forEach(n=>{
     const a=sh0[n]||0, b=sh1[n]||0, o=out[n]||(out[n]={cash:0});
     const p0=a>0.5?(price(n,from)||{}).p:null, p1=b>0.5?(live&&live.has(n)?live.get(n):(price(n,to)||{}).p):null;
     if((a>0.5&&p0==null)||(b>0.5&&p1==null)){ unpriced.push(n); o.v=o.cash; return; }
-    o.v=(b>0.5?b*p1:0)-(a>0.5?a*p0:0)+o.cash; o.chg=(a>0.5&&b>0.5&&p0>0)?p1/p0-1:null; o.held=a>0.5||b>0.5; });
+    o.v=(b>0.5?b*p1:0)-(a>0.5?a*p0:0)+o.cash; o.chg=(a>0.5&&b>0.5&&p0>0)?((a+(o.bonus||0))*p1)/(a*p0)-1:null; o.held=a>0.5||b>0.5; });
   return {items:Object.entries(out).map(([name,o])=>({name, symbol:(S.assets[name]||{}).symbol||'', v:o.v||0, chg:o.chg??null, traded:Math.abs(o.cash)>0.005})), other, flow, unpriced};
 }
 const plA = () => an('pl', () => {

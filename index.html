@@ -2207,7 +2207,7 @@ body:not(.pd-edit) :is([data-testid=csv-import],[data-testid=csv-import-input],[
   })();
 })();
 </script>
-<meta name="pd-build" content="81ab13ef9e7d 2026-10-05 20:50">
+<meta name="pd-build" content="841d3e045535 2026-10-07 20:47">
 <style>
 :root{
   /* Apple-style system: SF (the system font on iPhone and Mac) for everything, quiet greys, one blue accent, green / red
@@ -2744,6 +2744,11 @@ button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.pl
       if (isOpen && !px && fallback) { const f = fallback(name); if (f) px = { price: f.p, date: f.d, source: 'model' }; }
       const openCost = isOpen ? p.buyCost - p.soldBasis : 0;
       const mv = isOpen && px ? open * px.price : null;
+      // the quote's day change is per share against the previous close as traded; on a bonus issue's ex-day (a Bonus row
+      // dated on the price's date) the previous close was for fewer shares, so the day change is the holding's:
+      // today's shares × price against yesterday's shares × previous close
+      const bonusDay = px && px.source === 'auto' && px.chg != null && px.date ? sum(ledger.filter((t) => t.t === 'Bonus' && t.a === name && t.d === px.date).map((t) => t.q || 0)) : 0;
+      const chg = px && px.source === 'auto' ? (bonusDay > 0 && open - bonusDay > thr ? ((1 + px.chg / 100) * open / (open - bonusDay) - 1) * 100 : px.chg) : null;
       const unreal = isOpen ? (mv != null ? mv - openCost : null) : 0;
       const realized = p.proceeds - p.soldBasis;
       const total = realized + (unreal || 0) + p.divs;
@@ -2754,7 +2759,7 @@ button.plc{cursor:pointer} button.plc:hover{border-color:var(--ink-3)} button.pl
         name, symbol: sym, sector: a.sector || 'Unclassified', firstBuy: p.firstBuy, lastSell: p.lastSell,
         bought: p.bought, bonus: p.bonus, sold: p.sold, open, status: isOpen ? 'Open' : 'Closed',
         buyCost: p.buyCost, proceeds: p.proceeds, soldBasis: p.soldBasis, openCost, divs: p.divs, realized,
-        price: px ? px.price : null, priceDate: px ? px.date : null, priceSource: px ? px.source : null, chg: px && px.source === 'auto' ? px.chg : null,
+        price: px ? px.price : null, priceDate: px ? px.date : null, priceSource: px ? px.source : null, chg,
         avgCost: isOpen && open ? openCost / open : null,
         mv, unreal, total, roi: p.buyCost > 0 ? total / p.buyCost : 0,
         holdDays: dayNum(holdEnd) - dayNum(p.firstBuy),
@@ -5550,16 +5555,17 @@ function dailySection(){
 const WD3 = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 function plShares(led, upTo){ const sh={}; led.forEach(t=>{ if(t.d<=upTo && t.a && (t.t==='Buy'||t.t==='Sell'||t.t==='Bonus')) sh[t.a]=(sh[t.a]||0)+(t.t==='Sell'?-1:1)*(t.q||0); }); return sh; }
 function plLivePrices(){ const R=S.R; return new Map(R.pos.open.filter(r=>r.priceSource==='auto'&&r.priceDate===R.today&&r.price>0).map(r=>[r.name,r.price])); }
-// value change of each asset between two closes (or the last close and live prices), plus its own cash rows in between
+// value change of each asset between two closes (or the last close and live prices), plus its own cash rows in between;
+// its % change is the holding's (bonus shares received in between count, so an ex-bonus day is not a per-share drop)
 function plMoves(from, to, live){
   const R=S.R, price=PA.makePricer(S.assets, R.ledger, pbook()), led=PE.sortLedger(R.ledger);
   const sh0=plShares(led,from), sh1=plShares(led,to), out={}; let other=0, flow=0, unpriced=[];
-  led.forEach(t=>{ if(t.d>from && t.d<=to){ if(t.t==='Deposit'||t.t==='Withdrawal'){ flow+=t.amt||0; return; } if(t.a) (out[t.a]||(out[t.a]={cash:0})).cash+=t.amt||0; else other+=t.amt||0; } });
+  led.forEach(t=>{ if(t.d>from && t.d<=to){ if(t.t==='Deposit'||t.t==='Withdrawal'){ flow+=t.amt||0; return; } if(t.a){ const o=out[t.a]||(out[t.a]={cash:0}); o.cash+=t.amt||0; if(t.t==='Bonus') o.bonus=(o.bonus||0)+(t.q||0); } else other+=t.amt||0; } });
   new Set([...Object.keys(sh0),...Object.keys(sh1),...Object.keys(out)]).forEach(n=>{
     const a=sh0[n]||0, b=sh1[n]||0, o=out[n]||(out[n]={cash:0});
     const p0=a>0.5?(price(n,from)||{}).p:null, p1=b>0.5?(live&&live.has(n)?live.get(n):(price(n,to)||{}).p):null;
     if((a>0.5&&p0==null)||(b>0.5&&p1==null)){ unpriced.push(n); o.v=o.cash; return; }
-    o.v=(b>0.5?b*p1:0)-(a>0.5?a*p0:0)+o.cash; o.chg=(a>0.5&&b>0.5&&p0>0)?p1/p0-1:null; o.held=a>0.5||b>0.5; });
+    o.v=(b>0.5?b*p1:0)-(a>0.5?a*p0:0)+o.cash; o.chg=(a>0.5&&b>0.5&&p0>0)?((a+(o.bonus||0))*p1)/(a*p0)-1:null; o.held=a>0.5||b>0.5; });
   return {items:Object.entries(out).map(([name,o])=>({name, symbol:(S.assets[name]||{}).symbol||'', v:o.v||0, chg:o.chg??null, traded:Math.abs(o.cash)>0.005})), other, flow, unpriced};
 }
 const plA = () => an('pl', () => {

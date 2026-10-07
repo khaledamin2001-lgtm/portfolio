@@ -62,5 +62,16 @@ let R = run(rows, { '2026-02': { cash: 850, securities: 150, source: 'statement'
 check('typed: a savings-fund row in a month whose cash matches the statement and a fund row checked against a statement are confirmed; a typed stock row is not', JSON.stringify(R.provenance.unverified) === '["s1"]', JSON.stringify(R.provenance.unverified));
 R = run(rows, { '2026-02': { cash: 900, securities: 150, source: 'statement' } }, '2026-03-10', fa);
 check('when the month\'s cash does not match the statement, the savings-fund rows are not confirmed either', JSON.stringify(R.provenance.unverified) === '["f1","f2","s1"]', JSON.stringify(R.provenance.unverified));
+// a bonus issue's ex-day: the quote's change is per share against the pre-bonus close; the holding's day change is not
+{
+  const led = [{ id: 'b', d: '2026-09-10', t: 'Buy', a: 'Dev Co', q: 1000, p: 8, amt: -8000, acc: 'Main' },
+    { id: 'x', d: '2026-10-07', t: 'Bonus', a: 'Dev Co', q: 2228, amt: 0, acc: 'Main' }];
+  const pos = (date, chg) => PE.positions(led, [{ name: 'Dev Co', symbol: 'DEV' }], { quotes: { DEV: { price: 12, date, chg } } }, {}, date, null).open[0];
+  let r = pos('2026-10-07', (12 / 38.84 - 1) * 100);
+  const pl = r.mv - r.mv / (1 + r.chg / 100);
+  check('bonus ex-day: the day change compares today\'s shares × price with yesterday\'s shares × close', Math.abs(pl - (3228 * 12 - 1000 * 38.84)) < 0.01, `${r.chg} ${pl}`);
+  r = pos('2026-10-08', 1.5);
+  check('the day after: the quote\'s own change again', r.chg === 1.5);
+}
 console.log(fail ? `FAIL ${fail}` : 'ALL PASS');
 process.exit(fail ? 1 : 0);
