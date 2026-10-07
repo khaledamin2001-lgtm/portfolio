@@ -187,30 +187,59 @@ try:
 finally:
     shutil.rmtree(tmp)
 
-# ---- shared market: corporate actions found from the as-traded closes (never booked by themselves: kind 'detected')
+# ---- shared market: corporate actions found every run (never booked by themselves: kind 'detected'), then confirmed
+import confirm_action as ca   # noqa: E402
 tmp = tempfile.mkdtemp()
 try:
     os.makedirs(f"{tmp}/history")
-    json.dump({"month": "2026-10", "days": {"2026-10-05": {"BIG": 38.5, "DIP": 10, "OLD": 20, "SEEN": 50, "EGX30": 100},
-                                            "2026-10-06": {"BIG": 38.84, "DIP": 10, "OLD": 20, "SEEN": 50, "EGX30": 100},
-                                            "2026-10-07": {"BIG": 12, "DIP": 8.1, "OLD": 15, "SEEN": 25, "EGX30": 70}}}, open(f"{tmp}/history/2026-10.json", "w"))
+    raw = {"2026-10-04": {"BIG": 38.5, "SMALL": 22, "DIP": 10, "SEEN": 50, "ODD": 5, "EGX30": 100},
+           "2026-10-05": {"BIG": 38.5, "SMALL": 22, "DIP": 10, "SEEN": 50, "ODD": 5, "EGX30": 100},
+           "2026-10-06": {"BIG": 38.84, "SMALL": 20, "DIP": 10, "SEEN": 50, "ODD": 5, "EGX30": 100},
+           "2026-10-07": {"BIG": 12, "SMALL": 20.2, "DIP": 8.1, "SEEN": 25, "ODD": 5, "EGX30": 70}}
+    json.dump({"month": "2026-10", "days": raw}, open(f"{tmp}/history/2026-10.json", "w"))
+    json.dump({"quotes": {s: {"price": 1} for s in ("BIG", "SMALL", "DIP", "SEEN", "ODD")}}, open(f"{tmp}/latest.json", "w"))
     json.dump({"actions": [{"s": "SEEN", "date": "2026-10-07", "ratio": 2, "kind": "bonus"}]}, open(f"{tmp}/bench.json", "w"))
+    # TradingView's split-adjusted closes: SMALL had a 1-for-10 bonus on 6 Oct (earlier closes ÷ 1.1); ODD one bad bar;
+    # BIG not adjusted yet; DIP an ordinary fall
+    adj = {"SMALL": {d: (c / 1.1 if d < "2026-10-06" else c) for d, c in ((d, r["SMALL"]) for d, r in raw.items())},
+           "ODD": {"2026-10-04": 5, "2026-10-05": 5 * 1.2, "2026-10-06": 5, "2026-10-07": 5}}
     asked = []
-    tv = {"BIG": 1.0, "DIP": 1.0, "OLD": 1.333333}
-    found = rsm.detect_actions(tmp, "2026-10-07", lambda s, d: asked.append(s) or tv[s])
+    tv = lambda s: asked.append(s) or (adj.get(s) or {d: r[s] for d, r in raw.items()})
+    found, errs = rsm.detect_actions(tmp, "2026-10-07", tv)
     acts = {a["s"]: a for a in json.load(open(f"{tmp}/bench.json"))["actions"]}
-    check("corporate actions: a fall past any daily limit is flagged from the price, one TradingView confirms with its ratio",
-          sorted(a["s"] for a in found) == ["BIG", "OLD"] and acts["BIG"]["kind"] == "detected" and acts["BIG"]["ratioSource"] == "price fall"
-          and abs(acts["BIG"]["ratio"] - 38.84 / 12) < 1e-3 and acts["OLD"]["ratio"] == 1.333333 and acts["OLD"]["ratioSource"] == "TradingView")
-    check("corporate actions: an ordinary fall within the daily limit, a known action and the indices are left alone",
-          "DIP" not in acts and acts["SEEN"]["kind"] == "bonus" and "SEEN" not in asked and "EGX30" not in asked and "EGX30" not in acts)
-    tv["BIG"] = 3.2288508
-    again = rsm.detect_actions(tmp, "2026-10-08", lambda s, d: tv[s])
+    check("corporate actions: every stock is asked; a small bonus is found from TradingView's adjustment, a fall past any daily limit from the price",
+          sorted(asked) == ["BIG", "DIP", "ODD", "SEEN", "SMALL"] and sorted(a["s"] for a in found) == ["BIG", "SMALL"] and not errs
+          and acts["SMALL"]["date"] == "2026-10-06" and abs(acts["SMALL"]["ratio"] - 1.1) < 1e-6 and acts["SMALL"]["ratioSource"] == "TradingView"
+          and acts["BIG"]["kind"] == "detected" and acts["BIG"]["ratioSource"] == "price fall" and abs(acts["BIG"]["ratio"] - 38.84 / 12) < 1e-3)
+    check("corporate actions: an ordinary fall, a one-bar oddity, a known action and the indices are left alone",
+          "DIP" not in acts and "ODD" not in acts and acts["SEEN"]["kind"] == "bonus" and "EGX30" not in asked and "EGX30" not in acts)
+    adj["BIG"] = {d: (r["BIG"] / 3.2288508 if d < "2026-10-07" else r["BIG"]) for d, r in raw.items()}
+    again, _ = rsm.detect_actions(tmp, "2026-10-08", tv)
     acts = {a["s"]: a for a in json.load(open(f"{tmp}/bench.json"))["actions"]}
     check("corporate actions: reported once; a price-fall guess takes TradingView's ratio once it adjusts",
-          not again and acts["BIG"]["ratio"] == 3.228851 and acts["BIG"]["ratioSource"] == "TradingView" and len(acts) == 3)
+          not again and abs(acts["BIG"]["ratio"] - 3.2288508) < 1e-5 and acts["BIG"]["ratioSource"] == "TradingView" and len(acts) == 3)
+    _, errs = rsm.detect_actions(tmp, "2026-10-08", lambda s: (_ for _ in ()).throw(OSError("down")) if s == "DIP" else tv(s))
+    check("corporate actions: a stock TradingView does not answer for is listed, the rest still scanned", errs == ["DIP"])
     subj, body = rsm.actions_email(found, "2026-10-07")
-    check("corporate actions: the owner's email names the stocks and how to confirm", "BIG" in subj and "OLD" in subj and '"bonus"' in body)
+    check("corporate actions: the owner's email names the stocks and the confirm workflow", "BIG" in subj and "SMALL" in subj and "Confirm corporate action" in body)
+    # confirming (engine workflow confirm-action.yml)
+    b = json.load(open(f"{tmp}/bench.json"))
+    msg = ca.confirm(b, "big", "2026-10-07", "bonus", None, today="2026-10-08")
+    big = next(a for a in b["actions"] if a["s"] == "BIG")
+    check("confirm: a detected action becomes a bonus with its measured ratio", big["kind"] == "bonus" and abs(big["ratio"] - 3.2288508) < 1e-5 and big["confirmedAt"] == "2026-10-08" and "bonus" in msg)
+    ca.confirm(b, "SMALL", "2026-10-07", "bonus", 1.1)
+    check("confirm: a date a day off still finds the action (within 7 days); the typed date wins", sum(a["s"] == "SMALL" for a in b["actions"]) == 1 and next(a for a in b["actions"] if a["s"] == "SMALL")["date"] == "2026-10-07")
+    ca.confirm(b, "NEWX", "2026-10-01", "split", 2)
+    check("confirm: an action nobody detected is added", any(a["s"] == "NEWX" and a["kind"] == "split" and a["ratio"] == 2 for a in b["actions"]))
+    ca.confirm(b, "NEWX", "2026-10-01", "ignore")
+    check("confirm: ignore removes it", not any(a["s"] == "NEWX" for a in b["actions"]))
+    bad = []
+    for args in (("ORHD", "7/10/2026", "bonus", 3), ("ORHD", "2026-10-07", "bonus", 0.5), ("NONE", "2026-10-07", "ignore", None), ("OR HD", "2026-10-07", "bonus", 2)):
+        try:
+            ca.confirm(b, *args)
+        except ValueError:
+            bad.append(args[0])
+    check("confirm: a bad date, a ratio not above 1, nothing to remove and a bad symbol are refused", len(bad) == 4)
 finally:
     shutil.rmtree(tmp)
 

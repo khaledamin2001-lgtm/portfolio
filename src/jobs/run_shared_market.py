@@ -15,9 +15,10 @@ members instead of once per portfolio.
       shared/bench.json             bench/egx30: members, asOf, divYield(AsOf); other fields (capWeight, actions) kept
       shared/macro.json             {cpiMoM, fxEom, cashRate: {YYYY-MM: value}, their sources, benchClose: {YYYY-MM: EGX30
                                     Capped month-end close}} accumulated run after run
-   and commits them (redone on fresh data if someone pushed meanwhile). detect_actions: a stock whose close fell 18%+ in
-   one session (past 30%, or confirmed by TradingView's split adjustment) is added to bench actions as kind 'detected'
-   and the owner is emailed once; confirmed as 'bonus' or 'split', the email run books the free shares (sync.js).
+   and commits them (redone on fresh data if someone pushed meanwhile). detect_actions: every stock's split-adjusted closes from
+   TradingView against the as-traded ones (any bonus issue, split or rights issue, of any size), plus a one-session fall
+   past any daily limit, go into bench actions as kind 'detected' and the owner is emailed once; confirmed as 'bonus' or
+   'split' (confirm_action.py), the email run books the free shares (sync.js).
 4. Publishes m/market.enc.json on the site: gzip JSON {exportedAt, docs: {"market/latest", "bench/egx30", "market/macro",
    "history/<M>"...}} sealed exactly like a portfolio's data.enc.json ('portfolio-data-v1') but to the MEMBERS public key,
    read from the public Firestore document shared/membersPub (field "pub"); signed-in members read the private half from
@@ -108,79 +109,111 @@ def merge(shared, out):
 
 
 NOT_STOCKS = {"EGX30CAPPED", "EGX30", "EGX70EWI", "EGX100EWI", "USDEGP", "GOLD24K"}
-DROP_CHECK, DROP_SURE = 1.18, 1.30     # prev/close: worth asking TradingView about / past any EGX daily limit, a corporate action
+SCAN_SESSIONS = 15          # sessions looked at, each run (an action TradingView adjusts a few days late is still caught)
+SCAN_WORKERS = 4
+MIN_FACTOR = 1.01           # a jump of 1%+ in as-traded ÷ adjusted between two sessions is a corporate action
+DROP_SURE = 1.30            # prev/close: a fall past any EGX daily limit, flagged even before TradingView adjusts
 
 
-def tv_factor(sym, date):
-    """TradingView's own adjustment for a corporate action that went ex on `date`: the as-traded close of the session
-    before, divided by its split-adjusted close (1.0 while TradingView has not adjusted yet). Rights issues are adjusted
-    the same way, so this says THAT something happened, not whether the new shares were free."""
+def tv_adjusted(sym):
+    """Split-adjusted daily closes {date: close} of the last ~SCAN_SESSIONS sessions (TradingView scales the closes before a
+    bonus issue, split or rights issue by its factor; cash dividends are not part of this adjustment)."""
     import fetch_prices as fp
-    raw = {fp.day(b[0]): b[4] for b in fp.tv_history("EGX:" + sym, 20, "1D", adjustment="none")}
-    adj = {fp.day(b[0]): b[4] for b in fp.tv_history("EGX:" + sym, 20, "1D", adjustment="splits")}
-    before = sorted(d for d in raw if d < date and d in adj)
-    if not before or not adj[before[-1]]:
-        return 1.0
-    return raw[before[-1]] / adj[before[-1]]
+    for attempt in range(3):
+        try:
+            return {fp.day(b[0]): b[4] for b in fp.tv_history("EGX:" + sym, SCAN_SESSIONS + 5, "1D", adjustment="splits") if b[4]}
+        except Exception:
+            if attempt == 2:
+                raise
+            time.sleep(2 ** (attempt + 1))
 
 
-def detect_actions(shared, today, confirm=tv_factor):
+def scan_factors(days, order, symbols, adjusted=tv_adjusted, workers=SCAN_WORKERS):
+    """{sym: [(date, factor)]}: the sessions where the as-traded close ÷ TradingView's adjusted close drops by MIN_FACTOR+
+    from one session to the next, i.e. the ex-day of an action and its factor (shares after ÷ shares before). The factor
+    must hold on every earlier session in the window, and the new level on every later one, so one odd bar is not an action. Also returns the symbols
+    TradingView did not answer for."""
+    from concurrent.futures import ThreadPoolExecutor
+    def one(s):
+        try:
+            return s, adjusted(s), None
+        except Exception as e:
+            return s, None, type(e).__name__
+    out, errors = {}, []
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for s, adj, err in ex.map(one, sorted(symbols)):
+            if err:
+                errors.append(s)
+                continue
+            r = [(d, days[d][s] / adj[d]) for d in order if adj.get(d) and isinstance((days.get(d) or {}).get(s), (int, float))]
+            for i in range(1, len(r)):
+                f = r[i - 1][1] / r[i][1] if r[i][1] else 0
+                if f >= MIN_FACTOR and all(abs(x[1] / r[i - 1][1] - 1) < 0.005 for x in r[:i]) and all(abs(x[1] / r[i][1] - 1) < 0.005 for x in r[i:]):
+                    out.setdefault(s, []).append((r[i][0], f))
+    return out, errors
+
+
+def detect_actions(shared, today, adjusted=tv_adjusted):
     """Bonus issues, splits and rights issues are not back-adjusted in the shared history, so a holder's share count
-    must change on the ex-day (sync.js books a Bonus row for an action of kind 'bonus' or 'split'). This only FINDS them:
-    a stock whose close fell 18%+ from one session to the next in the last 12 sessions is checked with TradingView's
-    adjustment (`confirm`); one it confirms, or a fall past any daily limit (30%+), is added to bench.json actions as kind
-    'detected' (ratio from TradingView, else the price fall) and returned so the owner is told. 'detected' books nothing
-    (a rights issue looks the same): the owner confirms it as 'bonus' or 'split'. Returns the new entries."""
+    must change on the ex-day (sync.js books a Bonus row for an action of kind 'bonus' or 'split'). This only FINDS them,
+    every run, for every EGX stock: TradingView's split adjustment over the last SCAN_SESSIONS sessions (scan_factors;
+    any size, a 1-for-10 bonus included), plus a one-session fall past any daily limit (30%+) that TradingView has not
+    adjusted yet. New ones go into bench.json actions as kind 'detected' (TradingView's factor, else the price fall) and
+    are returned so the owner is told once; a price-fall guess takes TradingView's factor when it comes. 'detected'
+    books nothing (a rights issue looks the same): the owner confirms it (engine workflow "Confirm corporate action",
+    confirm_action.py). adjusted=None: no TradingView (tests with saved prices). Returns (new entries, symbols TradingView
+    did not answer for)."""
     days = {}
     for f in sorted(os.listdir(os.path.join(shared, "history")))[-2:]:
         if f.endswith(".json"):
             days.update(load(os.path.join(shared, "history", f), {}).get("days") or {})
-    order = sorted(d for d in days if d <= today)[-13:]
+    order = sorted(d for d in days if d <= today)[-SCAN_SESSIONS:]
+    latest = load(os.path.join(shared, "latest.json"), {})
+    symbols = {s for s in (latest.get("quotes") or {}) if s not in NOT_STOCKS}
+    tv, errors = scan_factors(days, order, symbols, adjusted) if adjusted else ({}, [])
+    cands = {(s, d): (round(f, 6), "TradingView") for s, l in tv.items() for d, f in l}
+    for prev, cur in zip(order, order[1:]):
+        for s, c in (days.get(cur) or {}).items():
+            p = (days.get(prev) or {}).get(s)
+            if s in NOT_STOCKS or not isinstance(c, (int, float)) or not isinstance(p, (int, float)) or c <= 0 or p / c < DROP_SURE:
+                continue
+            cands.setdefault((s, cur), (round(p / c, 4), "price fall"))
     b = load(os.path.join(shared, "bench.json"), {})
     acts = b.setdefault("actions", [])
     near = lambda s, d: next((a for a in acts if a.get("s") == s and abs((datetime.date.fromisoformat(a.get("date", "1970-01-01")) - datetime.date.fromisoformat(d)).days) <= 7), None)
     found, changed = [], False
-    for prev, cur in zip(order, order[1:]):
-        for s, c in (days.get(cur) or {}).items():
-            p = (days.get(prev) or {}).get(s)
-            if s in NOT_STOCKS or not isinstance(c, (int, float)) or not isinstance(p, (int, float)) or c <= 0 or p / c < DROP_CHECK:
-                continue
-            had = near(s, cur)
-            if had and had.get("kind") != "detected":
-                continue        # already known (typed or confirmed)
-            if had and had.get("ratioSource") == "TradingView":
-                continue
-            try:
-                f = confirm(s, cur)
-            except Exception as e:
-                jc.log(f"corporate action check {s}: TradingView not reached ({type(e).__name__})")
-                f = 1.0
-            if f < 1.01 and p / c < DROP_SURE:
-                continue        # a real fall (TradingView sees no action); asked again next run while in the window
-            ratio, src = (round(f, 6), "TradingView") if f >= 1.01 else (round(p / c, 4), "price fall")
-            if had:             # an earlier price-fall guess that TradingView now confirms
+    for (s, d), (ratio, src) in sorted(cands.items(), key=lambda kv: (kv[0][1], kv[0][0])):
+        had = near(s, d)
+        if had:
+            # an earlier price-fall guess that TradingView now measures: its factor replaces the guess (nothing else
+            # changes; a typed or confirmed action is never touched)
+            if had.get("kind") == "detected" and had.get("ratioSource") == "price fall" and src == "TradingView":
                 had.update({"ratio": ratio, "ratioSource": src, "label": f"detected: about {ratio:g} shares per share"})
                 changed = True
-                continue
-            a = {"s": s, "date": cur, "ratio": ratio, "kind": "detected", "ratioSource": src, "detectedAt": today,
-                 "label": f"detected: about {ratio:g} shares per share"}
-            acts.append(a)
-            found.append(a)
-            changed = True
+            continue
+        a = {"s": s, "date": d, "ratio": ratio, "kind": "detected", "ratioSource": src, "detectedAt": today,
+             "label": f"detected: about {ratio:g} shares per share"}
+        acts.append(a)
+        found.append(a)
+        changed = True
     if changed:
         acts.sort(key=lambda a: (a.get("date", ""), a.get("s", "")))
         dump(os.path.join(shared, "bench.json"), b)
-    return found
+    return found, errors
 
 
 def actions_email(found, today):
-    lines = [f"{a['s']}: its price fell from one session to the next on {a['date']} by far more than the market "
-             f"(about {a['ratio']:g} to 1, {a['ratioSource']})." for a in found]
-    body = ("\n".join(lines) + "\n\nThis is what a bonus issue, a split or a rights issue looks like. Prices are not adjusted "
-            "for it, so anyone holding the stock shows a loss until their share count is updated.\n\n"
-            "If it was a bonus issue or a split, confirm it (shared/bench.json in the engine repository: set its kind to "
-            "\"bonus\" or \"split\" and its ratio = shares after ÷ shares before) and the next email run adds the free "
-            "shares to every account holding it. A rights issue needs nothing: new shares are bought, not given.\n")
+    lines = [f"{a['s']}: on {a['date']}, about {a['ratio']:g} shares for each share held before "
+             f"({'TradingView adjusted its prices by this' if a['ratioSource'] == 'TradingView' else 'from the price fall; TradingView has not adjusted yet'})."
+             for a in found]
+    body = ("\n".join(lines) + "\n\nThis is a bonus issue, a split or a rights issue. Prices are not adjusted for it, so anyone "
+            "holding the stock shows a loss until their share count is updated.\n\n"
+            "Check which it was (EGX / Mubasher news, or Thndr), then in the GitHub app: portfolio-engine → Actions → "
+            "\"Confirm corporate action\" → Run workflow, with the symbol, the date, the kind and (if the number above is "
+            "not exact) the ratio = shares after ÷ shares before.\n"
+            "  • bonus or split: every account holding it gets its free shares in the email run that follows.\n"
+            "  • rights: nothing is added (new shares are bought, not given); the warning goes away.\n"
+            "  • not an action: the entry is removed.\n")
     return f"Portfolio: corporate action on {', '.join(a['s'] for a in found)} ({today})", body
 
 
@@ -314,11 +347,13 @@ def main(argv=None):
             else:
                 raise jc.JobError("fetch prices", "fetch_prices.py failed 4 times: " + last)
         step = "merge"
+        seen = {}       # TradingView's adjusted closes, fetched once even when the commit is redone
+        adjusted = None if a.prices else (lambda s: seen[s] if s in seen else seen.setdefault(s, tv_adjusted(s)))
         for attempt in range(3):
             if attempt:
                 jc.engine_refresh(eng)
             info = merge(shared, out)
-            found = detect_actions(shared, today, (lambda s, d: 1.0) if a.prices else tv_factor)
+            found, scan_errors = detect_actions(shared, today, adjusted)
             st = load(os.path.join(shared, "jobs.json"), {})
             st.update({"lastRun": today if not a.manual else st.get("lastRun"), "at": jc.now_iso(), "status": "ok"})
             dump(os.path.join(shared, "jobs.json"), st)
@@ -338,6 +373,8 @@ def main(argv=None):
         L = out["latest"]
         jc.log(f"shared market: asOf {L.get('asOf')}, {len(L.get('quotes') or {})} quotes, history {','.join(info['months'])} "
                f"({info['sessions']} sessions), fillErrors {len(out.get('fillErrors') or {})}, engine commit {head or 'none'}")
+        if scan_errors:
+            jc.log(f"corporate action scan: TradingView did not answer for {len(scan_errors)} stocks")
         if found:
             jc.log(f"corporate actions detected: {', '.join(x['s'] + ' ' + x['date'] for x in found)}")
             if not a.prices:

@@ -287,9 +287,11 @@
       if (t.p < lo * 0.94 || t.p > hi * 1.06) off.push(`${a.symbol} ${t.d}: traded ${t.p} vs ${prev > 0 ? `previous close ${prev}, close ${c}` : `close ${c}`}`);
     });
     out.push({ label: 'Trade prices agree with closing prices', status: off.length ? 'warn' : 'ok', detail: off.length ? off.slice(0, 8).join('; ') + (off.length > 8 ? ` … ${off.length} rows` : '') : 'Every trade within 6% of that day\'s range (previous close to close)' });
+    // only free shares need a Bonus row: a 'bonus' or 'split' (a typed action with no kind counts as one). A rights issue
+    // books nothing; a 'detected' one (the market job saw the price adjusted, nobody has said what it was) is listed as such
     const missing = [];
     (actions || []).forEach((ac) => {
-      if (!ac || !ac.s || !ac.date || !(ac.ratio > 1)) return;
+      if (!ac || !ac.s || !ac.date || !(ac.ratio > 1) || (ac.kind && !['bonus', 'split', 'detected'].includes(ac.kind))) return;
       const names = Object.values(assets || {}).filter((a) => a.symbol === ac.s).map((a) => a.name); if (!names.length) return;
       const before = new Date(Date.UTC(+ac.date.slice(0, 4), +ac.date.slice(5, 7) - 1, +ac.date.slice(8, 10) - 1)).toISOString().slice(0, 10);
       const H = holdingsAt(ledger, assets, pb, before);
@@ -297,7 +299,9 @@
       if (!(held > 0.5)) return;
       const lo = dayNum(ac.date) - 7, hi = dayNum(ac.date) + 7;
       const booked = ledger.some((t) => t.t === 'Bonus' && names.includes(t.a) && dayNum(t.d) >= lo && dayNum(t.d) <= hi);
-      if (!booked) missing.push(`${ac.s}: bonus of about ${Math.round(held * (ac.ratio - 1))} shares on ${ac.date} (ratio ${ac.ratio}) has no Bonus row — check the statement`);
+      if (booked) return;
+      if (ac.kind === 'detected') missing.push(`${ac.s}: its price was adjusted on ${ac.date} (about ${+(+ac.ratio).toFixed(4)} shares per share) — a bonus issue, split or rights issue not confirmed yet; if it was free shares, about ${Math.round(held * (ac.ratio - 1))} of them need a Bonus row`);
+      else missing.push(`${ac.s}: bonus of about ${Math.round(held * (ac.ratio - 1))} shares on ${ac.date} (ratio ${ac.ratio}) has no Bonus row — check the statement`);
     });
     out.push({ label: 'Bonus shares booked', status: missing.length ? 'warn' : 'ok', detail: missing.length ? missing.join('; ') : 'No corporate actions missing' });
     return out;

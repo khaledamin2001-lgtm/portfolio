@@ -62,6 +62,15 @@ let R = run(rows, { '2026-02': { cash: 850, securities: 150, source: 'statement'
 check('typed: a savings-fund row in a month whose cash matches the statement and a fund row checked against a statement are confirmed; a typed stock row is not', JSON.stringify(R.provenance.unverified) === '["s1"]', JSON.stringify(R.provenance.unverified));
 R = run(rows, { '2026-02': { cash: 900, securities: 150, source: 'statement' } }, '2026-03-10', fa);
 check('when the month\'s cash does not match the statement, the savings-fund rows are not confirmed either', JSON.stringify(R.provenance.unverified) === '["f1","f2","s1"]', JSON.stringify(R.provenance.unverified));
+// ---- corporate actions: only free shares need a Bonus row; a detected one says it is unconfirmed ----
+{
+  const held = [{ id: 'b', d: '2026-03-01', t: 'Buy', a: 'Acme', q: 100, p: 50, amt: -5000, acc: 'Main' }];
+  const bc = (kind) => PA.tradeChecks(held, assets, pb, [{ s: 'ACME', date: '2026-03-02', ratio: 1.5, kind }]).find((x) => x.label === 'Bonus shares booked');
+  check('a bonus with no Bonus row is a warning', bc('bonus').status === 'warn' && /bonus of about 50 shares/.test(bc('bonus').detail), bc('bonus').detail);
+  check('a rights issue needs no Bonus row', bc('rights').status === 'ok', bc('rights').detail);
+  check('a detected action is a warning that says it is not confirmed', bc('detected').status === 'warn' && /not confirmed yet/.test(bc('detected').detail), bc('detected').detail);
+}
+
 // a bonus issue's ex-day: the quote's change is per share against the pre-bonus close; the holding's day change is not
 {
   const led = [{ id: 'b', d: '2026-09-10', t: 'Buy', a: 'Dev Co', q: 1000, p: 8, amt: -8000, acc: 'Main' },
