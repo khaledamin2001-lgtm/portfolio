@@ -473,7 +473,8 @@ open(os.path.join(d, "index.enc.json"), "wb").write(store.seal(k, json.dumps([{"
     await F.$t('friends-back').click(); await F.$t('account-friends').click(); await F.$t('friend-view').waitFor();
     check("opening Friends shares the viewer's own copy back", await until(() => FB.docs[`shares/${uidB}/to/${uid}`]));
     // a friend's profile: percentages only (returns, holdings by weight, trades), never an amount
-    const noAmounts = (t) => !/EGP|\b\d{1,3}(,\d{3})+\b|\b\d{4,}\b(?!-)/.test(t.replace(/\b20\d\d\b/g, ''));
+    // (percentages are taken out first: the synthetic friend's return can pass 1,000% on some days of the month)
+    const noAmounts = (t) => !/EGP|\b\d{1,3}(,\d{3})+\b|\b\d{4,}\b(?!-)/.test(t.replace(/[+−-]?\d[\d,]*(\.\d+)?%/g, '').replace(/\b20\d\d\b/g, ''));
     await F.$t('friend-view').click(); await F.$t('profile-sheet').waitFor({ timeout: 30000 });
     await F.page.waitForTimeout(400);
     const sheet1 = await F.$t('profile-sheet').textContent();

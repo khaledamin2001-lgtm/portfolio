@@ -108,6 +108,7 @@ def merge(shared, out):
     return {"months": months, "sessions": len({d for H in out.get("histories") or [] for d in H.get("days") or {}})}
 
 
+FETCH_TIMEOUT = 480          # seconds one fetch_prices.py run may take before it is stopped and tried again
 NOT_STOCKS = {"EGX30CAPPED", "EGX30", "EGX70EWI", "EGX100EWI", "USDEGP", "GOLD24K"}
 SCAN_SESSIONS = 15          # sessions looked at, each run (an action TradingView adjusts a few days late is still caught)
 SCAN_WORKERS = 4
@@ -339,7 +340,12 @@ def main(argv=None):
             for wait in (0, 30, 30, 30):
                 if wait:
                     time.sleep(wait)
-                r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+                try:    # a normal fetch takes 2-4 minutes; one that hangs is stopped and tried again
+                    r = subprocess.run(cmd, capture_output=True, text=True, timeout=FETCH_TIMEOUT)
+                except subprocess.TimeoutExpired:
+                    last = f"no answer in {FETCH_TIMEOUT // 60} minutes"
+                    jc.log(f"fetch prices: {last}, trying again")
+                    continue
                 if r.returncode == 0:
                     out = json.loads(r.stdout)
                     break

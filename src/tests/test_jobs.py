@@ -243,6 +243,27 @@ try:
 finally:
     shutil.rmtree(tmp)
 
+# ---- prices: a TradingView connection that only sends heartbeats gives up at its deadline instead of waiting forever
+import types, time as _time, fetch_prices as _fp   # noqa: E402
+class _HB:
+    def send(self, m): pass
+    def recv(self): _time.sleep(0.05); return "~m~4~m~~h~1"
+    def close(self): pass
+_ws = sys.modules.get("websocket")
+sys.modules["websocket"] = types.SimpleNamespace(create_connection=lambda *a, **k: _HB())
+_t0 = _time.time()
+try:
+    _fp.tv_history("EGX:AAA", 5, "1D", deadline=0.5)
+    _hb = "returned"
+except TimeoutError:
+    _hb = "timeout"
+finally:
+    if _ws is not None:
+        sys.modules["websocket"] = _ws
+    else:
+        sys.modules.pop("websocket", None)
+check("prices: a stuck TradingView series stops at its deadline", _hb == "timeout" and _time.time() - _t0 < 5)
+
 # ---- log masking
 m = jc.mask("value 1,234,567.89 and 98765.43 at line 12")   # private-scan: synthetic
 check("mask: figures hidden in logs, small numbers kept", "1,234" not in m and "98765" not in m and "12" in m)

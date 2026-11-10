@@ -58,9 +58,11 @@ def scan(market, body):
             if attempt == 3: raise
             time.sleep(2 ** (attempt + 1))
 
-def tv_history(sym, bars, tf, adjustment="splits", timeout=25):
+def tv_history(sym, bars, tf, adjustment="splits", timeout=25, deadline=90):
     """Daily/monthly bars [ts, o, h, l, c, v] from TradingView's chart websocket (needs: pip install websocket-client).
-    adjustment "splits" returns closes scaled for bonus issues/splits, "none" the prices as traded (what the ledger uses)."""
+    adjustment "splits" returns closes scaled for bonus issues/splits, "none" the prices as traded (what the ledger uses).
+    timeout: seconds one read may wait; deadline: seconds the whole fetch may take. TradingView keeps a quiet
+    connection alive with heartbeats, so a series that never completes would otherwise wait forever."""
     import websocket
     from urllib.parse import urlparse
     rs = lambda n=12: "".join(random.choice(string.ascii_lowercase) for _ in range(n))
@@ -79,8 +81,10 @@ def tv_history(sym, bars, tf, adjustment="splits", timeout=25):
         for f, p in [("set_auth_token", ["unauthorized_user_token"]), ("chart_create_session", [cs, ""]),
                      ("resolve_symbol", [cs, "s1", "=" + spec]), ("create_series", [cs, "sds_1", "s1", "s1", tf, bars, ""])]:
             ws.send(msg(f, p))
-        out = []
+        out, until = [], time.time() + deadline
         while True:
+            if time.time() > until:
+                raise TimeoutError(f"TradingView sent no complete series for {sym} in {deadline}s")
             r = ws.recv()
             for hb in re.findall(r"~m~\d+~m~(~h~\d+)", r): ws.send(f"~m~{len(hb)}~m~{hb}")
             if '"s":[' in r and "timescale_update" in r:
